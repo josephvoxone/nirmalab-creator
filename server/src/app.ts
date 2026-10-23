@@ -51,15 +51,17 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
 
   await registerPublisherRoutes(server, { service: new PublisherService({ dataDir: options.dataDir, env }), userAuthStore, env });
   await registerFreeGenerateRoutes(server, { userAuthStore, dataDir: options.dataDir });
+  const flowStore = new FlowStore(join(options.dataDir, 'flow'));
   await registerFlowRoutes(server, {
     userAuthStore,
     dataDir: options.dataDir,
+    store: flowStore,
     bridgeToken: env.OPENCREATOR_FLOW_BRIDGE_TOKEN?.trim() || undefined
   });
 
   const stories = new StoryService({
     dataDir: options.dataDir,
-    flow: new FlowStore(options.dataDir),
+    flow: flowStore,
     probe: options.stories?.probe ?? probeClip,
     assemble: options.stories?.assemble ?? assembleStory
   });

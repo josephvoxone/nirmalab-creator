@@ -28,7 +28,7 @@ async function setup(draftReply?: string) {
   });
   const res = await server.inject({ method: 'POST', url: '/api/auth/login', payload: { email: 'admin@x.io', password: 'admin-pass-1' } });
   const cookie = String(res.headers['set-cookie']).split(';')[0]!;
-  return { server, cookie, dataDir, flow: new FlowStore(dataDir) };
+  return { server, cookie, dataDir, flow: new FlowStore(join(dataDir, 'flow')) };
 }
 
 describe('story routes', () => {
@@ -70,6 +70,24 @@ describe('story routes', () => {
     const shot = await server.inject({ url: `/api/stories/${id}/shots/01-a/video`, headers: { cookie } });
     expect(shot.statusCode).toBe(200);
     expect((await server.inject({ url: `/api/stories/${id}/shots/..%2Fx/video`, headers: { cookie } })).statusCode).toBe(404);
+  });
+
+  it('the real bridge HTTP path feeds stories: claim → upload → QC → assembled', async () => {
+    const { server, cookie, dataDir } = await setup();
+    mkdirSync(join(dataDir, 'flow'), { recursive: true });
+    writeFileSync(join(dataDir, 'flow', 'bridge-token'), 'bridge-secret-token-1234567890');
+    const h = { 'x-flow-bridge-token': 'bridge-secret-token-1234567890' };
+    expect((await server.inject({ method: 'POST', url: '/api/flow/accounts', headers: { cookie }, payload: { label: 'mac', email: 'm@x.io' } })).statusCode).toBe(200);
+    const id = (await server.inject({ method: 'POST', url: '/api/stories', headers: { cookie }, payload: { storyboard: board } })).json().story.id;
+    await server.inject({ method: 'POST', url: `/api/stories/${id}/render`, headers: { cookie }, payload: {} });
+    expect((await server.inject({ url: '/api/flow/jobs', headers: { cookie } })).json().jobs).toHaveLength(2);
+    for (let i = 0; i < 2; i++) {
+      const claim = await server.inject({ method: 'POST', url: '/api/flow/bridge/claim', headers: h, payload: { bridgeId: 'mac' } });
+      expect(claim.statusCode).toBe(200);
+      const done = await server.inject({ method: 'POST', url: `/api/flow/bridge/jobs/${claim.json().job.id}/complete`, headers: { ...h, 'content-type': 'application/octet-stream' }, payload: Buffer.alloc(9000, 1) });
+      expect(done.statusCode).toBe(200);
+    }
+    expect((await server.inject({ url: `/api/stories/${id}`, headers: { cookie } })).json().story.status).toBe('done');
   });
 
   it('render answers 409 with the budget message when credits are short', async () => {

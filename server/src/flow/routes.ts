@@ -10,6 +10,8 @@ import { FlowStore } from './store.js';
 export type FlowRouteOptions = {
   userAuthStore: UserAuthStore;
   dataDir: string;
+  /** Shared store (must point at `<dataDir>/flow`). */
+  store?: FlowStore;
   /**
    * Shared secret for the Mac-side Flow bridge. When unset, the token is read from
    * `<dataDir>/flow/bridge-token` (0600) on every request so it can be rotated
@@ -34,7 +36,8 @@ function bad(reply: FastifyReply, status: number, code: string, message: string)
 export async function registerFlowRoutes(server: FastifyInstance, options: FlowRouteOptions): Promise<void> {
   const flowDir = join(options.dataDir, 'flow');
   const clipsDir = join(flowDir, 'clips');
-  const store = new FlowStore(flowDir);
+  // One shared instance per process: two instances on one file race (separate serialise queues).
+  const store = options.store ?? new FlowStore(flowDir);
   const auth = options.userAuthStore;
 
   const tokenFile = join(flowDir, 'bridge-token');
