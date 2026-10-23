@@ -1,3 +1,4 @@
+import { createReadStream, existsSync } from 'node:fs';
 import type { FastifyInstance } from 'fastify';
 import { join } from 'node:path';
 import { requireAdmin, sessionUser } from '../auth/routes.js';
@@ -25,6 +26,16 @@ export function generateErrorStatus(code: string): number {
   if (code === 'NEEDS_KEY') return 402;
   if (code === 'UNAUTHORIZED') return 401;
   return 503;
+}
+
+const GENERATED_KINDS = { tts: 'audio/mpeg', images: 'image/jpeg' } as const;
+const GENERATED_NAME = /^[a-z][a-z0-9-]{0,60}\.(mp3|jpg)$/;
+const TYPES: Record<string, string> = { mp3: 'audio/mpeg', jpg: 'image/jpeg' };
+
+/** Browser URL for a file written under <data>/free-generate/{tts,images}/. */
+export function generatedFileUrl(filePath: string): string | undefined {
+  const m = filePath.match(/\/free-generate\/(tts|images)\/([^/]+)$/);
+  return m && GENERATED_NAME.test(m[2]!) ? `/api/generate/files/${m[1]}/${m[2]}` : undefined;
 }
 
 export async function registerFreeGenerateRoutes(server: FastifyInstance, options: FreeGenerateRouteOptions): Promise<void> {
@@ -72,6 +83,17 @@ export async function registerFreeGenerateRoutes(server: FastifyInstance, option
     return { models: modelsCache.models };
   });
 
+  server.get<{ Params: { kind: string; name: string } }>('/api/generate/files/:kind/:name', async (request, reply) => {
+    if (!sessionUser(options.userAuthStore, request)) {
+      return reply.code(401).send({ error: { code: 'UNAUTHORIZED', message: 'Unauthorized' } });
+    }
+    const { kind, name } = request.params;
+    const file = kind in GENERATED_KINDS && GENERATED_NAME.test(name) ? join(options.dataDir, 'free-generate', kind, name) : '';
+    if (!file || !existsSync(file)) return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Not found' } });
+    reply.header('content-type', TYPES[name.split('.').pop()!]!).header('cache-control', 'private, max-age=86400');
+    return reply.send(createReadStream(file));
+  });
+
   server.post<{ Body: { prompt?: unknown; model?: unknown; system?: unknown } }>('/api/generate/text', async (request, reply) => {
     if (!requireAdmin(options.userAuthStore, request, reply)) return undefined;
     const prompt = typeof request.body?.prompt === 'string' ? request.body.prompt : '';
@@ -98,7 +120,7 @@ export async function registerFreeGenerateRoutes(server: FastifyInstance, option
     const voice = typeof request.body?.voice === 'string' ? request.body.voice : undefined;
     try {
       const out = await synthesizeTts({ text, voice }, ttsDir);
-      return { ok: true, filePath: out.filePath, bytes: out.bytes };
+      return { ok: true, filePath: out.filePath, bytes: out.bytes, url: generatedFileUrl(out.filePath) };
     } catch (error) {
       const code = error instanceof Error && 'code' in error ? String((error as { code: string }).code) : 'TTS_FAILED';
       return reply.code(generateErrorStatus(code)).send({
@@ -112,7 +134,7 @@ export async function registerFreeGenerateRoutes(server: FastifyInstance, option
     const prompt = typeof request.body?.prompt === 'string' ? request.body.prompt : '';
     try {
       const out = await pollinationsImage(fetch, { prompt, apiKey: pollinationsEnv().apiKey }, join(options.dataDir, 'free-generate', 'images'));
-      return { ok: true, filePath: out.filePath, bytes: out.bytes };
+      return { ok: true, filePath: out.filePath, bytes: out.bytes, url: generatedFileUrl(out.filePath) };
     } catch (error) {
       const code = error instanceof Error && 'code' in error ? String((error as { code: string }).code) : 'GENERATE_FAILED';
       return reply.code(generateErrorStatus(code)).send({

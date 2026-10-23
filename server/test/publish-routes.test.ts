@@ -70,6 +70,22 @@ describe('publish route with storyId', () => {
     expect(publish).not.toHaveBeenCalled();
   });
 
+  it('refuses a raw filePath even from an admin: only finished stories can be published', async () => {
+    const { server, publish, adminCookie } = await setup(async () => undefined);
+    const res = await server.inject({ method: 'POST', url: '/api/publish/youtube/publish', headers: { cookie: adminCookie }, payload: { ...body, filePath: '/etc/passwd' } });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error.message).toMatch(/storyId/);
+    expect(publish).not.toHaveBeenCalled();
+  });
+
+  it('OAuth callback returns to the clean /publish page', async () => {
+    const { server } = await setup(undefined);
+    const res = await server.inject({ url: '/api/publish/youtube/callback?error=access_denied&state=x' });
+    expect(res.statusCode).toBe(302);
+    expect(res.headers.location).toMatch(/^https:\/\/creator\.nirmalab\.com\/publish\?publisher=youtube&connected=0/);
+    expect(res.headers.location).not.toContain('#/');
+  });
+
   it('answers 404 for storyId when no resolver is configured', async () => {
     const { server, publish, adminCookie } = await setup(undefined);
     const res = await server.inject({ method: 'POST', url: '/api/publish/youtube/publish', headers: { cookie: adminCookie }, payload: { ...body, storyId: DONE_ID } });

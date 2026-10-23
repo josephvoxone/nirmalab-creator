@@ -57,7 +57,7 @@ export async function registerPublisherRoutes(server: FastifyInstance, options: 
     async (request, reply) => {
       const platform = request.params.platform as PublisherPlatform;
       const done = (params: string): void => {
-        void reply.redirect(`${publicBaseUrl(env)}/#/settings?tab=platform-connections&publisher=${platform}&${params}`);
+        void reply.redirect(`${publicBaseUrl(env)}/publish?publisher=${platform}&${params}`);
       };
       if (!PLATFORMS.includes(platform)) return reply.code(404).send({ error: { code: 'UNKNOWN_PLATFORM', message: 'Unknown platform' } });
       try {
@@ -87,7 +87,8 @@ export async function registerPublisherRoutes(server: FastifyInstance, options: 
         if (!resolved) return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Video cerita belum selesai' } });
         filePath = resolved;
       } else {
-        filePath = typeof request.body?.filePath === 'string' ? request.body.filePath : '';
+        // Raw server paths are never accepted from the browser: publish a finished story.
+        return reply.code(400).send({ error: { code: 'INVALID_INPUT', message: 'storyId is required' } });
       }
       const title = typeof request.body?.title === 'string' ? request.body.title : '';
       const description = typeof request.body?.description === 'string' ? request.body.description : undefined;
