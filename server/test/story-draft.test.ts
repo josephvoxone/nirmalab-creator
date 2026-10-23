@@ -67,6 +67,6 @@ describe('draftStoryboard', () => {
     let system = '';
     await draftStoryboard({ premise: 'x' }, async (sys) => { system = sys; return good; });
     expect(system).toMatch(/title.*Bahasa Indonesia/i);
-    expect(system).toMatch(/descriptive.*id/i);
+    expect(system).toMatch(/"id" is a short descriptive/);
   });
 });
