@@ -29,6 +29,8 @@ Return ONLY one JSON object, no commentary:
  "characters": {"TOKEN": "full visual descriptor in English (age, look, clothing, one signature prop)"},
  "shots": [{"id": "kebab-id", "silent": true|omitted, "prompt": "...", "narration": "..."}]}
 Rules (they are checked by code; violations are sent back to you):
+- "title", "titleCard.lines" and "kicker" are in Bahasa Indonesia (no English words), short and evocative.
+- Each shot "id" is a short descriptive Indonesian kebab-case word for the beat (e.g. "pembuka", "badai", "pelukan"), never "shot-1".
 - Shot 1 is a silent establishing intro ("silent": true, no narration) with empty open sky in the upper third for the title.
 - Every other shot has "narration": ONE Indonesian sentence (or two very short ones), max ${MAX_NARRATION_WORDS} words, warm storyteller voice.
 - "prompt" is English. Start with framing + exactly ONE camera move (e.g. "Medium close-up, the camera pushes in slowly."), then subject, action, setting, light.

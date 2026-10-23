@@ -62,4 +62,11 @@ describe('draftStoryboard', () => {
     await draftStoryboard({ premise: 'x', shots: 99 }, async (_s, p) => { seen = p; return good; });
     expect(seen).toMatch(/exactly 12 shots/);
   });
+
+  it('asks for an Indonesian title and descriptive shot ids', async () => {
+    let system = '';
+    await draftStoryboard({ premise: 'x' }, async (sys) => { system = sys; return good; });
+    expect(system).toMatch(/title.*Bahasa Indonesia/i);
+    expect(system).toMatch(/descriptive.*id/i);
+  });
 });
