@@ -9,7 +9,14 @@ export type PublisherRouteOptions = {
   service: PublisherService;
   userAuthStore: UserAuthStore;
   env?: NodeJS.ProcessEnv;
+  /**
+   * Resolves a story id to the absolute path of its final video, only when the
+   * story is done. Lets the browser publish by `storyId` instead of a raw path.
+   */
+  resolveStoryVideo?: (id: string) => Promise<string | undefined>;
 };
+
+const STORY_ID = /^story_[a-f0-9]{16}$/;
 
 const PLATFORMS: PublisherPlatform[] = ['youtube', 'tiktok', 'meta'];
 
@@ -63,18 +70,30 @@ export async function registerPublisherRoutes(server: FastifyInstance, options: 
     }
   );
 
-  server.post<{ Params: { platform: string }; Body: { filePath?: unknown; title?: unknown; description?: unknown; visibility?: unknown } }>(
+  server.post<{ Params: { platform: string }; Body: { storyId?: unknown; filePath?: unknown; title?: unknown; description?: unknown; visibility?: unknown } }>(
     '/api/publish/:platform/publish',
     async (request, reply) => {
+      // Admin only: a raw filePath is never accepted from non-admin callers.
       if (!requireAdmin(userAuthStore, request, reply)) return undefined;
       const platform = request.params.platform as PublisherPlatform;
       if (!PLATFORMS.includes(platform)) return reply.code(404).send({ error: { code: 'UNKNOWN_PLATFORM', message: 'Unknown platform' } });
-      const filePath = typeof request.body?.filePath === 'string' ? request.body.filePath : '';
+      let filePath = '';
+      if (request.body?.storyId !== undefined) {
+        const storyId = request.body.storyId;
+        if (typeof storyId !== 'string' || !STORY_ID.test(storyId)) {
+          return reply.code(400).send({ error: { code: 'INVALID_INPUT', message: 'Invalid storyId' } });
+        }
+        const resolved = options.resolveStoryVideo ? await options.resolveStoryVideo(storyId) : undefined;
+        if (!resolved) return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Video cerita belum selesai' } });
+        filePath = resolved;
+      } else {
+        filePath = typeof request.body?.filePath === 'string' ? request.body.filePath : '';
+      }
       const title = typeof request.body?.title === 'string' ? request.body.title : '';
       const description = typeof request.body?.description === 'string' ? request.body.description : undefined;
       const visibility = request.body?.visibility === 'public' || request.body?.visibility === 'private' ? request.body.visibility : 'unlisted';
       if (!filePath || !title) {
-        return reply.code(400).send({ error: { code: 'INVALID_INPUT', message: 'filePath and title are required' } });
+        return reply.code(400).send({ error: { code: 'INVALID_INPUT', message: 'storyId (or filePath) and title are required' } });
       }
       try {
         return await service.publish(platform, { filePath, title, description, visibility });

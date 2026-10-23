@@ -49,9 +49,20 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
     });
   }, { prefix: '/api' });
 
-  await registerPublisherRoutes(server, { service: new PublisherService({ dataDir: options.dataDir, env }), userAuthStore, env });
-  await registerFreeGenerateRoutes(server, { userAuthStore, dataDir: options.dataDir });
   const flowStore = new FlowStore(join(options.dataDir, 'flow'));
+  const stories = new StoryService({
+    dataDir: options.dataDir,
+    flow: flowStore,
+    probe: options.stories?.probe ?? probeClip,
+    assemble: options.stories?.assemble ?? assembleStory
+  });
+  await registerPublisherRoutes(server, {
+    service: new PublisherService({ dataDir: options.dataDir, env }),
+    userAuthStore,
+    env,
+    resolveStoryVideo: async id => ((await stories.get(id))?.status === 'done' ? stories.videoPath(id) : undefined)
+  });
+  await registerFreeGenerateRoutes(server, { userAuthStore, dataDir: options.dataDir });
   await registerFlowRoutes(server, {
     userAuthStore,
     dataDir: options.dataDir,
@@ -59,12 +70,6 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
     bridgeToken: env.OPENCREATOR_FLOW_BRIDGE_TOKEN?.trim() || undefined
   });
 
-  const stories = new StoryService({
-    dataDir: options.dataDir,
-    flow: flowStore,
-    probe: options.stories?.probe ?? probeClip,
-    assemble: options.stories?.assemble ?? assembleStory
-  });
   const generateText: TextGenerator = options.stories?.generateText ?? (async (system, prompt) => (await pollinationsText(
     fetch,
     { prompt, system, model: env.STORY_LLM_MODEL || 'openai', apiKey: env.OPENCREATOR_POLLINATIONS_API_KEY, maxTokens: 6000 },

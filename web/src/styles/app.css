@@ -58,6 +58,13 @@ h2 { font-size: 15px; font-weight: 600; }
 .row-main { flex: 1; min-width: 0; }
 .row-main a { text-decoration: none; font-weight: 500; }
 .row-main a:hover { color: var(--accent); }
+ul.list { margin: 0; padding: 0; list-style: none; }
+.stack { display: flex; flex-direction: column; gap: 14px; }
+.row-actions { display: flex; align-items: center; gap: 8px; }
+.generated-text { margin: 0; white-space: pre-wrap; }
+.generated-media { display: block; width: 100%; max-width: 640px; }
+.link-box { display: flex; align-items: center; gap: 8px; padding: 9px 12px; background: var(--surface-input); border: 1px solid var(--border); border-radius: 10px; min-width: 0; }
+.link-box .mono { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .empty { padding: 28px; text-align: center; color: var(--subtle); border: 1px dashed var(--border); }
 
 /* Controls */
