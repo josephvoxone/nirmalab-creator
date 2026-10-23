@@ -19,7 +19,8 @@ export async function probeClip(file: string): Promise<ClipProbe> {
 
 export async function assembleStory(dir: string): Promise<void> {
   try {
-    await run(process.env.STORY_PYTHON ?? 'python3', [ASSEMBLER, dir], { timeout: 15 * 60_000, maxBuffer: 8 * 1024 * 1024 });
+    // Low CPU priority: the VPS also serves other apps while a story assembles.
+    await run('nice', ['-n', '10', process.env.STORY_PYTHON ?? 'python3', ASSEMBLER, dir], { timeout: 15 * 60_000, maxBuffer: 8 * 1024 * 1024 });
   } catch (error) {
     const e = error as { stderr?: string; stdout?: string; message?: string };
     const detail = `${e.stderr ?? ''}${e.stdout ?? ''}`.trim().split('\n').slice(-3).join(' ') || e.message || 'assembler failed';
