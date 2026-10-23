@@ -192,3 +192,39 @@ test('mode agent: klip gagal/timeout dilaporkan gagal', async () => {
   assert.equal(out.status, 'failed');
   assert.ok(!deps.calls.some(c => c.complete));
 });
+
+test('cdpReady: Chrome Flow terjangkau hanya bila /json/version menjawab 200', async () => {
+  const { cdpReady, preflightUrl } = await import('../src/core.mjs');
+  const ok = async url => { assert.equal(url, 'http://127.0.0.1:9333/json/version'); return { ok: true }; };
+  assert.equal(await cdpReady('http://127.0.0.1:9333', ok), true);
+  assert.equal(await cdpReady('http://127.0.0.1:9333', async () => { throw new Error('ECONNREFUSED'); }), false);
+  assert.equal(await cdpReady('http://127.0.0.1:9333', async () => ({ ok: false })), false);
+  assert.equal(preflightUrl({}), 'http://127.0.0.1:9333');
+  assert.equal(preflightUrl({ FLOW_CDP_URL: 'http://127.0.0.1:9444' }), 'http://127.0.0.1:9444');
+  assert.equal(preflightUrl({ FLOW_PREFLIGHT: 'off' }), undefined);
+});
+
+test('agentMessage: satu video, durasi, model Omni 1.1 Flash + audio bawaan (10 vs 15 kredit), prompt apa adanya', async () => {
+  const { agentMessage } = await import('../src/core.mjs');
+  const msg = agentMessage({ aspect: '9:16', prompt: 'Wide shot of a valley.\nNegative prompt: text.' }, 6);
+  assert.match(msg, /exactly one video/);
+  assert.match(msg, /9:16/);
+  assert.match(msg, /6 seconds/);
+  assert.match(msg, /Omni 1\.1 Flash/);
+  assert.match(msg, /native audio/);
+  assert.ok(msg.endsWith('Wide shot of a valley.\nNegative prompt: text.'));
+});
+
+test('accountsToProbe: kredit dicek untuk akun Chrome yang terdaftar, bukan cuma yang pernah dapat job', async () => {
+  const { accountsToProbe } = await import('../src/core.mjs');
+  const list = accountsToProbe([
+    { id: 'a', label: 'Flow 01', profileDir: 'cdp:http://127.0.0.1:9333', status: 'ready' },
+    { id: 'b', label: 'Rusak', profileDir: 'cdp:http://127.0.0.1:9444', status: 'error' },
+    { id: 'c', label: 'Tanpa profil', status: 'ready' },
+    { id: 'd', label: 'Cooldown', profileDir: 'cdp:http://127.0.0.1:9555', status: 'cooldown' },
+    { id: 'e', label: 'Chrome utama (jangan disentuh tiap heartbeat: dialog Allow)', profileDir: 'chrome', status: 'ready' },
+    { id: 'f', label: 'Profil Playwright', profileDir: '/x/profile', status: 'ready' },
+    'sampah'
+  ]);
+  assert.deepEqual(list.map(a => a.id), ['a', 'd']);
+});

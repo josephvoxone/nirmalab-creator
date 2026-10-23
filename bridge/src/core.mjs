@@ -117,7 +117,7 @@ export function cdpUrlForAccount(account) {
 export function agentMessage(job, duration) {
   const aspect = job.aspect === '16:9' ? '16:9' : '9:16';
   return [
-    `Generate exactly one video (no images, no extra shots, no variations) in ${aspect} aspect ratio, ${duration} seconds long.`,
+    `Generate exactly one video (no images, no extra shots, no variations) in ${aspect} aspect ratio, ${duration} seconds long, with the Omni 1.1 Flash model and its native audio.`,
     'Use this prompt verbatim, do not rewrite it:',
     '',
     job.prompt
@@ -161,4 +161,27 @@ async function agentJob(job, account, projectId, duration, deps) {
   const bytes = await deps.readFile(downloaded.path);
   await deps.complete(job.id, bytes);
   return { status: 'done', mediaId, bytes: bytes.byteLength };
+}
+
+/** Dedicated Flow Chrome the bridge drives (undefined = preflight disabled). */
+export function preflightUrl(env) {
+  if (env.FLOW_PREFLIGHT === 'off') return undefined;
+  return env.FLOW_CDP_URL || 'http://127.0.0.1:9333';
+}
+
+/** True when that Chrome answers on its DevTools port — claim jobs only then, so takes aren't burnt. */
+export async function cdpReady(url, fetchImpl = fetch, timeoutMs = 3000) {
+  try {
+    const response = await fetchImpl(`${url.replace(/\/+$/, '')}/json/version`, { signal: AbortSignal.timeout(timeoutMs) });
+    return !!response?.ok;
+  } catch {
+    return false;
+  }
+}
+
+/** Dedicated-Chrome (`cdp:`) accounts whose credits the bridge reads on every heartbeat. Never the user's main Chrome (Allow prompts) or Playwright profiles (heavy, Google signs them out). */
+export function accountsToProbe(accounts) {
+  return (Array.isArray(accounts) ? accounts : [])
+    .filter(a => a && typeof a === 'object' && typeof a.id === 'string' && a.status !== 'error' && cdpUrlForAccount(a))
+    .map(a => ({ id: a.id, label: a.label, profileDir: a.profileDir, ...(a.proxy ? { proxy: a.proxy } : {}) }));
 }

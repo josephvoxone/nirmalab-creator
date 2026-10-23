@@ -18,7 +18,7 @@ import { readFile } from 'node:fs/promises';
 import { homedir, hostname } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { cdpUrlForAccount, cdpUrlFromActivePort, ensureProject, isChromeAccount, parseToolResult, processJob } from './src/core.mjs';
+import { accountsToProbe, cdpReady, preflightUrl, cdpUrlForAccount, cdpUrlFromActivePort, ensureProject, isChromeAccount, parseToolResult, processJob } from './src/core.mjs';
 
 const env = process.env;
 const CREATOR_URL = (env.CREATOR_URL || 'https://creator.nirmalab.com').replace(/\/$/, '');
@@ -103,8 +103,11 @@ async function postJson(path, body) {
   return text ? JSON.parse(text) : undefined;
 }
 
-async function heartbeat() {
+let registered = [];
+async function heartbeat(again = true) {
   const accounts = [];
+  // Open a session for every registered account so credits are always fresh (not only after a job).
+  for (const account of registered) await clientFor(account).catch(e => log('open', account.label, e.message));
   for (const [key, client] of clients) {
     try {
       const status = parseToolResult(await client.callTool({ name: 'flow_status', arguments: {} }));
@@ -114,7 +117,10 @@ async function heartbeat() {
       log('status failed for', key, error.message);
     }
   }
-  await postJson('/api/flow/bridge/heartbeat', { bridgeId: BRIDGE_ID, accounts }).catch(e => log('heartbeat', e.message));
+  const reply = await postJson('/api/flow/bridge/heartbeat', { bridgeId: BRIDGE_ID, accounts }).catch(e => log('heartbeat', e.message));
+  const before = registered.length;
+  registered = accountsToProbe(reply?.accounts);
+  if (again && registered.length > before) await heartbeat(false);
 }
 
 async function handle(claim) {
@@ -150,7 +156,19 @@ async function loop(once) {
   log(`bridge ${BRIDGE_ID} -> ${CREATOR_URL} (max ${MAX_CREDITS} credits/clip, ${RESOLUTION}, ${FLOW_MODE} mode)`);
   await heartbeat();
   let lastBeat = Date.now();
+  const cdp = preflightUrl(env);
+  let chromeUp;
   for (;;) {
+    if (cdp) {
+      const up = await cdpReady(cdp);
+      if (up !== chromeUp) { log(up ? `Flow Chrome ready on ${cdp}` : `Flow Chrome not reachable on ${cdp} — waiting (jobs stay queued; run ./flow-chrome.sh)`); chromeUp = up; }
+      if (!up) {
+        if (once) return { status: 'chrome-offline' };
+        if (Date.now() - lastBeat > 30_000) { await heartbeat(); lastBeat = Date.now(); }
+        await new Promise(resolve => setTimeout(resolve, Math.max(POLL_MS, 10_000)));
+        continue;
+      }
+    }
     let claim;
     try {
       claim = await postJson('/api/flow/bridge/claim', { bridgeId: BRIDGE_ID });
