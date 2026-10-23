@@ -47,5 +47,11 @@ class T(unittest.TestCase):
             if home is None: os.environ.pop('FLOW_HOME')
             else: os.environ['FLOW_HOME'] = home
 
+    def test_audio_chain_ends_in_explicit_stereo_layout(self):
+        # ffmpeg 5.1 (Debian, the server) cannot negotiate a layout after loudnorm -> aac
+        g = filter_graph([6.0, 6.0], 0.3, total=11.7)
+        audio = g.split(';')[-1]
+        self.assertTrue(audio.endswith('aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo[aout]'), audio)
+
 if __name__ == '__main__':
     unittest.main()

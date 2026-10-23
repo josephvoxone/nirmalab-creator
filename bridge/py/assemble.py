@@ -53,7 +53,7 @@ def filter_graph(durations, xf, transitions=None, title_input=None, total=None):
     audio = f'[{aprev}]'
     if total:
         audio += f'afade=t=in:st=0:d=0.6,afade=t=out:st={round(total - 1.2, 3)}:d=1.2,'
-    audio += 'loudnorm=I=-14:TP=-1.5:LRA=11:linear=true,alimiter=limit=0.794:level=disabled,aresample=48000'
+    audio += 'loudnorm=I=-14:TP=-1.5:LRA=11:linear=true,alimiter=limit=0.794:level=disabled,aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo'
     parts.append(audio + '[aout]')
     return ';'.join(parts)
 
@@ -120,7 +120,10 @@ def main(arg):
            '-c:v', 'libx264', '-preset', 'slow', '-crf', '18', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '192k',
            '-movflags', '+faststart', '-t', str(total), final]
     try:
-        subprocess.run(cmd, check=True)
+        done = subprocess.run(cmd, capture_output=True, text=True)
+        if done.returncode != 0:
+            lines = [l for l in done.stderr.strip().splitlines() if l.strip()]
+            sys.exit('ffmpeg failed: ' + ' | '.join(lines[-4:]))
     finally:
         if card_cfg:
             shutil.rmtree(seq, ignore_errors=True)
