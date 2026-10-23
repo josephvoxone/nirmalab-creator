@@ -104,7 +104,7 @@ ul.list { margin: 0; padding: 0; list-style: none; }
 .shot { display: grid; grid-template-columns: 96px minmax(0, 1fr) auto; gap: 14px; padding: 14px 0; border-top: 1px solid var(--border-hairline); align-items: start; }
 .shot:first-child { border-top: 0; }
 .shot-thumb { width: 96px; aspect-ratio: 9 / 16; background: var(--surface-3); display: grid; place-items: center; color: var(--subtle); font-size: 12px; overflow: hidden; }
-.shot-thumb video { width: 100%; height: 100%; object-fit: cover; }
+.shot-thumb video { width: 100%; height: 100%; object-fit: cover; cursor: pointer; }
 .shot-narration { font-size: 14px; margin: 2px 0 6px; }
 .shot-prompt { color: var(--subtle); font-size: 12px; margin: 0; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 .player { width: 100%; aspect-ratio: 9 / 16; background: #000; display: block; }

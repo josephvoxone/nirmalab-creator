@@ -149,4 +149,17 @@ describe('StoryDetailPage', () => {
     await userEvent.click(screen.getByRole('button', { name: /ulangi/i }));
     await waitFor(() => expect(retried).toBe(true));
   });
+
+  it('shot thumbnails show a real frame without cramped native controls; finished story KPI says all shots ready', async () => {
+    const fetchImpl = fakeFetch(url => (url === `/api/stories/${ID}` ? { body: { story: story({ status: 'done', shots: shots('done'), video: { bytes: 1000, finishedAtMs: 2 } }), storyboard: board } } : undefined));
+    const { container } = mount(`/cerita/${ID}`, fetchImpl);
+    await screen.findByTestId('story-player');
+    const thumbs = [...container.querySelectorAll('.shot video')] as HTMLVideoElement[];
+    expect(thumbs).toHaveLength(2);
+    for (const v of thumbs) {
+      expect(v.getAttribute('src')).toMatch(/\/video#t=1\.5$/);
+      expect(v.hasAttribute('controls')).toBe(false);
+    }
+    expect(screen.getByText('Semua shot siap')).toBeInTheDocument();
+  });
 });

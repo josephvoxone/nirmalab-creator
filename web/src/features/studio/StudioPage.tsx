@@ -198,7 +198,6 @@ export function StudioPage(props: { baseUrl: string; fetchImpl: FlowFetch; techn
     <div className="studio-page">
       <header className="studio-header">
         <div>
-          <h1>Studio</h1>
           <p>Susun shot sinematik dari 424 teknik, antrekan ke Google Flow, pantau akun & hasilnya.</p>
         </div>
         <div className="studio-header-actions">
@@ -457,7 +456,7 @@ export function StudioPage(props: { baseUrl: string; fetchImpl: FlowFetch; techn
             <form className="studio-form" onSubmit={event => void addAccount(event)}>
               <input aria-label="Label akun" placeholder="Label (mis. Akun 2)" value={form.label} onChange={e => setForm(f => ({ ...f, label: e.target.value }))} />
               <input aria-label="Email akun" placeholder="Email burner" value={form.email} onChange={e => setForm(f => ({ ...f, email: e.target.value }))} />
-              <input aria-label="Folder profile" placeholder="~/.google-flow-mcp/profiles/acc-02" value={form.profileDir} onChange={e => setForm(f => ({ ...f, profileDir: e.target.value }))} />
+              <input aria-label="Folder profile" placeholder="cdp:http://127.0.0.1:9334" value={form.profileDir} onChange={e => setForm(f => ({ ...f, profileDir: e.target.value }))} />
               <button type="submit" className="studio-btn" disabled={busy || !form.label.trim()}>
                 <Plus aria-hidden="true" size={14} /> Tambah akun
               </button>
@@ -470,8 +469,9 @@ export function StudioPage(props: { baseUrl: string; fetchImpl: FlowFetch; techn
               <span className={`studio-pill ${bridge.online ? 'is-done' : 'is-failed'}`}>{bridge.online ? 'Online' : 'Offline'}</span>
             </header>
             <p className="studio-muted">{bridge.bridgeId ? `${bridge.bridgeId} · terakhir ${relative(bridge.lastSeenMs)}` : 'Belum pernah terhubung.'}</p>
-            <pre className="studio-code">cd ~/tools/OpenCreator/tools/flow-bridge{'\n'}./run.sh</pre>
-            <p className="studio-muted">Login akun baru: <code>node bridge.mjs login &lt;folder profile&gt;</code></p>
+            <p className="studio-muted">Bridge dan Chrome Flow jalan otomatis di Mac (LaunchAgent): bridge hidup terus, Chrome Flow dibuka ulang tiap 5 menit bila mati. Job hanya diambil saat Chrome Flow siap.</p>
+            <p className="studio-muted">Akun Flow baru: buka Chrome khusus lalu login sekali, daftarkan dengan profil <code>cdp:http://127.0.0.1:&lt;port&gt;</code>.</p>
+            <pre className="studio-code">cd ~/tools/nirmalab-creator/bridge{'\n'}./flow-chrome.sh flow-02 9334</pre>
           </section>
         </aside>
       </div>

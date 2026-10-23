@@ -168,4 +168,16 @@ describe('StudioPage preview preset buatan sendiri', () => {
     expect(posted?.prompt).not.toContain('isi composer');
     expect(posted?.durationSec).toBe(4);
   });
+
+  it('bridge card explains the dedicated Flow Chrome + auto-start, with no stale OpenCreator paths', async () => {
+    renderPage(makeFetch());
+    const view = screen;
+    const card = await view.findByRole('region', { name: 'Bridge Mac' });
+    expect(card).toHaveTextContent('flow-chrome.sh');
+    expect(card).toHaveTextContent(/otomatis/i);
+    expect(card).not.toHaveTextContent('OpenCreator');
+    expect(card).not.toHaveTextContent('bridge.mjs login');
+    expect(view.getByLabelText('Folder profile')).toHaveAttribute('placeholder', 'cdp:http://127.0.0.1:9334');
+    expect(view.queryByRole('heading', { level: 1 })).toBeNull();
+  });
 });

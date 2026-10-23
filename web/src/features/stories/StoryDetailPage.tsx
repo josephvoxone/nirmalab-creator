@@ -98,7 +98,9 @@ export function StoryDetailPage(props: { pollMs?: number }) {
       <div className="kpis">
         <div className="kpi"><b><span className={`pill ${story.status}`}>{STATUS_LABEL[story.status] ?? story.status}</span></b><span>Status</span></div>
         <div className="kpi"><b>{done}/{story.shots.length}</b><span>Shot siap</span></div>
-        <div className="kpi"><b>±{toRender * CREDITS_PER_SHOT} credits</b><span>Untuk {toRender} shot tersisa</span></div>
+        {toRender > 0
+          ? <div className="kpi"><b>±{toRender * CREDITS_PER_SHOT} credits</b><span>Untuk {toRender} shot tersisa</span></div>
+          : <div className="kpi"><b>Semua shot siap</b><span>Tidak perlu credits lagi</span></div>}
         <div className="kpi"><b>±{Math.round(seconds)} dtk</b><span>{story.video ? formatMB(story.video.bytes) : 'Durasi'}</span></div>
       </div>
       {active && <div className="progress" aria-label="Progres"><i style={{ width: `${Math.max(pct, 4)}%` }} /></div>}
@@ -121,7 +123,16 @@ export function StoryDetailPage(props: { pollMs?: number }) {
               return (
                 <div className="shot" key={shot.id}>
                   <div className="shot-thumb">
-                    {s?.status === 'done' ? <video src={api.shotUrl(story.id, shot.id)} muted playsInline preload="metadata" controls /> : <span>{shot.id.slice(0, 2)}</span>}
+                    {s?.status === 'done' ? (
+                      <video
+                        src={`${api.shotUrl(story.id, shot.id)}#t=1.5`}
+                        muted
+                        playsInline
+                        preload="metadata"
+                        title="Klik untuk putar/jeda"
+                        onClick={e => { const v = e.currentTarget; if (v.paused) { v.muted = false; void v.play(); } else v.pause(); }}
+                      />
+                    ) : <span>{shot.id.slice(0, 2)}</span>}
                   </div>
                   <div>
                     <div className="mono muted">{shot.id}{shot.silent ? ' · intro tanpa narasi' : ''}{shot.reuse ? ' · pakai ulang klip' : ''}</div>
