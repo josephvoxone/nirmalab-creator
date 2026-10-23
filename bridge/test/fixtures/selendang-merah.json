@@ -1,0 +1,81 @@
+{
+  "title": "Selendang Merah",
+  "slug": "selendang-merah",
+  "aspect": "9:16",
+  "maxCreditsPerShot": 10,
+  "characters": {
+    "RABBIT": "a small cream-colored rabbit with long ears and a red knitted scarf",
+    "GIRL": "a seven-year-old Indonesian girl with two short black braids"
+  },
+  "style": "Style: hand-painted storybook illustration come alive, warm and gentle, soft watercolor textures, cinematic lighting, gentle film grain.",
+  "audio": "Audio: voice-over by {narrator}, speaking Bahasa Indonesia slowly and clearly: \"{line}\" Quiet natural ambience underneath.",
+  "negative": "Negative prompt: subtitles, captions, on-screen text, watermark, logos, warped hands, camera equipment, camera crane, film crew, drone in frame, characters talking on screen, singing.",
+  "shots": [
+    {
+      "id": "00-intro",
+      "silent": true,
+      "prompt": "Extreme wide shot, the camera pushes in very slowly. A misty Indonesian village valley at golden sunrise, small houses with smoking chimneys, rice terraces, and a small fairytale castle on a distant hill. A single red knitted scarf drifts and twirls gracefully across the sky on the wind. Soft clouds, god rays, open empty sky in the upper third of the frame."
+    },
+    {
+      "id": "01-hadiah",
+      "prompt": "Medium close-up at eye level, the camera pushes in very slowly. On the wooden porch of a small Indonesian village house in warm late-afternoon light, GIRL in a mustard-yellow dress holds RABBIT in her lap and gently straightens its scarf, both content and calm. Golden window light, floating dust motes.",
+      "narration": "Namanya Kapas, kelinci kesayangan Laras, dengan selendang merah rajutannya.",
+      "transition": "fade"
+    },
+    {
+      "id": "02-dibuang",
+      "prompt": "Wide shot, the camera stays completely still. Night, heavy rain on an empty village road under one flickering streetlamp. A grown-up's hands in a dark raincoat set a soggy cardboard box down on the roadside, then a car's red tail lights drive away into the rain. Cold blue moonlight, wet reflections on the asphalt.",
+      "narration": "Suatu malam, saat Laras tertidur, Kapas dibuang ke pinggir jalan.",
+      "transition": "fadeblack"
+    },
+    {
+      "id": "03-menunggu",
+      "prompt": "Close-up from a high angle, the camera pushes in slowly. Inside a wet cardboard box on a rainy roadside at night, RABBIT sits trembling with its ears down, raindrops hitting the box, eyes glistening, staring at the empty dark road. Streetlamp glow, cold blue palette.",
+      "narration": "Ia menunggu dalam hujan. Tapi mobil itu tak pernah kembali."
+    },
+    {
+      "id": "04-sendirian",
+      "prompt": "Wide shot, the camera tracks slowly sideways alongside the subject. RABBIT walks alone through a misty bamboo forest at night, tiny against tall dark stalks, fog drifting, pale moonlight shafts cutting through the mist. Lonely and quiet.",
+      "narration": "Kedinginan dan takut, Kapas berjalan sendirian mencari jalan pulang."
+    },
+    {
+      "id": "05-mencari",
+      "prompt": "Medium shot, handheld camera following from behind and to the side. GIRL in a clear raincoat over her mustard-yellow dress runs along a muddy village path in the rain at night, holding a small glowing lantern, calling out, worried tears on her face. Warm lantern light against cold blue rain.",
+      "narration": "Laras terbangun. Ia berlari menembus hujan, memanggil nama Kapas."
+    },
+    {
+      "id": "06-istana",
+      "reuse": {
+        "file": "~/FlowExports/bridge/98077b81-8e6a-489e-b1bd-397bfae4a4d4.mp4",
+        "start": 1.6
+      },
+      "narration": ""
+    },
+    {
+      "id": "07-menemukan",
+      "prompt": "Wide shot from a low angle, the camera rises slowly. At sunrise on a grassy hill below a small fairytale castle, GIRL in her clear raincoat, muddy and exhausted, stops and spots RABBIT at the top of the path, its red knitted scarf bright against the golden sky. Morning mist, long warm light.",
+      "narration": "Saat fajar, Laras melihat selendang merah itu di atas bukit.",
+      "transition": "fadewhite"
+    },
+    {
+      "id": "08-pelukan",
+      "prompt": "Close-up, the camera orbits slowly around them. GIRL kneels in the dewy grass and hugs RABBIT tightly against her cheek, tears of joy, the red knitted scarf between them. Warm golden sunrise backlight, soft lens flare, glowing rim light on fur and hair.",
+      "narration": "Kapas tidak pernah tersesat. Ia hanya mencari jalan pulang."
+    },
+    {
+      "id": "09-pulang",
+      "prompt": "Extreme wide shot, the view pulls back slowly to reveal the whole valley. GIRL walks down the hill path carrying RABBIT in her arms toward a small village with smoking chimneys, the fairytale castle behind them. Golden morning light, long shadows, peaceful.",
+      "narration": "Dan Laras berjanji, tak ada yang akan membuangnya lagi."
+    }
+  ],
+  "narrator": "a warm, gentle Indonesian female storyteller (voice-over only, not on screen)",
+  "crossfade": 0.3,
+  "audioSilent": "Audio: soft morning wind, distant birdsong, and a gentle, emotional orchestral swell with strings and a music box melody. No voice, no dialogue.",
+  "titleCard": {
+    "lines": [
+      "SELENDANG",
+      "MERAH"
+    ],
+    "kicker": "Sebuah Dongeng"
+  }
+}
