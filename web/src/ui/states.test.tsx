@@ -51,9 +51,9 @@ describe('navigation', () => {
   it('lists new, search and every tool in the sidebar, the open page highlighted', () => {
     mountLayout(vi.fn(async () => new Response('{}', { status: 404 })));
     const nav = screen.getByRole('navigation', { name: 'Menu utama' });
-    for (const name of [/Buat baru/, /Template/, /Studio/, /Alat cepat/, /Publish/, /Semua cerita/]) expect(within(nav).getByRole('link', { name })).toBeTruthy();
+    for (const name of [/Buat baru/, /Template/, /Proyek/, /Studio/, /Naskah & suara/, /Publish/]) expect(within(nav).getByRole('link', { name })).toBeTruthy();
     expect(within(nav).getByRole('button', { name: /Cari cerita/ })).toBeTruthy();
-    expect(within(nav).getByRole('link', { name: /Semua cerita/ }).getAttribute('aria-current')).toBe('page');
+    expect(within(nav).getByRole('link', { name: /Proyek/ }).getAttribute('aria-current')).toBe('page');
   });
 
   it('shows the real bridge state and credits for admins', async () => {

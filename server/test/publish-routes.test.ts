@@ -15,7 +15,14 @@ async function setup(resolveStoryVideo?: (id: string) => Promise<string | undefi
   const admin = await userAuthStore.createUser({ email: 'admin@x.io', password: 'admin-pass-1', isAdmin: true });
   const member = await userAuthStore.createUser({ email: 'member@x.io', password: 'member-pass-1', isAdmin: false });
   const publish = vi.fn(async (platform: string, _input: unknown) => ({ ok: true as const, platform, externalId: 'vid1' }));
-  const service = { publish } as unknown as PublisherService;
+  const handleCallback = vi.fn(async (_platform: string, query: { error?: string }) => {
+    if (query.error) {
+      const { PublisherError } = await import('../src/publisher/types.js');
+      throw new PublisherError('OAUTH_DENIED', `Provider refused: ${query.error}`);
+    }
+    return { accountLabel: 'Chan' };
+  });
+  const service = { publish, handleCallback } as unknown as PublisherService;
   const server = Fastify();
   await registerPublisherRoutes(server, { service, userAuthStore, env: {}, resolveStoryVideo });
   await server.ready();
@@ -78,12 +85,58 @@ describe('publish route with storyId', () => {
     expect(publish).not.toHaveBeenCalled();
   });
 
-  it('OAuth callback returns to the clean /publish page', async () => {
+  it('OAuth callback success returns to Settings → Koneksi with ?connected=PLATFORM', async () => {
+    const { server } = await setup(undefined);
+    const res = await server.inject({ url: '/api/publish/tiktok/callback?code=c&state=s' });
+    expect(res.statusCode).toBe(302);
+    expect(res.headers.location).toBe('https://creator.nirmalab.com/pengaturan/koneksi?connected=tiktok');
+  });
+
+  it('OAuth callback failure returns to Settings → Koneksi with a plain ?error message', async () => {
     const { server } = await setup(undefined);
     const res = await server.inject({ url: '/api/publish/youtube/callback?error=access_denied&state=x' });
     expect(res.statusCode).toBe(302);
-    expect(res.headers.location).toMatch(/^https:\/\/creator\.nirmalab\.com\/publish\?publisher=youtube&connected=0/);
-    expect(res.headers.location).not.toContain('#/');
+    const location = new URL(String(res.headers.location));
+    expect(location.origin + location.pathname).toBe('https://creator.nirmalab.com/pengaturan/koneksi');
+    expect(location.searchParams.get('platform')).toBe('youtube');
+    expect(location.searchParams.get('connected')).toBeNull();
+    expect(location.searchParams.get('error')).toMatch(/izin.*ditolak/i);
+    expect(String(res.headers.location)).not.toContain('#/');
+  });
+
+  it('passes a future publishAt to YouTube as an ISO string', async () => {
+    const { server, publish, adminCookie } = await setup(async () => '/data/final.mp4');
+    const at = new Date(Date.now() + 3 * 86_400_000);
+    const res = await server.inject({ method: 'POST', url: '/api/publish/youtube/publish', headers: { cookie: adminCookie }, payload: { ...body, storyId: DONE_ID, publishAt: at.toISOString() } });
+    expect(res.statusCode).toBe(200);
+    expect(publish.mock.calls[0]?.[1]).toMatchObject({ publishAt: at.toISOString() });
+  });
+
+  it('omits publishAt when none is sent', async () => {
+    const { server, publish, adminCookie } = await setup(async () => '/data/final.mp4');
+    await server.inject({ method: 'POST', url: '/api/publish/youtube/publish', headers: { cookie: adminCookie }, payload: { ...body, storyId: DONE_ID } });
+    expect(publish.mock.calls[0]?.[1]).not.toHaveProperty('publishAt');
+  });
+
+  it('rejects a publishAt in the past or unparseable with 400', async () => {
+    const { server, publish, adminCookie } = await setup(async () => '/data/final.mp4');
+    for (const publishAt of [new Date(Date.now() - 60_000).toISOString(), 'besok sore', 12345]) {
+      const res = await server.inject({ method: 'POST', url: '/api/publish/youtube/publish', headers: { cookie: adminCookie }, payload: { ...body, storyId: DONE_ID, publishAt } });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error.code).toBe('INVALID_INPUT');
+    }
+    expect(publish).not.toHaveBeenCalled();
+  });
+
+  it('rejects publishAt for TikTok and Meta: only YouTube can schedule', async () => {
+    const { server, publish, adminCookie } = await setup(async () => '/data/final.mp4');
+    const publishAt = new Date(Date.now() + 86_400_000).toISOString();
+    for (const platform of ['tiktok', 'meta']) {
+      const res = await server.inject({ method: 'POST', url: `/api/publish/${platform}/publish`, headers: { cookie: adminCookie }, payload: { ...body, storyId: DONE_ID, publishAt } });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error.message).toMatch(/youtube/i);
+    }
+    expect(publish).not.toHaveBeenCalled();
   });
 
   it('answers 404 for storyId when no resolver is configured', async () => {

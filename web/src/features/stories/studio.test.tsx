@@ -45,95 +45,6 @@ describe('shot setup helpers', () => {
   });
 });
 
-describe('Studio cerita (composer)', () => {
-  it('template card fills the look chips, mode and example premise', async () => {
-    const { fetchImpl } = harness(c => (c.url === '/api/stories' ? { body: { stories: [] } } : undefined));
-    mount('/cerita', fetchImpl);
-    const card = await screen.findByRole('button', { name: /Dongeng Tidur/, pressed: false });
-    await userEvent.click(card);
-    expect(screen.getByRole('button', { name: /Palet warna.*Pastel Kapas/ })).toBeTruthy();
-    expect(screen.getByRole('button', { name: /Film setup.*Dongeng/ })).toBeTruthy();
-    expect(screen.getByRole('radio', { name: /Konsisten/ })).toHaveProperty('checked', true);
-    expect((screen.getByLabelText('Premis cerita') as HTMLTextAreaElement).value).toMatch(/Bintang kecil/);
-    expect(screen.getByLabelText('Jumlah shot')).toHaveProperty('value', '6');
-  });
-
-  it('template cards show their cover still, and fall back to the palette when it is missing', async () => {
-    const { fetchImpl } = harness(c => (c.url === '/api/stories' ? { body: { stories: [] } } : undefined));
-    mount('/cerita', fetchImpl);
-    const card = await screen.findByRole('button', { name: /Drama Hewan/, pressed: false });
-    const img = card.querySelector('img')!;
-    expect(img.getAttribute('src')).toBe('/api/stories/templates/drama-hewan/cover?v=0');
-    expect(img.getAttribute('alt')).toBe('');
-    img.dispatchEvent(new Event('error'));
-    await waitFor(() => expect(card.querySelector('img')).toBeNull());
-  });
-
-  it('admin regenerates a template cover through the app; card shows progress', async () => {
-    let covers: Record<string, unknown> = {};
-    const calls: Call[] = [];
-    const fetchImpl = vi.fn(async (url: string, init?: RequestInit) => {
-      calls.push({ url, method: init?.method ?? 'GET' });
-      const body = url === '/api/stories/catalog' ? { catalog: CATALOG, covers }
-        : url === '/api/stories' ? { stories: [] }
-        : url === '/api/stories/templates/fakta-faceless/cover' && init?.method === 'POST' ? (covers = { 'fakta-faceless': { pending: true } }, { cover: { pending: true } })
-        : undefined;
-      return new Response(JSON.stringify(body ?? {}), { status: body ? 200 : 404 });
-    });
-    mount('/cerita', fetchImpl);
-    await userEvent.click(await screen.findByRole('button', { name: 'Buat ulang cover Fakta Unik' }));
-    expect(calls.some(c => c.url === '/api/stories/templates/fakta-faceless/cover' && c.method === 'POST')).toBe(true);
-    expect(await screen.findByText(/Membuat cover/)).toBeTruthy();
-    const before = calls.filter(c => c.url === '/api/stories/catalog').length;
-    covers = { 'fakta-faceless': { pending: false, updatedAtMs: 42 } };
-    await waitFor(() => expect(calls.filter(c => c.url === '/api/stories/catalog').length).toBeGreaterThan(before), { timeout: 3000 });
-    await waitFor(() => expect(screen.getByRole('button', { name: /Fakta Unik/, pressed: false }).querySelector('img')!.getAttribute('src')).toBe('/api/stories/templates/fakta-faceless/cover?v=42'));
-  });
-
-  it('palette dialog: pick, chip updates, Esc closes', async () => {
-    const { fetchImpl } = harness(c => (c.url === '/api/stories' ? { body: { stories: [] } } : undefined));
-    mount('/cerita', fetchImpl);
-    await userEvent.click(await screen.findByRole('button', { name: /Palet warna/ }));
-    const dialog = screen.getByRole('dialog', { name: 'Palet warna' });
-    await userEvent.click(within(dialog).getByRole('button', { name: /Noir Monokrom/ }));
-    expect(screen.queryByRole('dialog')).toBeNull();
-    expect(screen.getByRole('button', { name: /Palet warna.*Noir Monokrom/ })).toBeTruthy();
-    await userEvent.click(screen.getByRole('button', { name: /Kamera/ }));
-    expect(screen.getByRole('dialog', { name: 'Kamera' })).toBeTruthy();
-    await userEvent.keyboard('{Escape}');
-    expect(screen.queryByRole('dialog')).toBeNull();
-  });
-
-  it('film setup tabs: tempo sets the shot count', async () => {
-    const { fetchImpl } = harness(c => (c.url === '/api/stories' ? { body: { stories: [] } } : undefined));
-    mount('/cerita', fetchImpl);
-    await userEvent.click(await screen.findByRole('button', { name: /Film setup/ }));
-    const dialog = screen.getByRole('dialog', { name: 'Film setup' });
-    await userEvent.click(within(dialog).getByRole('tab', { name: 'Tempo' }));
-    await userEvent.click(within(dialog).getByRole('button', { name: /Dinamis/ }));
-    expect(screen.getByLabelText('Jumlah shot')).toHaveProperty('value', '10');
-  });
-
-  it('submits premise + template + look + mode and opens the story', async () => {
-    const { fetchImpl, calls } = harness(c => {
-      if (c.url === '/api/stories' && c.method === 'GET') return { body: { stories: [] } };
-      if (c.url === '/api/stories/draft') return { status: 201, body: { story: { id: 'story_0123456789abcdef' } } };
-      if (c.url.startsWith('/api/stories/story_')) return { body: { story: { id: 'story_0123456789abcdef', title: 'T', status: 'draft', mode: 'konsisten', shots: [], events: [], createdAtMs: 0, updatedAtMs: 0 }, storyboard: { title: 'T', shots: [] } } };
-      return undefined;
-    });
-    mount('/cerita', fetchImpl);
-    await userEvent.click(await screen.findByRole('button', { name: /Drama Hewan/, pressed: false }));
-    await userEvent.click(screen.getByRole('button', { name: /Coba contoh/ }));
-    await userEvent.click(screen.getByRole('button', { name: /Tulis storyboard/ }));
-    await waitFor(() => expect(calls.some(c => c.url === '/api/stories/draft')).toBe(true));
-    const body = calls.find(c => c.url === '/api/stories/draft')!.body as Record<string, unknown>;
-    expect(body).toMatchObject({ template: 'drama-hewan', mode: 'konsisten', aspect: '9:16', shots: 8 });
-    expect(body.premise).toMatch(/kucing oranye/);
-    expect(body.look).toMatchObject({ genre: 'drama', palette: 'senja', style: 'storybook' });
-    expect(await screen.findByRole('heading', { name: 'T' })).toBeTruthy();
-  });
-});
-
 const ID = 'story_0123456789abcdef';
 const konsistenBoard = {
   title: 'Selendang Merah', mode: 'konsisten', template: 'drama-hewan', look: look({ genre: 'drama', palette: 'senja' }),
@@ -190,7 +101,9 @@ describe('Story detail (konsisten pipeline)', () => {
     });
     mount(`/cerita/${ID}`, fetchImpl);
     const card = await screen.findByRole('article', { name: /01-hadiah/ });
-    await userEvent.selectOptions(within(card).getByLabelText('Gerakan kamera'), 'push-in');
+    expect(card.querySelector('select')).toBeNull();
+    await userEvent.click(within(card).getByRole('combobox', { name: 'Gerakan kamera' }));
+    await userEvent.click(await screen.findByRole('option', { name: 'Push in' }));
     await userEvent.click(within(card).getByRole('button', { name: /Gambar ulang/ }));
     await waitFor(() => expect(calls.some(c => c.url === `/api/stories/${ID}/shots/01-hadiah/frame`)).toBe(true));
     expect(calls.find(c => c.url.endsWith('/frame'))!.body).toEqual({ prompt: 'Medium shot, the camera pushes in slowly. LARAS hugs KAPAS.' });

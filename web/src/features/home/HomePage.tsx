@@ -50,14 +50,31 @@ export default function HomePage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
+  const shotsFor = useCallback((tempoId: string | undefined) => {
+    const n = String(catalog?.tempos.find(x => x.id === tempoId)?.shots ?? '');
+    return (SHOTS as readonly string[]).includes(n) ? (n as (typeof SHOTS)[number]) : undefined;
+  }, [catalog]);
+  const changeLook = (patch: Partial<Look>) => {
+    setLook(l => ({ ...l, ...patch }));
+    const n = patch.tempo ? shotsFor(patch.tempo) : undefined;
+    if (n) setShots(n);
+  };
+
   const pick = useCallback((t: CatTemplate) => {
     setTemplate(t);
     setLook({ ...DEFAULT_LOOK, ...t.look });
+    const n = shotsFor(t.look.tempo);
+    if (n) setShots(n);
     setPrompt(t.example);
     setMode(t.mode);
     setAspect(t.aspect === '16:9' ? '16:9' : '9:16');
     setError('');
-  }, []);
+  }, [shotsFor]);
+
+  useEffect(() => {
+    const text = params.get('prompt');
+    if (text) { setPrompt(text); setParams({}, { replace: true }); }
+  }, [params, setParams]);
 
   useEffect(() => {
     const id = params.get('template');
@@ -140,7 +157,7 @@ export default function HomePage() {
         <ComposerPick label="Mode" value={mode} options={MODES} onValueChange={setMode} align="start" />
         <ComposerPick label="Rasio" value={aspect} options={ASPECTS} onValueChange={setAspect} align="start" />
         <ComposerPick label="Durasi" value={shots} options={SHOTS.map(s => ({ value: s, label: `${s} shot · ±${Number(s) * 6} dtk` }))} onValueChange={setShots} align="start" />
-        <button type="button" aria-expanded={lookOpen} aria-controls="home-look" onClick={() => setLookOpen(v => !v)}
+        <button type="button" aria-expanded={lookOpen} aria-controls="home-look" aria-label={`Atur gaya: ${catalog ? (optionOf(catalog, 'style', look.style)?.label ?? 'Gaya') : 'Gaya'}`} onClick={() => setLookOpen(v => !v)}
           className="glass-held flex h-6 items-center gap-1 rounded-sm px-1.5 text-[12px] text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:text-foreground aria-expanded:text-foreground">
           <Palette className="size-3 shrink-0" /> <span className="max-w-32 truncate whitespace-nowrap">{catalog ? (optionOf(catalog, 'style', look.style)?.label ?? 'Gaya') : 'Gaya'}</span>
         </button>
@@ -151,7 +168,7 @@ export default function HomePage() {
         </ComposerFooterEnd>
       </ComposerFooter>
       {lookOpen && catalog && (
-        <div id="home-look" className="mt-3"><LookChips catalog={catalog} look={look} onChange={patch => setLook(l => ({ ...l, ...patch }))} /></div>
+        <div id="home-look" className="mt-3"><LookChips catalog={catalog} look={look} onChange={changeLook} /></div>
       )}
       {error && <p role="alert" className="mt-3 rounded-md bg-destructive/10 px-3 py-2 text-[13px] text-destructive">Draf gagal dibuat: {error}. Prompt kamu masih di atas — coba kirim lagi.</p>}
 

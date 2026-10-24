@@ -15,15 +15,15 @@ import { useSession } from '../lib/session.js';
 import { useHistory } from './history.js';
 import { STATUS_LABEL, isActive, type Story } from '../features/stories/storiesClient.js';
 
-type NavItem = { to: string; label: string; icon: LucideIcon };
+type NavItem = { to: string; label: string; hint?: string; icon: LucideIcon };
 
 /** The tools, after "new" and "search" — like ChatGPT's Library / GPTs rows. */
 export const TOOLS: NavItem[] = [
-  { to: '/template', label: 'Template', icon: LayoutGrid },
-  { to: '/studio', label: 'Studio', icon: Clapperboard },
-  { to: '/generate', label: 'Alat cepat', icon: Wand2 },
-  { to: '/publish', label: 'Publish', icon: Send },
-  { to: '/cerita', label: 'Semua cerita', icon: BookOpenText }
+  { to: '/template', label: 'Template', hint: 'Resep siap pakai untuk memulai video', icon: LayoutGrid },
+  { to: '/cerita', label: 'Proyek', hint: 'Semua video yang sedang/sudah kamu buat', icon: BookOpenText },
+  { to: '/studio', label: 'Studio', hint: 'Satu klip atau satu gambar, langkah demi langkah', icon: Clapperboard },
+  { to: '/generate', label: 'Naskah & suara', hint: 'Tulis narasi lalu jadikan voice-over', icon: Wand2 },
+  { to: '/publish', label: 'Publish', hint: 'Kirim video jadi ke YouTube & sosmed', icon: Send }
 ];
 /** Kept for older imports. */
 export const NAV = TOOLS;
@@ -31,9 +31,9 @@ export const NAV = TOOLS;
 const rowClass = 'flex h-8 w-full items-center gap-2.5 rounded-md px-2 text-left text-[13px] text-foreground/85 transition-colors outline-none hover:bg-accent focus-visible:bg-accent [&_svg]:size-4 [&_svg]:shrink-0 [&_svg]:text-muted-foreground';
 const chosenClass = 'glass-chosen text-foreground [&_svg]:text-foreground';
 
-function SideLink(props: { to: string; end?: boolean; icon: LucideIcon; children: ReactNode; onPick?: () => void }) {
+function SideLink(props: { to: string; end?: boolean; icon: LucideIcon; children: ReactNode; onPick?: () => void; hint?: string }) {
   return (
-    <NavLink to={props.to} end={props.end} onClick={props.onPick} className={({ isActive }) => cn(rowClass, isActive && chosenClass)}>
+    <NavLink to={props.to} end={props.end} onClick={props.onPick} title={props.hint} className={({ isActive }) => cn(rowClass, isActive && chosenClass)}>
       <props.icon aria-hidden="true" /> <span className="truncate">{props.children}</span>
     </NavLink>
   );
@@ -233,13 +233,13 @@ export function Layout(props: { title: string; actions?: ReactNode; children: Re
           </div>
           <nav aria-label="Menu utama" className="flex min-h-0 flex-1 flex-col">
             <div className="flex flex-col gap-px px-1.5">
-              <SideLink to="/" end icon={SquarePen} onPick={pick}>Buat baru</SideLink>
+              <SideLink to="/" end icon={SquarePen} hint="Tulis prompt, jadi film pendek" onPick={pick}>Buat baru</SideLink>
               <button type="button" className={rowClass} onClick={() => setSearching(true)} aria-label="Cari cerita">
                 <Search aria-hidden="true" /> <span>Cari cerita</span>
                 <span className="ml-auto hidden gap-0.5 md:flex"><Kbd>⌘</Kbd><Kbd>K</Kbd></span>
               </button>
               <div className="h-2" />
-              {TOOLS.map(item => <SideLink key={item.to} to={item.to} icon={item.icon} onPick={pick}>{item.label}</SideLink>)}
+              {TOOLS.map(item => <SideLink key={item.to} to={item.to} icon={item.icon} hint={item.hint} onPick={pick}>{item.label}</SideLink>)}
             </div>
             <History onPick={pick} />
           </nav>

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react';
-import { Check, Copy, Gauge, LogOut, Server, Settings2, UserRound, Users } from 'lucide-react';
+import { Check, Copy, Gauge, Link2, LogOut, Server, Settings2, UserRound, Users } from 'lucide-react';
+import { ConnectionsPanel } from './ConnectionsPanel.js';
 import { cn } from '@/lib/utils';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -14,14 +15,15 @@ import {
 } from './settingsClient.js';
 
 type Api = ReturnType<typeof settingsApi>;
-export type SettingsTab = 'umum' | 'akun' | 'anggota' | 'penggunaan' | 'flow';
+export type SettingsTab = 'umum' | 'akun' | 'anggota' | 'penggunaan' | 'flow' | 'koneksi';
 
 export const TABS: Array<{ id: SettingsTab; label: string; icon: typeof Users; admin?: boolean }> = [
   { id: 'umum', label: 'Umum', icon: Settings2 },
   { id: 'akun', label: 'Akun', icon: UserRound },
   { id: 'anggota', label: 'Anggota', icon: Users, admin: true },
   { id: 'penggunaan', label: 'Penggunaan', icon: Gauge, admin: true },
-  { id: 'flow', label: 'Akun Flow', icon: Server, admin: true }
+  { id: 'flow', label: 'Akun Flow', icon: Server, admin: true },
+  { id: 'koneksi', label: 'Koneksi', icon: Link2 }
 ];
 
 const field = 'h-8 w-full rounded-md border bg-(--field) px-2.5 text-[13px] text-foreground outline-none placeholder:text-muted-foreground focus-visible:border-ring';
@@ -664,6 +666,7 @@ export default function SettingsPage(props: { tab?: SettingsTab; onTab?: (tab: S
         {own === 'anggota' && <><MembersCard api={api} /><InvitesCard api={api} /></>}
         {own === 'penggunaan' && <UsageTab api={api} />}
         {own === 'flow' && <><PoolCard api={api} /><FlowCard api={api} /></>}
+        {own === 'koneksi' && <ConnectionsPanel />}
       </div>
     </div>
   );

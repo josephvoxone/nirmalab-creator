@@ -1,194 +1,178 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Dices, LayoutTemplate, Wand2 } from 'lucide-react';
-import { EmptyState, ErrorState, LoadingState, Skel, describeError } from '../../ui/states.js';
+import { Clapperboard, LayoutGrid, RefreshCw, Search, SquarePen, Trash2 } from 'lucide-react';
+import { cn } from '@/lib/utils';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Skeleton } from '@/components/ui/skeleton';
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle
+} from '@/components/ui/alert-dialog';
 import { useSession } from '../../lib/session.js';
-import { DEFAULT_LOOK, useCatalog, type Look } from './catalog.js';
-import { LookChips, TemplateCard } from './LookChips.js';
-import { CREDITS_PER_SHOT, STATUS_LABEL, doneCount, storiesApi, type Story } from './storiesClient.js';
-import './studio.css';
+import { useHistory } from '../../shell/history.js';
+import { describeError } from '../../ui/states.js';
+import { relativeTime } from '../settings/settingsClient.js';
+import { STATUS_LABEL, doneCount, isActive, storiesApi, type Story } from './storiesClient.js';
 
-type Mode = 'konsisten' | 'cepat';
-
-const MODES: Array<{ id: Mode; label: string; hint: string }> = [
-  { id: 'konsisten', label: 'Konsisten', hint: 'Karakter dibuat sekali, tiap shot digambar dulu sebagai keyframe (gratis) lalu dianimasikan. Wajah, baju dan gaya tetap sama.' },
-  { id: 'cepat', label: 'Cepat', hint: 'Langsung text-to-video per shot. Cocok untuk faceless, fakta, montase.' }
+const FILTERS: Array<{ id: string; label: string; test: (s: Story) => boolean }> = [
+  { id: 'semua', label: 'Semua', test: () => true },
+  { id: 'berjalan', label: 'Berjalan', test: isActive },
+  { id: 'review', label: 'Siap direview', test: s => s.status === 'review' },
+  { id: 'draft', label: 'Draft', test: s => s.status === 'draft' },
+  { id: 'selesai', label: 'Selesai', test: s => s.status === 'done' },
+  { id: 'gagal', label: 'Gagal', test: s => s.status === 'failed' }
 ];
 
-export function StoriesPage(props: { pollMs?: number }) {
-  const { fetchImpl, user } = useSession();
-  const api = useMemo(() => storiesApi(fetchImpl), [fetchImpl]);
-  const loadCatalog = useCallback(() => api.catalog(), [api]);
-  const { catalog, covers, error: catalogError, reload } = useCatalog(loadCatalog, props.pollMs);
-  const [coverError, setCoverError] = useState('');
-  const navigate = useNavigate();
-  const [stories, setStories] = useState<Story[] | undefined>(undefined);
-  const [premise, setPremise] = useState('');
-  const [template, setTemplate] = useState<string>();
-  const [look, setLook] = useState<Look>(DEFAULT_LOOK);
-  const [mode, setMode] = useState<Mode>('konsisten');
-  const [aspect, setAspect] = useState<'9:16' | '16:9'>('9:16');
-  const [shots, setShots] = useState(8);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
+const tone = (s: Story) => s.status === 'done' ? 'text-(--success)' : s.status === 'failed' ? 'text-destructive' : s.status === 'review' ? 'text-(--brand)' : isActive(s) ? 'text-foreground' : 'text-muted-foreground';
 
-  const [listError, setListError] = useState<unknown>();
-  const [listTick, setListTick] = useState(0);
+/** A real picture of the project: the finished video, else its first keyframe, else a neutral tile. */
+function Thumb(props: { story: Story }) {
+  const s = props.story;
+  const [broken, setBroken] = useState(false);
+  const frame = s.shots.find(x => x.frame?.status === 'done');
+  return (
+    <span className="relative block aspect-[4/5] w-full overflow-hidden bg-muted">
+      {!broken && s.status === 'done' && (
+        <video src={`/api/stories/${s.id}/video#t=1.5`} preload="metadata" muted playsInline onError={() => setBroken(true)} className="absolute inset-0 size-full object-cover" />
+      )}
+      {!broken && s.status !== 'done' && frame && (
+        <img src={`/api/stories/${s.id}/shots/${frame.id}/frame`} alt="" loading="lazy" onError={() => setBroken(true)} className="absolute inset-0 size-full object-cover" />
+      )}
+      {(broken || (s.status !== 'done' && !frame)) && <Clapperboard aria-hidden="true" className="absolute top-1/2 left-1/2 size-6 -translate-x-1/2 -translate-y-1/2 text-muted-foreground/50" />}
+    </span>
+  );
+}
+
+export function StoriesPage(props: { pollMs?: number }) {
+  const { fetchImpl } = useSession();
+  const api = useMemo(() => storiesApi(fetchImpl), [fetchImpl]);
+  const history = useHistory();
+  const navigate = useNavigate();
+  const [stories, setStories] = useState<Story[]>();
+  const [error, setError] = useState<unknown>();
+  const [tick, setTick] = useState(0);
+  const [filter, setFilter] = useState('semua');
+  const [q, setQ] = useState('');
+  const [doomed, setDoomed] = useState<Story>();
+  const [deleteError, setDeleteError] = useState('');
+  const reload = useCallback(() => setTick(t => t + 1), []);
+
   useEffect(() => {
     let alive = true;
-    setListError(undefined);
-    api.list().then(r => alive && setStories(r.stories), e => alive && setListError(e));
+    api.list().then(r => { if (alive) { setStories([...r.stories].sort((a, b) => b.updatedAtMs - a.updatedAtMs)); setError(undefined); } }, e => alive && setError(e));
     return () => { alive = false; };
-  }, [api, listTick]);
-  const focusTemplates = () => {
-    const first = document.querySelector<HTMLButtonElement>('.template-grid .template-card');
-    first?.scrollIntoView?.({ behavior: 'smooth', block: 'center' });
-    first?.focus();
+  }, [api, tick]);
+  const running = stories?.some(isActive);
+  useEffect(() => {
+    const ms = props.pollMs ?? 8000;
+    if (!ms || !running) return;
+    const t = setInterval(reload, ms);
+    return () => clearInterval(t);
+  }, [props.pollMs, running, reload]);
+
+  const counts = useMemo(() => Object.fromEntries(FILTERS.map(f => [f.id, (stories ?? []).filter(f.test).length])), [stories]);
+  const shown = useMemo(() => {
+    const f = FILTERS.find(x => x.id === filter) ?? FILTERS[0]!;
+    const needle = q.trim().toLowerCase();
+    return (stories ?? []).filter(s => f.test(s) && (!needle || s.title.toLowerCase().includes(needle)));
+  }, [stories, filter, q]);
+
+  const remove = async (s: Story) => {
+    setDeleteError('');
+    try {
+      await api.remove(s.id);
+      setStories(list => list?.filter(x => x.id !== s.id));
+      history.reload();
+    } catch (e) { setDeleteError(`Gagal menghapus "${s.title}": ${describeError(e)}`); }
+    setDoomed(undefined);
   };
 
-  const chosen = catalog?.templates.find(t => t.id === template);
-
-  function pickTemplate(id: string) {
-    const t = catalog?.templates.find(x => x.id === id);
-    if (!t || !catalog) return;
-    const previousExample = chosen?.example;
-    setTemplate(t.id);
-    setLook(t.look);
-    setMode(t.mode);
-    setAspect(t.aspect);
-    setShots(catalog.tempos.find(x => x.id === t.look.tempo)?.shots ?? 8);
-    if (!premise.trim() || premise === previousExample) setPremise(t.example);
-  }
-
-  function changeLook(patch: Partial<Look>) {
-    setLook(l => ({ ...l, ...patch }));
-    const tempo = patch.tempo && catalog?.tempos.find(t => t.id === patch.tempo);
-    if (tempo) setShots(tempo.shots);
-  }
-
-  async function draft(event: FormEvent) {
-    event.preventDefault();
-    setBusy(true);
-    setError('');
-    try {
-      const { story } = await api.draft({ premise: premise.trim(), shots, look, mode, aspect, ...(template ? { template } : {}) });
-      navigate(`/cerita/${story.id}`);
-    } catch (e) {
-      setError(describeError(e));
-    } finally {
-      setBusy(false);
-    }
-  }
-
   return (
-    <div className="studio">
-      <header className="studio-hero">
-        <h2>Dari premis jadi film pendek</h2>
-        <p>Pilih template, atur gaya seperti di set film, lalu tulis premisnya. Storyboard, karakter dan keyframe gratis; kredit Flow hanya terpakai saat render video.</p>
-      </header>
+    <div className="mx-auto w-full max-w-[1100px]">
+      <div className="flex flex-col gap-3 pb-3 sm:flex-row sm:items-center">
+        <p className="text-[13px] text-muted-foreground">
+          Semua video yang sedang atau sudah kamu buat. <span className="text-foreground/70">Template adalah resep awal untuk memulai;</span> proyek adalah hasil kerjamu.
+        </p>
+        <div className="flex items-center gap-2 sm:ml-auto">
+          <label className="flex h-8 items-center gap-2 rounded-md border bg-(--field) px-2.5 sm:w-56 [&_svg]:size-3.5 [&_svg]:text-muted-foreground">
+            <Search aria-hidden="true" />
+            <input type="search" aria-label="Cari proyek" placeholder="Cari proyek…" value={q} onChange={e => setQ(e.target.value)}
+              className="min-w-0 flex-1 bg-transparent text-[13px] outline-none placeholder:text-muted-foreground" />
+          </label>
+          <Button size="sm" onClick={() => navigate('/')}><SquarePen /> Buat baru</Button>
+        </div>
+      </div>
 
-      {catalogError !== undefined && !catalog && <ErrorState title="Gagal memuat template & pengaturan gaya" error={catalogError} onRetry={reload} />}
-      {catalogError === undefined && !catalog && (
-        <LoadingState label="Memuat studio" className="studio-skeleton">
-          <div className="skel-chips">{[0, 1, 2, 3, 4].map(i => <Skel key={i} h={52} />)}</div>
-          <Skel h={104} />
-          <div className="skel-templates">{[0, 1, 2, 3, 4].map(i => <Skel key={i} h={220} />)}</div>
-        </LoadingState>
-      )}
-
-      {user.isAdmin && catalog && (
-        <form className="composer" onSubmit={draft}>
-          <LookChips catalog={catalog} look={look} onChange={changeLook} />
-          <textarea
-            className="composer-prompt"
-            aria-label="Premis cerita"
-            value={premise}
-            onChange={e => setPremise(e.target.value)}
-            placeholder="Tulis premis cerita dalam Bahasa Indonesia. Contoh: kelinci kesayangan seorang anak dibuang saat malam hujan, lalu menemukan jalan pulang."
-            minLength={5}
-            required
-          />
-          <div className="composer-bar">
-            <div className="segmented" role="radiogroup" aria-label="Mode">
-              {MODES.map(m => (
-                <label key={m.id} className={mode === m.id ? 'on' : ''} title={m.hint}>
-                  <input type="radio" name="mode" value={m.id} checked={mode === m.id} onChange={() => setMode(m.id)} />
-                  {m.label}
-                </label>
-              ))}
-            </div>
-            <div className="segmented" role="radiogroup" aria-label="Rasio">
-              {(['9:16', '16:9'] as const).map(a => (
-                <label key={a} className={aspect === a ? 'on' : ''}>
-                  <input type="radio" name="aspect" value={a} checked={aspect === a} onChange={() => setAspect(a)} />
-                  {a}
-                </label>
-              ))}
-            </div>
-            <label className="mini-field">
-              <span>Jumlah shot</span>
-              <select value={shots} onChange={e => setShots(Number(e.target.value))}>
-                {[3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map(n => <option key={n} value={n}>{n}</option>)}
-              </select>
-            </label>
-            <button type="button" className="btn btn-ghost" disabled={!chosen} onClick={() => chosen && setPremise(chosen.example)}>
-              <Dices size={16} /> Coba contoh
+      {stories && stories.length > 0 && (
+        <div role="tablist" aria-label="Status" className="mb-3 flex gap-1 overflow-x-auto pb-1 [scrollbar-width:none]">
+          {FILTERS.map(f => (
+            <button key={f.id} role="tab" type="button" aria-selected={filter === f.id} onClick={() => setFilter(f.id)}
+              className={cn('flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2.5 text-[12.5px] text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring/60',
+                filter === f.id && 'glass-chosen text-foreground')}>
+              {f.label} <span className="text-[11px] text-muted-foreground">{counts[f.id]}</span>
             </button>
-            <span className="composer-cost">±{shots * 6} dtk · ±{shots * CREDITS_PER_SHOT} kredit saat render</span>
-            <button className="btn btn-primary btn-generate" type="submit" disabled={busy || premise.trim().length < 5}>
-              <Wand2 size={16} /> {busy ? 'Menulis storyboard…' : 'Tulis storyboard'} <small>Gratis</small>
-            </button>
-          </div>
-          <p className="composer-hint">{MODES.find(m => m.id === mode)!.hint}</p>
-          {error && <p className="form-error" role="alert">{error}</p>}
-        </form>
+          ))}
+        </div>
       )}
+      {deleteError && <p role="alert" className="mb-3 rounded-md bg-destructive/10 px-3 py-2 text-[12.5px] text-destructive">{deleteError}</p>}
 
-      {catalog && (
-        <section className="studio-section" aria-labelledby="tpl-title">
-          <div className="section-head">
-            <h2 id="tpl-title">Template</h2>
-            <span className="muted">{catalog.templates.length} format siap pakai. Gaya, mode dan jumlah shot langsung terisi.</span>
+      {error && !stories ? (
+        <div role="alert" className="glass-panel mx-auto mt-10 flex max-w-md flex-col items-center gap-2 rounded-lg px-6 py-8 text-center">
+          <b className="text-sm font-medium">Gagal memuat proyek</b>
+          <p className="text-[13px] text-muted-foreground">{describeError(error)}</p>
+          <Button variant="glass" size="sm" onClick={reload}><RefreshCw /> Coba lagi</Button>
+        </div>
+      ) : !stories ? (
+        <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5" aria-busy="true" aria-label="Memuat proyek">
+          {Array.from({ length: 8 }, (_, i) => <Skeleton key={i} className="aspect-[4/5] rounded-lg" />)}
+        </div>
+      ) : stories.length === 0 ? (
+        <div className="glass-panel mx-auto mt-10 flex max-w-md flex-col items-center gap-2 rounded-lg px-6 py-8 text-center">
+          <h2 className="text-sm font-medium">Belum ada proyek</h2>
+          <p className="text-[13px] text-muted-foreground">Tulis premis di Buat baru, atau mulai dari template yang gaya dan kameranya sudah diatur.</p>
+          <div className="mt-1 flex gap-2">
+            <Button size="sm" onClick={() => navigate('/')}><SquarePen /> Buat baru</Button>
+            <Button size="sm" variant="glass" onClick={() => navigate('/template')}><LayoutGrid /> Lihat template</Button>
           </div>
-          {coverError && <p className="form-error" role="alert">{coverError}</p>}
-          <div className="template-grid">
-            {catalog.templates.map(t => (
-              <TemplateCard key={t.id} template={t} catalog={catalog} selected={t.id === template} onPick={() => pickTemplate(t.id)}
-                coverUrl={api.coverUrl(t.id, covers[t.id]?.updatedAtMs ?? 0)} cover={covers[t.id]}
-                onRegenerate={user.isAdmin ? () => { setCoverError(''); api.regenerateCover(t.id).then(reload, e => setCoverError(e instanceof Error ? e.message : 'Gagal')); } : undefined} />
-            ))}
-          </div>
-        </section>
-      )}
-
-      <section className="studio-section" aria-labelledby="proj-title">
-        <div className="section-head"><h2 id="proj-title">Proyek</h2></div>
-        {listError !== undefined ? (
-          <ErrorState title="Gagal memuat proyek" error={listError} onRetry={() => setListTick(t => t + 1)} />
-        ) : stories === undefined ? (
-          <LoadingState label="Memuat proyek">{[0, 1, 2].map(i => <div className="skel-row" key={i}><Skel w="45%" h={14} /><Skel w={70} h={14} /><Skel w={80} h={22} /></div>)}</LoadingState>
-        ) : stories.length === 0 ? (
-          <EmptyState
-            icon={<LayoutTemplate size={20} />}
-            title="Belum ada cerita"
-            reason={user.isAdmin ? 'Proyek muncul di sini setelah kamu menulis storyboard. Mulai dari template agar gaya, mode dan jumlah shot langsung terisi.' : 'Admin belum membuat cerita. Proyek akan muncul di sini.'}
-            action={user.isAdmin && catalog ? <button type="button" className="btn btn-primary btn-sm" onClick={focusTemplates}><LayoutTemplate size={14} /> Pilih template</button> : undefined}
-          />
-        ) : (
-          <div className="list">
-            {stories.map(s => (
-              <div className="row" key={s.id}>
-                <div className="row-main">
-                  <Link to={`/cerita/${s.id}`}>{s.title}</Link>
-                  <div className="muted mono">{new Date(s.createdAtMs).toLocaleString('id-ID')}{s.mode ? ` · ${s.mode}` : ''}</div>
+        </div>
+      ) : shown.length === 0 ? (
+        <p className="mt-8 text-center text-[13px] text-muted-foreground">Tidak ada proyek yang cocok dengan filter ini.</p>
+      ) : (
+        <ul aria-label="Daftar proyek" className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+          {shown.map(s => (
+            <li key={s.id} aria-label={s.title} className="group glass-panel relative flex flex-col overflow-hidden rounded-lg">
+              <Link to={`/cerita/${s.id}`} aria-label={`Buka ${s.title}`} className="outline-none focus-visible:ring-1 focus-visible:ring-ring/60">
+                <Thumb story={s} />
+              </Link>
+              <div className="flex flex-col gap-1 p-2.5">
+                <Link to={`/cerita/${s.id}`} tabIndex={-1} className="truncate text-[13px] font-medium hover:underline">{s.title}</Link>
+                <div className="flex items-center gap-1.5 text-[11.5px] text-muted-foreground">
+                  <Badge variant="secondary" className={cn('h-4.5 px-1.5 text-[10.5px]', tone(s))}>{STATUS_LABEL[s.status] ?? s.status}</Badge>
+                  <span className="tabular-nums">{doneCount(s)}/{s.shots.length} shot</span>
+                  <span className="ml-auto truncate">{relativeTime(s.updatedAtMs)}</span>
                 </div>
-                <span className="muted">{doneCount(s)}/{s.shots.length} shot</span>
-                <span className={`pill ${s.status}`}>{STATUS_LABEL[s.status] ?? s.status}</span>
               </div>
-            ))}
-          </div>
-        )}
-      </section>
+              <Button size="icon-sm" variant="glass" aria-label={`Hapus ${s.title}`} onClick={() => setDoomed(s)}
+                className="absolute top-1.5 right-1.5 opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 max-md:opacity-100">
+                <Trash2 />
+              </Button>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <AlertDialog open={!!doomed} onOpenChange={o => { if (!o) setDoomed(undefined); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Hapus "{doomed?.title}"?</AlertDialogTitle>
+            <AlertDialogDescription>Storyboard, keyframe dan video proyek ini dihapus dari server. Tidak bisa dibatalkan.</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Batal</AlertDialogCancel>
+            <AlertDialogAction variant="destructive" onClick={() => doomed && void remove(doomed)}>Hapus</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

@@ -59,6 +59,16 @@ export class PublisherService {
     return publisherCallbackUrl(platform, this.env);
   }
 
+  /** The env var names this server reads for the platform's OAuth app, and which are empty. */
+  missingEnv(platform: PublisherPlatform): string[] {
+    const names: Record<PublisherPlatform, string[]> = {
+      youtube: ['OPENCREATOR_PUBLISHER_YOUTUBE_CLIENT_ID', 'OPENCREATOR_PUBLISHER_YOUTUBE_CLIENT_SECRET'],
+      tiktok: ['OPENCREATOR_PUBLISHER_TIKTOK_CLIENT_KEY', 'OPENCREATOR_PUBLISHER_TIKTOK_CLIENT_SECRET'],
+      meta: ['OPENCREATOR_PUBLISHER_META_APP_ID', 'OPENCREATOR_PUBLISHER_META_APP_SECRET']
+    };
+    return names[platform].filter(name => !this.env[name]?.trim());
+  }
+
   isConfigured(platform: PublisherPlatform): boolean {
     if (platform === 'youtube') {
       const env = youtubeEnv(this.env);
@@ -84,7 +94,8 @@ export class PublisherService {
       connected,
       accountLabel: record?.accountLabel,
       expiresAt: record?.expiresAtMs ? new Date(record.expiresAtMs).toISOString() : undefined,
-      needsReconnect: !!record && !connected && !record.refreshToken
+      needsReconnect: !!record && !connected && !record.refreshToken,
+      missingEnv: this.missingEnv(platform)
     };
   }
 
@@ -194,6 +205,9 @@ export class PublisherService {
   }
 
   async publish(platform: PublisherPlatform, input: PublishInput): Promise<PublishResult> {
+    if (input.publishAt && platform !== 'youtube') {
+      throw new PublisherError('INVALID_INPUT', 'Jadwal tayang hanya didukung untuk YouTube');
+    }
     if (platform === 'youtube') {
       const accessToken = await this.youtubeAccessToken();
       const out = await youtubeUploadVideo(this.fetchImpl, {
@@ -201,6 +215,7 @@ export class PublisherService {
         title: input.title,
         description: input.description,
         privacyStatus: input.visibility ?? 'unlisted',
+        ...(input.publishAt ? { publishAt: input.publishAt } : {}),
         accessToken
       });
       return { ok: true, platform, externalId: out.videoId, url: out.url };

@@ -28,7 +28,7 @@ function JoinRoute(props: { fetchImpl: FetchLike; onSignedIn: (u: User) => void 
 }
 
 const TITLES: Array<[RegExp, string]> = [
-  [/^\/template/, 'Template'], [/^\/cerita/, 'Cerita'], [/^\/studio/, 'Studio'], [/^\/generate/, 'Alat cepat'], [/^\/publish/, 'Publish']
+  [/^\/template/, 'Template'], [/^\/cerita\/./, 'Proyek'], [/^\/cerita/, 'Proyek'], [/^\/studio/, 'Studio'], [/^\/generate/, 'Naskah & suara'], [/^\/publish/, 'Publish']
 ];
 
 /** One shell for every signed-in page, so the sidebar keeps its state while you move around. */

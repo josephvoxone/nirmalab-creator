@@ -35,7 +35,7 @@ describe('App shell', () => {
     const fetchImpl = fakeFetch(url => (url === '/api/auth/me' ? { status: 200, body: { user: admin } } : { status: 200, body: { stories: [] } }));
     render(<App fetchImpl={fetchImpl} initialPath="/cerita" />);
     const nav = await screen.findByRole('navigation', { name: /menu utama/i });
-    for (const label of ['Buat baru', 'Cari cerita', 'Template', 'Studio', 'Alat cepat', 'Publish', 'Semua cerita']) {
+    for (const label of ['Buat baru', 'Cari cerita', 'Template', 'Studio', 'Naskah & suara', 'Publish', 'Proyek']) {
       expect(nav).toHaveTextContent(label);
     }
     expect(screen.queryByText(admin.email)).not.toBeInTheDocument();

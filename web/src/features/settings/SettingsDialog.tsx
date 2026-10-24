@@ -11,7 +11,7 @@ export default function SettingsDialog() {
   const close = () => navigate(background ? `${background.pathname}${background.search}` : '/', { replace: !background });
   return (
     <Dialog open onOpenChange={open => { if (!open) close(); }}>
-      <DialogContent className="flex h-[min(680px,88vh)] flex-col gap-0 overflow-hidden p-0 sm:max-w-[820px]">
+      <DialogContent initialFocus={false} className="flex h-[min(680px,88vh)] flex-col gap-0 overflow-hidden p-0 sm:max-w-[820px]">
         <div className="flex h-12 shrink-0 items-center border-b px-4">
           <DialogTitle className="text-[15px]">Pengaturan</DialogTitle>
         </div>

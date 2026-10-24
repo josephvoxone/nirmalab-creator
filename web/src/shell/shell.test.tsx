@@ -22,7 +22,7 @@ describe('ChatGPT-style shell', () => {
     app();
     const nav = await screen.findByRole('navigation', { name: /menu utama/i });
     expect(within(nav).getByRole('link', { name: /buat baru/i })).toHaveAttribute('href', '/');
-    for (const label of ['Template', 'Studio', 'Alat cepat', 'Publish']) expect(within(nav).getByRole('link', { name: new RegExp(label, 'i') })).toBeInTheDocument();
+    for (const label of ['Template', 'Proyek', 'Studio', 'Naskah & suara', 'Publish']) expect(within(nav).getByRole('link', { name: new RegExp(label, 'i') })).toBeInTheDocument();
     const history = await screen.findByRole('list', { name: /cerita terbaru/i });
     expect(within(history).getByRole('link', { name: /jingga di pagar/i })).toHaveAttribute('href', '/cerita/story_a');
     expect(within(history).getByRole('link', { name: /kerlip dan bulan/i })).toBeInTheDocument();

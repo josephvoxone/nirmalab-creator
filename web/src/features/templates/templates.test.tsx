@@ -54,4 +54,31 @@ describe('Template gallery', () => {
     await userEvent.click(await screen.findByRole('button', { name: /coba lagi/i }));
     expect(within(await grid()).getAllByRole('listitem')).toHaveLength(4);
   });
+
+  it('cards show the app-made cover and fall back to the palette when it is missing', async () => {
+    app();
+    const card = within(await grid()).getByRole('listitem', { name: 'Drama Hewan' });
+    const img = card.querySelector('img')!;
+    expect(img.getAttribute('src')).toBe('/api/stories/templates/drama-hewan/cover?v=0');
+    img.dispatchEvent(new Event('error'));
+    await waitFor(() => expect(card.querySelector('img')).toBeNull());
+  });
+
+  it('admin regenerates a cover through the app and sees progress', async () => {
+    let covers: Record<string, unknown> = {};
+    const posted: string[] = [];
+    const fetchImpl = fakeFetch((url, init) => {
+      if (url === '/api/auth/me') return ok({ user: admin });
+      if (url === '/api/stories') return ok({ stories: STORIES });
+      if (url === '/api/stories/catalog') return ok({ catalog: CATALOG, covers });
+      if (url === '/api/flow/accounts') return ok({ accounts: [], bridge: { online: true } });
+      if (url === '/api/stories/templates/promo-produk/cover' && init?.method === 'POST') { posted.push(url); covers = { 'promo-produk': { pending: true } }; return ok({ cover: { pending: true } }); }
+      return undefined;
+    });
+    render(<App fetchImpl={fetchImpl} initialPath="/template" />);
+    const card = within(await grid()).getByRole('listitem', { name: 'Promo Produk' });
+    await userEvent.click(within(card).getByRole('button', { name: /buat ulang cover promo produk/i }));
+    expect(posted).toHaveLength(1);
+    expect(await within(card).findByText(/membuat cover/i)).toBeInTheDocument();
+  });
 });

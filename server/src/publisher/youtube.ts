@@ -94,6 +94,8 @@ export type YouTubeUploadInput = {
   title: string;
   description?: string;
   privacyStatus?: 'public' | 'unlisted' | 'private';
+  /** ISO 8601. YouTube Data API v3: publishAt needs privacyStatus 'private'; it goes public then. */
+  publishAt?: string;
   accessToken: string;
 };
 
@@ -109,7 +111,7 @@ export async function youtubeUploadVideo(
 ): Promise<{ videoId: string; url: string }> {
   const title = input.title.trim().slice(0, 100);
   if (!title) throw new PublisherError('INVALID_INPUT', 'Title is required');
-  const privacyStatus = input.privacyStatus ?? 'unlisted';
+  const privacyStatus = input.publishAt ? 'private' : input.privacyStatus ?? 'unlisted';
   const size = await files.statBytes(input.filePath);
   if (size <= 0) throw new PublisherError('INVALID_INPUT', 'Video file is empty');
   if (size > 256 * 1024 * 1024 * 1024) throw new PublisherError('INVALID_INPUT', 'Video exceeds the 256 GB YouTube limit');
@@ -119,7 +121,7 @@ export async function youtubeUploadVideo(
     'https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status',
     {
       snippet: { title, description: (input.description ?? '').slice(0, 5000) },
-      status: { privacyStatus }
+      status: input.publishAt ? { privacyStatus, publishAt: input.publishAt } : { privacyStatus }
     },
     {
       Authorization: `Bearer ${input.accessToken}`,

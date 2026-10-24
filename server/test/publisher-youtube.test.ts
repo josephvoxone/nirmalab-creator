@@ -51,6 +51,31 @@ describe('youtube publisher', () => {
     expect(fetchImpl.mock.calls[1]?.[1]?.method).toBe('PUT');
   });
 
+  it('a scheduled upload sends status.publishAt and forces privacyStatus private', async () => {
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({}, 200, { location: 'https://sess/1' }))
+      .mockResolvedValueOnce(jsonResponse({ id: 'vid2' }));
+    const files = { statBytes: vi.fn().mockResolvedValue(10), readAll: vi.fn().mockResolvedValue(Buffer.alloc(10)) };
+    await youtubeUploadVideo(
+      fetchImpl as never,
+      { filePath: '/tmp/a.mp4', title: 'Hi', accessToken: 'tok', privacyStatus: 'public', publishAt: '2030-01-02T03:04:00.000Z' },
+      files as never,
+      5000
+    );
+    const init = JSON.parse(String(fetchImpl.mock.calls[0]?.[1]?.body));
+    expect(init.status).toEqual({ privacyStatus: 'private', publishAt: '2030-01-02T03:04:00.000Z' });
+  });
+
+  it('an immediate upload keeps the chosen privacy and sends no publishAt', async () => {
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({}, 200, { location: 'https://sess/1' }))
+      .mockResolvedValueOnce(jsonResponse({ id: 'vid3' }));
+    const files = { statBytes: vi.fn().mockResolvedValue(10), readAll: vi.fn().mockResolvedValue(Buffer.alloc(10)) };
+    await youtubeUploadVideo(fetchImpl as never, { filePath: '/tmp/a.mp4', title: 'Hi', accessToken: 'tok', privacyStatus: 'public' }, files as never, 5000);
+    const init = JSON.parse(String(fetchImpl.mock.calls[0]?.[1]?.body));
+    expect(init.status).toEqual({ privacyStatus: 'public' });
+  });
+
   it('rejects empty title and missing session URL', async () => {
     const files = { statBytes: vi.fn().mockResolvedValue(10), readAll: vi.fn().mockResolvedValue(Buffer.alloc(10)) };
     await expect(youtubeUploadVideo(vi.fn() as never, { filePath: '/t.mp4', title: '  ', accessToken: 't' }, files as never))

@@ -10,6 +10,7 @@ import { DEFAULT_LOOK, readSetup, setShotSetup, useCatalog, type Catalog, type L
 import { LookChips } from './LookChips.js';
 import { CREDITS_PER_SHOT, STATUS_LABEL, doneCount, formatMB, isActive, storiesApi, type Story, type Storyboard, type StoryboardShot } from './storiesClient.js';
 import './studio.css';
+import { Choice } from '../../ui/controls.js';
 
 type Api = ReturnType<typeof storiesApi>;
 
@@ -60,21 +61,13 @@ function ShotCard(props: {
         <div className="shot-meta mono">{String(props.index + 1).padStart(2, '0')} · {shot.id}{shot.silent ? ' · intro' : ''}</div>
         {shot.narration ? <p className="shot-narration">{shot.narration}</p> : <p className="shot-narration muted">Tanpa narasi</p>}
         {catalog && !shot.reuse && (
-          <div className="shot-setup">
-            <label>
-              <span>Framing</span>
-              <select aria-label="Framing" disabled={!props.editable} value={setup.framing ?? ''} onChange={e => setDraft(setShotSetup(draft, catalog, e.target.value, setup.move ?? 'static'))}>
-                {!setup.framing && <option value="">Lain</option>}
-                {catalog.framings.map(f => <option key={f.id} value={f.id}>{f.label}</option>)}
-              </select>
-            </label>
-            <label>
-              <span>Gerakan kamera</span>
-              <select aria-label="Gerakan kamera" disabled={!props.editable} value={setup.move ?? ''} onChange={e => setDraft(setShotSetup(draft, catalog, setup.framing ?? 'medium', e.target.value))}>
-                {!setup.move && <option value="">Lain</option>}
-                {catalog.moves.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}
-              </select>
-            </label>
+          <div className="shot-setup flex flex-wrap gap-2">
+            <Choice label="Framing" showLabel size="sm" disabled={!props.editable} value={setup.framing ?? ''} placeholder="Lain"
+              options={catalog.framings.map(f => ({ value: f.id, label: f.label }))}
+              onChange={v => setDraft(setShotSetup(draft, catalog, v, setup.move ?? 'static'))} />
+            <Choice label="Gerakan kamera" showLabel size="sm" disabled={!props.editable} value={setup.move ?? ''} placeholder="Lain"
+              options={catalog.moves.map(m => ({ value: m.id, label: m.label }))}
+              onChange={v => setDraft(setShotSetup(draft, catalog, setup.framing ?? 'medium', v))} />
           </div>
         )}
         <details className="shot-prompt-edit">

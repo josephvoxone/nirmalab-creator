@@ -8,6 +8,8 @@ export type PublisherStatus = {
   accountLabel?: string;
   expiresAt?: string;
   needsReconnect?: boolean;
+  /** Env vars the server reads for this platform's OAuth app that are still empty. */
+  missingEnv?: string[];
 };
 
 export type PublishInput = {
@@ -19,6 +21,8 @@ export type PublishInput = {
   visibility?: 'public' | 'unlisted' | 'private';
   /** meta only: 'facebook' (default) or 'instagram'. */
   target?: 'facebook' | 'instagram';
+  /** youtube only: ISO time to go public; the video stays private until then. */
+  publishAt?: string;
 };
 
 export type PublishResult = {

@@ -158,40 +158,4 @@ describe('loading, empty and error states', () => {
     expect(await screen.findByText(/Gagal memperbarui status/)).toBeTruthy();
     expect(screen.getByRole('region', { name: 'Alur produksi' })).toBeTruthy();
   });
-
-  it('list page: projects skeleton, then empty state with the action that fills it', async () => {
-    mount('/cerita', harness(url => (url === '/api/stories' ? { body: { stories: [] } } : { body: {} })));
-    const empty = await screen.findByRole('heading', { name: 'Belum ada cerita' });
-    const box = empty.closest('.state-empty') as HTMLElement;
-    await userEvent.click(within(box).getByRole('button', { name: /Pilih template/ }));
-    await waitFor(() => expect(document.activeElement?.closest('.template-grid')).toBeTruthy());
-  });
-
-  it('list page: failed project list is an error with retry, the composer still works', async () => {
-    let fail = true;
-    mount('/cerita', harness(url => (url === '/api/stories' ? (fail ? undefined : { body: { stories: [] } }) : { body: {} })));
-    const alert = await screen.findByRole('alert');
-    expect(alert.textContent).toMatch(/Gagal memuat proyek/);
-    expect(screen.getByLabelText('Premis cerita')).toBeTruthy();
-    fail = false;
-    await userEvent.click(within(alert).getByRole('button', { name: 'Coba lagi' }));
-    expect(await screen.findByRole('heading', { name: 'Belum ada cerita' })).toBeTruthy();
-  });
-
-  it('list page: catalog failure is an error with retry instead of a blank page', async () => {
-    let fail = true;
-    const fetchImpl = vi.fn(async (url: string) => {
-      if (url === '/api/stories/catalog') {
-        if (fail) return new Response(JSON.stringify({ error: { message: 'boom' } }), { status: 503 });
-        return new Response(JSON.stringify({ catalog: CATALOG, covers: {} }), { status: 200 });
-      }
-      return new Response(JSON.stringify({ stories: [] }), { status: 200 });
-    });
-    mount('/cerita', fetchImpl as unknown as ReturnType<typeof harness>);
-    const alert = await screen.findByRole('alert');
-    expect(alert.textContent).toMatch(/Gagal memuat template/);
-    fail = false;
-    await userEvent.click(within(alert).getByRole('button', { name: 'Coba lagi' }));
-    expect(await screen.findByLabelText('Premis cerita')).toBeTruthy();
-  });
 });

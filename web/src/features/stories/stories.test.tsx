@@ -45,47 +45,6 @@ const board = {
 };
 const story = (over: Record<string, unknown> = {}) => ({ id: ID, title: 'Selendang Merah', status: 'draft', createdAtMs: 1, updatedAtMs: 1, shots: shots('pending'), events: [], ...over });
 
-describe('StoriesPage', () => {
-  it('lists stories with status and progress', async () => {
-    const fetchImpl = fakeFetch(url => (url === '/api/stories' ? { body: { stories: [story({ status: 'rendering', shots: [{ id: 'a', status: 'done', attempts: 0 }, { id: 'b', status: 'queued', attempts: 0 }] })] } } : undefined));
-    mount('/cerita', fetchImpl);
-    const link = await screen.findByRole('link', { name: 'Selendang Merah' });
-    expect(link).toHaveAttribute('href', `/cerita/${ID}`);
-    const row = link.closest('.row') as HTMLElement;
-    expect(within(row).getByText('Dirender')).toBeInTheDocument();
-    expect(within(row).getByText('1/2 shot')).toBeInTheDocument();
-  });
-
-  it('drafts a storyboard from a premise and opens it', async () => {
-    let body: Record<string, unknown> | undefined;
-    const fetchImpl = fakeFetch((url, init) => {
-      if (url === '/api/stories' && !init?.method) return { body: { stories: [] } };
-      if (url === '/api/stories/draft') { body = JSON.parse(String(init?.body)); return { status: 201, body: { story: story() } }; }
-      if (url === `/api/stories/${ID}`) return { body: { story: story(), storyboard: board } };
-      return undefined;
-    });
-    mount('/cerita', fetchImpl);
-    await userEvent.type(await screen.findByLabelText(/premis/i), 'Kelinci dibuang lalu ditemukan kembali');
-    await userEvent.selectOptions(screen.getByLabelText(/jumlah shot/i), '8');
-    await userEvent.click(screen.getByRole('button', { name: /tulis storyboard/i }));
-    await waitFor(() => expect(body).toMatchObject({ premise: 'Kelinci dibuang lalu ditemukan kembali', shots: 8, mode: 'konsisten' }));
-    expect(body?.look).toMatchObject({ style: 'storybook' });
-    expect(await screen.findByRole('heading', { name: 'Selendang Merah' })).toBeInTheDocument();
-  });
-
-  it('shows the server error when drafting fails', async () => {
-    const fetchImpl = fakeFetch((url, init) => {
-      if (url === '/api/stories' && !init?.method) return { body: { stories: [] } };
-      if (url === '/api/stories/draft') return { status: 503, body: { error: { message: 'Pollinations needs an API key' } } };
-      return undefined;
-    });
-    mount('/cerita', fetchImpl);
-    await userEvent.type(await screen.findByLabelText(/premis/i), 'Cerita tentang kucing');
-    await userEvent.click(screen.getByRole('button', { name: /tulis storyboard/i }));
-    expect(await screen.findByRole('alert')).toHaveTextContent('Pollinations needs an API key');
-  });
-});
-
 describe('StoryDetailPage', () => {
   it('shows the shots with narration and renders on click', async () => {
     let rendered = false;

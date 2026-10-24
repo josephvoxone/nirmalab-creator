@@ -20,6 +20,32 @@ const STORY_ID = /^story_[a-f0-9]{16}$/;
 
 const PLATFORMS: PublisherPlatform[] = ['youtube', 'tiktok', 'meta'];
 
+const PLATFORM_NAME: Record<PublisherPlatform, string> = { youtube: 'YouTube', tiktok: 'TikTok', meta: 'Meta' };
+
+/** One plain-Indonesian line for the Settings → Koneksi notice after a failed OAuth round trip. */
+export function callbackErrorMessage(platform: PublisherPlatform, error: unknown): string {
+  const name = PLATFORM_NAME[platform];
+  const code = error instanceof PublisherError ? error.code : '';
+  if (code === 'OAUTH_DENIED') return `Izin akses ditolak di ${name}. Coba hubungkan lagi dan setujui izinnya.`;
+  if (code === 'INVALID_STATE' || code === 'INVALID_INPUT') return `Sesi login ${name} kedaluwarsa atau tidak lengkap. Coba hubungkan lagi.`;
+  if (code === 'NOT_CONFIGURED') return `Aplikasi developer ${name} belum diatur di server.`;
+  if (code === 'OAUTH_FAILED' && error instanceof Error && /no Page/i.test(error.message)) {
+    return 'Akun Meta ini tidak punya Halaman Facebook untuk publish.';
+  }
+  return `${name} tidak bisa dihubungkan sekarang. Coba lagi sebentar.`;
+}
+
+/** Validates an optional schedule: an ISO time in the future, YouTube only. */
+function parsePublishAt(platform: PublisherPlatform, value: unknown, nowMs: number): { publishAt?: string; error?: string } {
+  if (value === undefined || value === null || value === '') return {};
+  if (platform !== 'youtube') return { error: 'Jadwal tayang hanya didukung untuk YouTube' };
+  if (typeof value !== 'string') return { error: 'publishAt harus berupa waktu ISO 8601' };
+  const ms = Date.parse(value);
+  if (Number.isNaN(ms)) return { error: 'publishAt harus berupa waktu ISO 8601' };
+  if (ms <= nowMs) return { error: 'Jadwal tayang harus di masa depan' };
+  return { publishAt: new Date(ms).toISOString() };
+}
+
 function sendPublisherError(reply: { code(n: number): { send(b: unknown): unknown } }, error: unknown): unknown {
   if (error instanceof PublisherError) {
     const status = error.code === 'NOT_CONNECTED' || error.code === 'NEEDS_RECONNECT' ? 409
@@ -56,27 +82,28 @@ export async function registerPublisherRoutes(server: FastifyInstance, options: 
     '/api/publish/:platform/callback',
     async (request, reply) => {
       const platform = request.params.platform as PublisherPlatform;
-      const done = (params: string): void => {
-        void reply.redirect(`${publicBaseUrl(env)}/publish?publisher=${platform}&${params}`);
+      const done = (params: URLSearchParams): void => {
+        void reply.redirect(`${publicBaseUrl(env)}/pengaturan/koneksi?${params.toString()}`);
       };
       if (!PLATFORMS.includes(platform)) return reply.code(404).send({ error: { code: 'UNKNOWN_PLATFORM', message: 'Unknown platform' } });
       try {
         await service.handleCallback(platform, request.query);
-        done('connected=1');
+        done(new URLSearchParams({ connected: platform }));
       } catch (error) {
-        const code = error instanceof PublisherError ? error.code : 'CALLBACK_FAILED';
-        done(`connected=0&error=${encodeURIComponent(code)}`);
+        done(new URLSearchParams({ platform, error: callbackErrorMessage(platform, error) }));
       }
     }
   );
 
-  server.post<{ Params: { platform: string }; Body: { storyId?: unknown; filePath?: unknown; title?: unknown; description?: unknown; visibility?: unknown } }>(
+  server.post<{ Params: { platform: string }; Body: { storyId?: unknown; filePath?: unknown; title?: unknown; description?: unknown; visibility?: unknown; publishAt?: unknown } }>(
     '/api/publish/:platform/publish',
     async (request, reply) => {
       // Admin only: a raw filePath is never accepted from non-admin callers.
       if (!requireAdmin(userAuthStore, request, reply)) return undefined;
       const platform = request.params.platform as PublisherPlatform;
       if (!PLATFORMS.includes(platform)) return reply.code(404).send({ error: { code: 'UNKNOWN_PLATFORM', message: 'Unknown platform' } });
+      const schedule = parsePublishAt(platform, request.body?.publishAt, Date.now());
+      if (schedule.error) return reply.code(400).send({ error: { code: 'INVALID_INPUT', message: schedule.error } });
       let filePath = '';
       if (request.body?.storyId !== undefined) {
         const storyId = request.body.storyId;
@@ -97,7 +124,10 @@ export async function registerPublisherRoutes(server: FastifyInstance, options: 
         return reply.code(400).send({ error: { code: 'INVALID_INPUT', message: 'storyId (or filePath) and title are required' } });
       }
       try {
-        return await service.publish(platform, { filePath, title, description, visibility });
+        return await service.publish(platform, {
+          filePath, title, description, visibility,
+          ...(schedule.publishAt ? { publishAt: schedule.publishAt } : {})
+        });
       } catch (error) {
         return sendPublisherError(reply, error);
       }

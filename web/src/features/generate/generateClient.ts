@@ -12,8 +12,13 @@ export const VOICES: Array<{ id: string; label: string }> = [
 export function generateApi(fetchImpl: FetchLike) {
   return {
     models: () => requestJson<{ models: string[] }>(fetchImpl, '/api/generate/models'),
-    text: (input: { prompt: string; model?: string }) =>
-      requestJson<GeneratedText>(fetchImpl, '/api/generate/text', post(input.model ? input : { prompt: input.prompt })),
+    /** `system` is an optional brief the server passes to the LLM; absent keys are not sent. */
+    text: (input: { prompt: string; model?: string; system?: string }) =>
+      requestJson<GeneratedText>(fetchImpl, '/api/generate/text', post({
+        prompt: input.prompt,
+        ...(input.system ? { system: input.system } : {}),
+        ...(input.model ? { model: input.model } : {})
+      })),
     tts: (input: { text: string; voice: string }) => requestJson<GeneratedFile>(fetchImpl, '/api/generate/tts', post(input)),
     image: (prompt: string) => requestJson<GeneratedFile>(fetchImpl, '/api/generate/image', post({ prompt }))
   };
