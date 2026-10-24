@@ -5,13 +5,14 @@ import { describe, expect, it, vi } from 'vitest';
 import { SessionContext } from '../../lib/session.js';
 import { StoriesPage } from './StoriesPage.js';
 import { StoryDetailPage } from './StoryDetailPage.js';
+import { CATALOG } from './testCatalog.js';
 
 type Reply = { status?: number; body: unknown };
 type Handler = (url: string, init?: RequestInit) => Reply | undefined;
 
 function fakeFetch(handler: Handler) {
   return vi.fn(async (url: string, init?: RequestInit) => {
-    const r = handler(url, init) ?? { status: 404, body: { error: { message: 'not found' } } };
+    const r = (url === '/api/stories/catalog' ? { body: { catalog: CATALOG } } : handler(url, init)) ?? { status: 404, body: { error: { message: 'not found' } } };
     return new Response(JSON.stringify(r.body), { status: r.status ?? 200, headers: { 'content-type': 'application/json' } });
   });
 }
@@ -66,9 +67,9 @@ describe('StoriesPage', () => {
     mount('/cerita', fetchImpl);
     await userEvent.type(await screen.findByLabelText(/premis/i), 'Kelinci dibuang lalu ditemukan kembali');
     await userEvent.selectOptions(screen.getByLabelText(/jumlah shot/i), '8');
-    await userEvent.click(screen.getByRole('button', { name: /buat storyboard/i }));
-    await waitFor(() => expect(body).toMatchObject({ premise: 'Kelinci dibuang lalu ditemukan kembali', shots: 8 }));
-    expect(String(body?.style)).toMatch(/Style:/);
+    await userEvent.click(screen.getByRole('button', { name: /tulis storyboard/i }));
+    await waitFor(() => expect(body).toMatchObject({ premise: 'Kelinci dibuang lalu ditemukan kembali', shots: 8, mode: 'konsisten' }));
+    expect(body?.look).toMatchObject({ style: 'storybook' });
     expect(await screen.findByRole('heading', { name: 'Selendang Merah' })).toBeInTheDocument();
   });
 
@@ -80,7 +81,7 @@ describe('StoriesPage', () => {
     });
     mount('/cerita', fetchImpl);
     await userEvent.type(await screen.findByLabelText(/premis/i), 'Cerita tentang kucing');
-    await userEvent.click(screen.getByRole('button', { name: /buat storyboard/i }));
+    await userEvent.click(screen.getByRole('button', { name: /tulis storyboard/i }));
     expect(await screen.findByRole('alert')).toHaveTextContent('Pollinations needs an API key');
   });
 });
@@ -95,7 +96,7 @@ describe('StoryDetailPage', () => {
     });
     mount(`/cerita/${ID}`, fetchImpl);
     expect(await screen.findByText('Namanya Kapas.')).toBeInTheDocument();
-    expect(screen.getByText(/±20 credits/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /render video/i })).toHaveTextContent('20 kredit');
     await userEvent.click(screen.getByRole('button', { name: /render video/i }));
     expect(await screen.findByText('Dirender', { selector: '.pill' })).toBeInTheDocument();
   });
@@ -145,7 +146,7 @@ describe('StoryDetailPage', () => {
     });
     mount(`/cerita/${ID}`, fetchImpl);
     expect(await screen.findByRole('alert')).toHaveTextContent('no audio');
-    expect(screen.getByText(/3 take/, { selector: '.shot *' })).toBeInTheDocument();
+    expect(screen.getByText(/3 take/, { selector: '.shot-card *' })).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: /ulangi/i }));
     await waitFor(() => expect(retried).toBe(true));
   });
@@ -154,12 +155,12 @@ describe('StoryDetailPage', () => {
     const fetchImpl = fakeFetch(url => (url === `/api/stories/${ID}` ? { body: { story: story({ status: 'done', shots: shots('done'), video: { bytes: 1000, finishedAtMs: 2 } }), storyboard: board } } : undefined));
     const { container } = mount(`/cerita/${ID}`, fetchImpl);
     await screen.findByTestId('story-player');
-    const thumbs = [...container.querySelectorAll('.shot video')] as HTMLVideoElement[];
+    const thumbs = [...container.querySelectorAll('.shot-card video')] as HTMLVideoElement[];
     expect(thumbs).toHaveLength(2);
     for (const v of thumbs) {
       expect(v.getAttribute('src')).toMatch(/\/video#t=1\.5$/);
       expect(v.hasAttribute('controls')).toBe(false);
     }
-    expect(screen.getByText('Semua shot siap')).toBeInTheDocument();
+    expect(screen.getByText(/2\/2 video/)).toBeInTheDocument();
   });
 });

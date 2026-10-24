@@ -1,8 +1,8 @@
 // E2E against a running Nirmalab Creator container (real image: ffmpeg + python assembler).
-// Env: BASE, ADMIN_EMAIL, ADMIN_PASSWORD, BRIDGE_TOKEN, CLIP_A, CLIP_B, CLIP_SILENT, OUT
+// Env: BASE, ADMIN_EMAIL, ADMIN_PASSWORD, BRIDGE_TOKEN, CLIP_A, CLIP_B, CLIP_SILENT, OUT, SHEET, FRAME_PORTRAIT, FRAME_LANDSCAPE
 import { readFileSync, writeFileSync } from 'node:fs';
 
-const { BASE, ADMIN_EMAIL, ADMIN_PASSWORD, BRIDGE_TOKEN, CLIP_A, CLIP_B, CLIP_SILENT, OUT } = process.env;
+const { BASE, ADMIN_EMAIL, ADMIN_PASSWORD, BRIDGE_TOKEN, CLIP_A, CLIP_B, CLIP_SILENT, OUT, SHEET, FRAME_PORTRAIT, FRAME_LANDSCAPE } = process.env;
 let failures = 0;
 const check = (name, ok, detail = '') => { console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? ' — ' + detail : ''}`); if (!ok) failures++; };
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -81,5 +81,53 @@ check('range request (video seeking)', range.status === 206 && (await range.arra
 check('video needs a session', (await fetch(`${BASE}/api/stories/${id}/video`)).status === 401);
 const jobs = (await api('/api/flow/jobs')).body.jobs;
 check('exactly 3 Flow jobs (2 shots + 1 re-take)', jobs.length === 3, `${jobs.length}`);
+
+// ---------------- konsisten: character sheet → keyframes (QC) → animate keyframes → assemble
+const catalog = await api('/api/stories/catalog');
+check('catalog served', catalog.status === 200 && catalog.body.catalog.templates.length >= 10 && catalog.body.catalog.moves.length >= 20);
+const kboard = { ...board, title: 'E2E Konsisten', mode: 'konsisten', characters: { KAPAS: { name: 'Kapas', look: 'a small cream-colored rabbit with a red knitted scarf' } },
+  shots: [{ ...board.shots[0], prompt: 'Medium close-up, the camera pushes in slowly. KAPAS on a porch.' }, { ...board.shots[1], prompt: 'Wide shot, the camera stays still. KAPAS waits on a rainy road.' }] };
+const kid = (await api('/api/stories', { method: 'POST', body: JSON.stringify({ storyboard: kboard }) })).body.story.id;
+check('render refused before keyframes', (await api(`/api/stories/${kid}/render`, { method: 'POST', body: '{}' })).status === 400);
+check('prepare → casting', (await api(`/api/stories/${kid}/prepare`, { method: 'POST', body: '{}' })).body.story.status === 'casting');
+async function takeK(kind, file, meta) {
+  const claim = await bridge('/api/flow/bridge/claim', { bridgeId: 'e2e-mac' });
+  const { job } = await claim.json();
+  check(`claim ${kind}`, job?.kind === kind, `${job?.kind} ${job?.technique}`);
+  const headers = { 'content-type': 'application/octet-stream', 'x-flow-bridge-token': BRIDGE_TOKEN, 'x-flow-media-id': `m-${job.id}`, 'x-flow-caption': encodeURIComponent('Kapas · frame'), ...(meta ?? {}) };
+  const up = await fetch(`${BASE}/api/flow/bridge/jobs/${job.id}/complete`, { method: 'POST', headers, body: readFileSync(file) });
+  check(`upload ${kind}`, up.status === 200);
+  return job;
+}
+const sheetJob = await takeK('character', SHEET, { 'x-flow-character-id': 'fc-kapas' });
+check('character job carries the look', sheetJob.characters?.[0]?.name === 'Kapas' && /red knitted scarf/.test(sheetJob.characters[0].look));
+let k = (await api(`/api/stories/${kid}`)).body;
+check('sheet accepted → framing', k.story.status === 'framing' && k.story.cast[0].status === 'done', k.story.status);
+const sheetImg = await fetch(`${BASE}/api/stories/${kid}/cast/KAPAS/image`, { headers: { cookie } });
+check('sheet served with real type', sheetImg.status === 200 && /^image\//.test(sheetImg.headers.get('content-type')), sheetImg.headers.get('content-type'));
+const f1 = await takeK('image', FRAME_LANDSCAPE);
+check('keyframe job attaches the character, same group', f1.characters?.[0]?.name === 'Kapas' && f1.group === kid);
+await takeK('image', FRAME_PORTRAIT);
+k = (await api(`/api/stories/${kid}`)).body;
+const rejected = k.story.shots.find(s => s.frame?.status === 'queued');
+check('landscape keyframe rejected by QC and redrawn', !!rejected && /9:16|portrait/i.test(rejected.frame.lastError ?? ''), JSON.stringify(rejected?.frame));
+await takeK('image', FRAME_PORTRAIT);
+k = (await api(`/api/stories/${kid}`)).body;
+check('all keyframes → review', k.story.status === 'review', k.story.status);
+const frameImg = await fetch(`${BASE}/api/stories/${kid}/shots/01-hadiah/frame`, { headers: { cookie } });
+check('keyframe image served', frameImg.status === 200 && (await frameImg.arrayBuffer()).byteLength > 10_000);
+check('render from review', (await api(`/api/stories/${kid}/render`, { method: 'POST', body: '{}' })).body.story.status === 'rendering');
+for (const clip of [CLIP_A, CLIP_B]) {
+  const job = await takeK('video', clip);
+  check('video job animates its keyframe', !!job.startFrame?.mediaId && job.characters?.[0]?.name === 'Kapas', JSON.stringify(job.startFrame));
+}
+const t1 = Date.now();
+for (;;) {
+  k = (await api(`/api/stories/${kid}`)).body;
+  if (k.story.status === 'done' || k.story.status === 'failed' || Date.now() - t1 > 300_000) break;
+  await sleep(2000);
+}
+check('konsisten story assembled', k.story.status === 'done', `${k.story.status} ${k.story.error ?? ''}`);
+
 console.log(failures ? `\n${failures} FAILED` : '\nALL PASSED');
 process.exit(failures ? 1 : 0);

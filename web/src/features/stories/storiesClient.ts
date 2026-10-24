@@ -1,13 +1,17 @@
 import { post, put, requestJson, type FetchLike } from '../../lib/api.js';
 
-export type StoryStatus = 'draft' | 'rendering' | 'assembling' | 'done' | 'failed';
-export type ShotState = { id: string; status: 'pending' | 'queued' | 'done' | 'failed'; attempts: number; jobId?: string; lastError?: string; error?: string; durationSec?: number };
+export type StoryStatus = 'draft' | 'casting' | 'framing' | 'review' | 'rendering' | 'assembling' | 'done' | 'failed';
+export type TakeState = { status: 'pending' | 'queued' | 'done' | 'failed'; attempts: number; mediaId?: string; caption?: string; lastError?: string; error?: string };
+export type CastState = TakeState & { token: string; name: string };
+export type ShotState = { id: string; frame?: TakeState; status: 'pending' | 'queued' | 'done' | 'failed'; attempts: number; jobId?: string; lastError?: string; error?: string; durationSec?: number };
 export type Story = {
   id: string;
   title: string;
   status: StoryStatus;
   createdAtMs: number;
   updatedAtMs: number;
+  mode?: 'konsisten' | 'cepat';
+  cast?: CastState[];
   shots: ShotState[];
   error?: string;
   video?: { bytes: number; finishedAtMs: number };
@@ -17,7 +21,7 @@ export type StoryboardShot = { id: string; prompt: string; narration?: string; s
 export type Storyboard = { title: string; shots: StoryboardShot[]; [key: string]: unknown };
 
 export const STATUS_LABEL: Record<string, string> = {
-  draft: 'Draft', rendering: 'Dirender', assembling: 'Dirakit', done: 'Selesai', failed: 'Gagal',
+  draft: 'Draft', casting: 'Membuat karakter', framing: 'Membuat keyframe', review: 'Siap direview', rendering: 'Dirender', assembling: 'Dirakit', done: 'Selesai', failed: 'Gagal',
   pending: 'Menunggu', queued: 'Antre/render'
 };
 
@@ -29,7 +33,7 @@ export const STYLES: Array<{ label: string; value: string }> = [
 ];
 
 export const CREDITS_PER_SHOT = 10;
-export const isActive = (s: Pick<Story, 'status'>) => s.status === 'rendering' || s.status === 'assembling';
+export const isActive = (s: Pick<Story, 'status'>) => ['casting', 'framing', 'rendering', 'assembling'].includes(s.status);
 export const doneCount = (s: Story) => s.shots.filter(x => x.status === 'done').length;
 export const formatMB = (bytes: number) => `${(bytes / 1024 / 1024).toLocaleString('id-ID', { maximumFractionDigits: 1 })} MB`;
 
@@ -37,7 +41,13 @@ export function storiesApi(fetchImpl: FetchLike) {
   return {
     list: () => requestJson<{ stories: Story[] }>(fetchImpl, '/api/stories'),
     get: (id: string) => requestJson<{ story: Story; storyboard: Storyboard }>(fetchImpl, `/api/stories/${id}`),
-    draft: (input: { premise: string; shots: number; style: string }) => requestJson<{ story: Story }>(fetchImpl, '/api/stories/draft', post(input)),
+    catalog: () => requestJson<{ catalog: import('./catalog.js').Catalog }>(fetchImpl, '/api/stories/catalog'),
+    prepare: (id: string) => requestJson<{ story: Story }>(fetchImpl, `/api/stories/${id}/prepare`, post({})),
+    setLook: (id: string, look: Record<string, string>) => requestJson<{ story: Story }>(fetchImpl, `/api/stories/${id}/look`, post({ look })),
+    redraw: (id: string, shotId: string, prompt?: string) => requestJson<{ story: Story }>(fetchImpl, `/api/stories/${id}/shots/${shotId}/frame`, post(prompt ? { prompt } : {})),
+    frameUrl: (id: string, shotId: string, v = '') => `/api/stories/${id}/shots/${shotId}/frame${v ? `?v=${v}` : ''}`,
+    castUrl: (id: string, token: string) => `/api/stories/${id}/cast/${token}/image`,
+    draft: (input: { premise: string; shots: number; style?: string; template?: string; look?: Record<string, string>; mode?: string; aspect?: string }) => requestJson<{ story: Story }>(fetchImpl, '/api/stories/draft', post(input)),
     create: (storyboard: Storyboard) => requestJson<{ story: Story }>(fetchImpl, '/api/stories', post({ storyboard })),
     update: (id: string, storyboard: Storyboard) => requestJson<{ story: Story }>(fetchImpl, `/api/stories/${id}`, put({ storyboard })),
     render: (id: string, force: boolean) => requestJson<{ story: Story }>(fetchImpl, `/api/stories/${id}/render`, post({ force })),
