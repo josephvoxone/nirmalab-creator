@@ -136,13 +136,13 @@ export default function HomePage() {
           </span>
         )}
       />
-      <ComposerFooter className="mt-2">
+      <ComposerFooter className="mt-2 flex-wrap gap-y-1">
         <ComposerPick label="Mode" value={mode} options={MODES} onValueChange={setMode} align="start" />
         <ComposerPick label="Rasio" value={aspect} options={ASPECTS} onValueChange={setAspect} align="start" />
         <ComposerPick label="Durasi" value={shots} options={SHOTS.map(s => ({ value: s, label: `${s} shot · ±${Number(s) * 6} dtk` }))} onValueChange={setShots} align="start" />
         <button type="button" aria-expanded={lookOpen} aria-controls="home-look" onClick={() => setLookOpen(v => !v)}
           className="glass-held flex h-6 items-center gap-1 rounded-sm px-1.5 text-[12px] text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:text-foreground aria-expanded:text-foreground">
-          <Palette className="size-3" /> {catalog ? (optionOf(catalog, 'style', look.style)?.label ?? 'Gaya') : 'Gaya'}
+          <Palette className="size-3 shrink-0" /> <span className="max-w-32 truncate whitespace-nowrap">{catalog ? (optionOf(catalog, 'style', look.style)?.label ?? 'Gaya') : 'Gaya'}</span>
         </button>
         <ComposerFooterEnd>
           <span className="text-[12px] text-muted-foreground max-sm:hidden" title="Gambar & keyframe gratis; hanya animasi video yang memakai kredit Flow">
