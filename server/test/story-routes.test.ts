@@ -121,4 +121,85 @@ describe('story routes', () => {
     expect((await server.inject({ method: 'DELETE', url: `/api/stories/${id}`, headers: { cookie } })).statusCode).toBe(200);
     expect((await server.inject({ url: `/api/stories/${id}`, headers: { cookie } })).statusCode).toBe(404);
   });
+
+  it('catalog lists templates and pickers for members', async () => {
+    const { server, cookie } = await setup();
+    expect((await server.inject('/api/stories/catalog')).statusCode).toBe(401);
+    const res = await server.inject({ url: '/api/stories/catalog', headers: { cookie } });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().catalog.templates.length).toBeGreaterThanOrEqual(10);
+    expect(res.json().catalog.moves.length).toBeGreaterThanOrEqual(20);
+  });
+
+  it('draft accepts template, look, mode and aspect', async () => {
+    const reply = JSON.stringify({ title: 'Kucing', characters: { MIMI: 'an orange kitten' }, shots: [
+      { id: 'buka', silent: true, prompt: 'Extreme wide shot, the camera pushes in slowly. A valley.' },
+      { id: 'teras', prompt: 'Medium shot, the camera stays still. MIMI waits on a porch.', narration: 'Mimi menunggu.' }] });
+    const { server, cookie } = await setup(reply);
+    const res = await server.inject({ method: 'POST', url: '/api/stories/draft', headers: { cookie },
+      payload: { premise: 'Kucing menunggu pemiliknya', template: 'dongeng-anak', look: { palette: 'noir' }, mode: 'konsisten', aspect: '9:16', shots: 3 } });
+    expect(res.statusCode).toBe(201);
+    const got = await server.inject({ url: `/api/stories/${res.json().story.id}`, headers: { cookie } });
+    expect(got.json().story.mode).toBe('konsisten');
+    expect(got.json().storyboard.look).toMatchObject({ palette: 'noir', style: 'storybook' });
+    expect(got.json().storyboard.style).toMatch(/black and white/);
+  });
+
+  it('konsisten over HTTP: prepare → sheets + keyframes served as PNG → redraw → look change → render', async () => {
+    const konsisten = { ...board, mode: 'konsisten', characters: { MIMI: 'an orange kitten with a blue collar' },
+      shots: [board.shots[0], { id: '01-a', prompt: 'Medium shot, the camera stays still. MIMI sits on a porch.', narration: 'Mimi menunggu.' }] };
+    const { server, cookie, dataDir, flow } = await setup();
+    const id = (await server.inject({ method: 'POST', url: '/api/stories', headers: { cookie }, payload: { storyboard: konsisten } })).json().story.id;
+    const early = await server.inject({ method: 'POST', url: `/api/stories/${id}/render`, headers: { cookie }, payload: {} });
+    expect(early.statusCode).toBe(400);
+    expect((await server.inject({ method: 'POST', url: `/api/stories/${id}/prepare`, headers: { cookie }, payload: {} })).json().story.status).toBe('casting');
+    const clips = join(dataDir, 'flow', 'clips');
+    mkdirSync(clips, { recursive: true });
+    const png = (w: number, h: number) => { const b = Buffer.alloc(30_000, 7); Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(b, 0); b.writeUInt32BE(13, 8); b.write('IHDR', 12); b.writeUInt32BE(w, 16); b.writeUInt32BE(h, 20); return b; };
+    const finishAll = async (kind: string) => {
+      for (const job of (await flow.listJobs()).filter(j => j.kind === kind && j.status === 'queued')) {
+        const file = join(clips, `${job.id}.${kind === 'video' ? 'mp4' : 'png'}`);
+        writeFileSync(file, png(720, 1280));
+        await flow.completeJob(job.id, { filePath: file, bytes: 30_000, result: { mediaId: `m-${job.id}`, caption: 'cap', flowCharacterId: kind === 'character' ? 'fc1' : undefined } });
+      }
+    };
+    await finishAll('character');
+    expect((await server.inject({ url: `/api/stories/${id}`, headers: { cookie } })).json().story.status).toBe('framing');
+    const sheet = await server.inject({ url: `/api/stories/${id}/cast/MIMI/image`, headers: { cookie } });
+    expect(sheet.statusCode).toBe(200);
+    expect(sheet.headers['content-type']).toBe('image/png');
+    await finishAll('image');
+    const review = (await server.inject({ url: `/api/stories/${id}`, headers: { cookie } })).json();
+    expect(review.story.status).toBe('review');
+    const frame = await server.inject({ url: `/api/stories/${id}/shots/01-a/frame`, headers: { cookie } });
+    expect(frame.statusCode).toBe(200);
+    expect(frame.headers['content-type']).toBe('image/png');
+    const jpgFile = join(dataDir, 'stories', id, 'frame-01-a.png');
+    writeFileSync(jpgFile, Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(100)]));
+    expect((await server.inject({ url: `/api/stories/${id}/shots/01-a/frame`, headers: { cookie } })).headers['content-type']).toBe('image/jpeg');
+    expect((await server.inject({ url: `/api/stories/${id}/shots/../frame`, headers: { cookie } })).statusCode).toBe(404);
+
+    const redraw = await server.inject({ method: 'POST', url: `/api/stories/${id}/shots/01-a/frame`, headers: { cookie }, payload: { prompt: 'Close-up, the camera pushes in slowly. MIMI smiles on a porch.' } });
+    expect(redraw.statusCode).toBe(200);
+    expect(redraw.json().story.status).toBe('framing');
+    const bad = await server.inject({ method: 'POST', url: `/api/stories/${id}/shots/01-a/frame`, headers: { cookie }, payload: { prompt: 'Close-up, the camera pans left and tilts up. MIMI.' } });
+    expect(bad.statusCode).toBe(409);
+    await finishAll('image');
+    expect((await server.inject({ url: `/api/stories/${id}`, headers: { cookie } })).json().story.status).toBe('review');
+
+    const look = await server.inject({ method: 'POST', url: `/api/stories/${id}/look`, headers: { cookie }, payload: { look: { style: 'pixar-3d', palette: 'riviera' } } });
+    expect(look.statusCode).toBe(200);
+    const after = (await server.inject({ url: `/api/stories/${id}`, headers: { cookie } })).json();
+    expect(after.storyboard.style).toMatch(/3D animated/);
+    expect(after.story.status).toBe('draft');
+    expect(after.story.shots.every((s: { frame?: { status: string } }) => !s.frame || s.frame.status === 'pending')).toBe(true);
+
+    await server.inject({ method: 'POST', url: `/api/stories/${id}/prepare`, headers: { cookie }, payload: {} });
+    await finishAll('character'); await server.inject({ url: `/api/stories/${id}`, headers: { cookie } });
+    await finishAll('image'); await server.inject({ url: `/api/stories/${id}`, headers: { cookie } });
+    const render = await server.inject({ method: 'POST', url: `/api/stories/${id}/render`, headers: { cookie }, payload: {} });
+    expect(render.statusCode).toBe(200);
+    const videos = (await flow.listJobs()).filter(j => j.kind === 'video');
+    expect(videos.every(v => v.startFrame?.mediaId)).toBe(true);
+  });
 });

@@ -1,8 +1,9 @@
 import type { FastifyInstance, FastifyReply } from 'fastify';
-import { createReadStream, existsSync, statSync } from 'node:fs';
+import { closeSync, createReadStream, existsSync, openSync, readSync, statSync } from 'node:fs';
 import { requireAdmin, sessionUser } from '../auth/routes.js';
 import type { UserAuthStore } from '../auth/store.js';
 import { draftStoryboard, type TextGenerator } from './draft.js';
+import { CATALOG } from './looks.js';
 import { StoryError, type StoryService } from './service.js';
 import { SHOT_ID, type Storyboard } from './storyboard.js';
 
@@ -28,6 +29,21 @@ function sendVideo(reply: FastifyReply, file: string, range: string | undefined)
   }
   return reply.header('content-length', size).send(createReadStream(file));
 }
+
+function sendPng(reply: FastifyReply, file: string) {
+  if (!existsSync(file)) return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Gambar belum ada' } });
+  // Flow hands out JPEGs under .png names; send the real type.
+  const head = Buffer.alloc(12);
+  const fd = openSync(file, 'r');
+  try { readSync(fd, head, 0, 12, 0); } finally { closeSync(fd); }
+  const type = head[0] === 0xff && head[1] === 0xd8 ? 'image/jpeg'
+    : head.toString('ascii', 8, 12) === 'WEBP' ? 'image/webp' : 'image/png';
+  return reply.header('content-type', type).header('cache-control', 'private, no-cache')
+    .header('content-length', statSync(file).size).send(createReadStream(file));
+}
+
+const TOKEN = /^[A-Z][A-Z0-9_]{1,20}$/;
+const notFound = (reply: FastifyReply, what = 'Shot') => reply.code(404).send({ error: { code: 'NOT_FOUND', message: `${what} not found` } });
 
 const asBoard = (value: unknown): Storyboard => {
   if (!value || typeof value !== 'object') throw new StoryError('INVALID', 'storyboard is required');
@@ -57,7 +73,12 @@ export async function registerStoryRoutes(
     } catch (error) { return fail(reply, error); }
   });
 
-  server.post<{ Body: { premise?: unknown; shots?: unknown; style?: unknown } }>('/api/stories/draft', async (request, reply) => {
+  server.get('/api/stories/catalog', async (request, reply) => {
+    if (!member(request, reply)) return undefined;
+    return { catalog: CATALOG };
+  });
+
+  server.post<{ Body: { premise?: unknown; shots?: unknown; style?: unknown; template?: unknown; look?: unknown; mode?: unknown; aspect?: unknown; narrator?: unknown } }>('/api/stories/draft', async (request, reply) => {
     if (!requireAdmin(auth, request, reply)) return undefined;
     const premise = typeof request.body?.premise === 'string' ? request.body.premise.trim() : '';
     if (premise.length < 5) return reply.code(400).send({ error: { code: 'INVALID', message: 'Tulis premis cerita (min. 5 karakter)' } });
@@ -65,7 +86,12 @@ export async function registerStoryRoutes(
       const board = await draftStoryboard({
         premise: premise.slice(0, 2000),
         shots: typeof request.body?.shots === 'number' ? request.body.shots : undefined,
-        style: typeof request.body?.style === 'string' ? request.body.style.slice(0, 400) : undefined
+        style: typeof request.body?.style === 'string' ? request.body.style.slice(0, 400) : undefined,
+        template: typeof request.body?.template === 'string' ? request.body.template : undefined,
+        look: request.body?.look && typeof request.body.look === 'object' ? request.body.look as Record<string, unknown> : undefined,
+        mode: request.body?.mode === 'konsisten' || request.body?.mode === 'cepat' ? request.body.mode : undefined,
+        aspect: request.body?.aspect === '16:9' || request.body?.aspect === '9:16' ? request.body.aspect : undefined,
+        narrator: typeof request.body?.narrator === 'string' ? request.body.narrator.slice(0, 200) : undefined
       }, options.generateText);
       return reply.code(201).send({ story: await stories.create(board) });
     } catch (error) { return fail(reply, error); }
@@ -91,6 +117,49 @@ export async function registerStoryRoutes(
     if (!requireAdmin(auth, request, reply)) return undefined;
     try {
       return { story: await stories.render(request.params.id, { force: request.body?.force === true }) };
+    } catch (error) { return fail(reply, error); }
+  });
+
+  server.post<{ Params: { id: string } }>('/api/stories/:id/prepare', async (request, reply) => {
+    if (!requireAdmin(auth, request, reply)) return undefined;
+    try {
+      return { story: await stories.prepare(request.params.id) };
+    } catch (error) { return fail(reply, error); }
+  });
+
+  server.post<{ Params: { id: string }; Body: { look?: unknown } }>('/api/stories/:id/look', async (request, reply) => {
+    if (!requireAdmin(auth, request, reply)) return undefined;
+    const look = request.body?.look;
+    if (!look || typeof look !== 'object') return reply.code(400).send({ error: { code: 'INVALID', message: 'look is required' } });
+    try {
+      return { story: await stories.setLook(request.params.id, look as Record<string, unknown>) };
+    } catch (error) { return fail(reply, error); }
+  });
+
+  server.get<{ Params: { id: string; shotId: string } }>('/api/stories/:id/shots/:shotId/frame', async (request, reply) => {
+    if (!member(request, reply)) return undefined;
+    if (!SHOT_ID.test(request.params.shotId)) return notFound(reply);
+    try {
+      if (!(await stories.get(request.params.id))) return notFound(reply, 'Story');
+      return sendPng(reply, stories.framePath(request.params.id, request.params.shotId));
+    } catch (error) { return fail(reply, error); }
+  });
+
+  server.post<{ Params: { id: string; shotId: string }; Body: { prompt?: unknown } }>('/api/stories/:id/shots/:shotId/frame', async (request, reply) => {
+    if (!requireAdmin(auth, request, reply)) return undefined;
+    if (!SHOT_ID.test(request.params.shotId)) return notFound(reply);
+    const prompt = typeof request.body?.prompt === 'string' && request.body.prompt.trim() ? request.body.prompt.slice(0, 2000) : undefined;
+    try {
+      return { story: await stories.redrawFrame(request.params.id, request.params.shotId, prompt) };
+    } catch (error) { return fail(reply, error); }
+  });
+
+  server.get<{ Params: { id: string; token: string } }>('/api/stories/:id/cast/:token/image', async (request, reply) => {
+    if (!member(request, reply)) return undefined;
+    if (!TOKEN.test(request.params.token)) return notFound(reply, 'Character');
+    try {
+      if (!(await stories.get(request.params.id))) return notFound(reply, 'Story');
+      return sendPng(reply, stories.castPath(request.params.id, request.params.token));
     } catch (error) { return fail(reply, error); }
   });
 

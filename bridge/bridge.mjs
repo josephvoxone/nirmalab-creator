@@ -18,7 +18,7 @@ import { readFile } from 'node:fs/promises';
 import { homedir, hostname } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { accountsToProbe, cdpReady, preflightUrl, cdpUrlForAccount, cdpUrlFromActivePort, ensureProject, isChromeAccount, parseToolResult, processJob } from './src/core.mjs';
+import { accountsToProbe, cdpReady, preflightUrl, cdpUrlForAccount, cdpUrlFromActivePort, ensureProject, isChromeAccount, parseToolResult, processJob, resultHeaders } from './src/core.mjs';
 
 const env = process.env;
 const CREATOR_URL = (env.CREATOR_URL || 'https://creator.nirmalab.com').replace(/\/$/, '');
@@ -138,10 +138,10 @@ async function handle(claim) {
     outDir: OUT_DIR,
     resolution: RESOLUTION,
     readFile: path => readFile(path),
-    complete: async (id, bytes) => {
+    complete: async (id, bytes, meta = {}) => {
       const response = await api(`/api/flow/bridge/jobs/${id}/complete`, {
         method: 'POST',
-        headers: { 'content-type': 'application/octet-stream' },
+        headers: { 'content-type': 'application/octet-stream', ...resultHeaders(meta) },
         body: bytes
       });
       if (!response.ok) throw new Error(`upload HTTP ${response.status}: ${(await response.text()).slice(0, 200)}`);

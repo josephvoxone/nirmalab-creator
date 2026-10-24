@@ -10,7 +10,7 @@ import { PublisherService, registerPublisherRoutes } from './publisher/index.js'
 import { FlowStore } from './flow/store.js';
 import { pollinationsText } from './generate/pollinations.js';
 import type { TextGenerator } from './stories/draft.js';
-import { assembleStory, probeClip } from './stories/media.js';
+import { assembleStory, imageSize, probeClip } from './stories/media.js';
 import { registerStoryRoutes } from './stories/routes.js';
 import { StoryService, type StoryDeps } from './stories/service.js';
 
@@ -21,7 +21,7 @@ export type AppOptions = {
   env?: NodeJS.ProcessEnv;
   logger?: boolean;
   version?: string;
-  stories?: Partial<Pick<StoryDeps, 'probe' | 'assemble'>> & {
+  stories?: Partial<Pick<StoryDeps, 'probe' | 'assemble' | 'imageSize'>> & {
     generateText?: TextGenerator;
     /** Background reconcile interval; 0 disables (tests). Default 5 s. */
     reconcileMs?: number;
@@ -54,7 +54,8 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
     dataDir: options.dataDir,
     flow: flowStore,
     probe: options.stories?.probe ?? probeClip,
-    assemble: options.stories?.assemble ?? assembleStory
+    assemble: options.stories?.assemble ?? assembleStory,
+    imageSize: options.stories?.imageSize ?? imageSize
   });
   await registerPublisherRoutes(server, {
     service: new PublisherService({ dataDir: options.dataDir, env }),

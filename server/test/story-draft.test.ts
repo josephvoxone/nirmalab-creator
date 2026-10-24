@@ -69,4 +69,29 @@ describe('draftStoryboard', () => {
     expect(system).toMatch(/title.*Bahasa Indonesia/i);
     expect(system).toMatch(/"id" is a short descriptive/);
   });
+
+  it('template + look: style line composed from the picks, mode/narrator/look saved, move list given to the writer', async () => {
+    let system = '', prompt = '';
+    const board = await draftStoryboard({ premise: 'Kucing hilang', template: 'drama-hewan', look: { palette: 'hujan-biru' } }, async (s, p) => {
+      system = s; prompt = p;
+      return good;
+    });
+    expect(board.mode).toBe('konsisten');
+    expect(board.template).toBe('drama-hewan');
+    expect(board.look).toMatchObject({ style: 'storybook', genre: 'drama', palette: 'hujan-biru' });
+    expect(board.style).toMatch(/watercolor/);
+    expect(board.style).toMatch(/teal blues/);
+    expect(board.narrator).toMatch(/female storyteller/);
+    expect(prompt).toMatch(/exactly 8 shots/);
+    expect(system + prompt).toMatch(/the camera arcs slowly around the subject/);
+    expect(validateStoryboard(board)).toEqual([]);
+  });
+
+  it('explicit mode and shot count beat the template', async () => {
+    let prompt = '';
+    const board = await draftStoryboard({ premise: 'x', template: 'drama-hewan', mode: 'cepat', shots: 4, aspect: '16:9' }, async (_s, p) => { prompt = p; return good; });
+    expect(board.mode).toBe('cepat');
+    expect(board.aspect).toBe('16:9');
+    expect(prompt).toMatch(/exactly 4 shots/);
+  });
 });

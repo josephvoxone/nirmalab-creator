@@ -15,6 +15,8 @@ import { join } from 'node:path';
 import type { FlowStore } from '../flow/store.js';
 import { CREDITS_PER_SHOT, buildShotPrompt, castOf, characterSheetPrompt, framePrompt, shotCast, validateStoryboard, type Storyboard } from './storyboard.js';
 
+import { composeStyle, resolveLook } from './looks.js';
+
 const MIN_IMAGE_BYTES = 10_000;
 
 export const MAX_TAKES = 3;
@@ -433,6 +435,13 @@ export class StoryService {
       }
       return record;
     });
+  }
+
+  /** Studio pickers changed: recompose the Style line (invalidates sheets/frames/clips whose prompt changed). */
+  async setLook(id: string, picks: Partial<Record<string, unknown>>): Promise<StoryRecord> {
+    const board = await this.readStoryboard(id);
+    const look = resolveLook({ template: board.template, look: { ...(board.look ?? {}), ...picks } });
+    return this.updateStoryboard(id, { ...board, look, style: composeStyle(look) });
   }
 
   // ------------------------------------------------------------------ konsisten: cast + keyframes

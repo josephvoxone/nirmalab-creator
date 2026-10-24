@@ -48,3 +48,24 @@ describe.skipIf(!hasTools)('story media (real ffmpeg + python)', () => {
     await expect(assembleStory(dir)).rejects.toThrow(/missing shot/);
   });
 });
+
+describe('imageSize', () => {
+  it('reads PNG, JPEG and WEBP headers and rejects other files', async () => {
+    const { imageSize } = await import('../src/stories/media.js');
+    const { mkdtempSync, writeFileSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const dir = mkdtempSync(join(tmpdir(), 'nc-img-'));
+    const png = Buffer.alloc(40); Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(png); png.writeUInt32BE(13, 8); png.write('IHDR', 12); png.writeUInt32BE(768, 16); png.writeUInt32BE(1376, 20);
+    writeFileSync(join(dir, 'a.png'), png);
+    const jpg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x04, 0x00, 0x00, 0xff, 0xc0, 0x00, 0x11, 0x08, 0x05, 0x60, 0x03, 0x00, 0x03, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+    writeFileSync(join(dir, 'a.jpg'), jpg);
+    const webp = Buffer.alloc(40); webp.write('RIFF', 0); webp.write('WEBP', 8); webp.write('VP8X', 12); webp.writeUIntLE(767, 24, 3); webp.writeUIntLE(1375, 27, 3);
+    writeFileSync(join(dir, 'a.webp'), webp);
+    writeFileSync(join(dir, 'a.txt'), 'hello world, not an image at all.....');
+    expect(await imageSize(join(dir, 'a.png'))).toEqual({ width: 768, height: 1376 });
+    expect(await imageSize(join(dir, 'a.jpg'))).toEqual({ width: 768, height: 1376 });
+    expect(await imageSize(join(dir, 'a.webp'))).toEqual({ width: 768, height: 1376 });
+    await expect(imageSize(join(dir, 'a.txt'))).rejects.toThrow(/unknown/);
+  });
+});

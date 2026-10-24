@@ -23,6 +23,9 @@ export type Storyboard = {
   slug?: string;
   /** konsisten = character sheets + approved keyframes animated (default for new stories); cepat = text-to-video per shot. */
   mode?: 'konsisten' | 'cepat';
+  /** Studio picks (ids from looks.ts); `style` holds their composed prompt text. */
+  template?: string;
+  look?: Record<string, string>;
   aspect?: '9:16' | '16:9';
   characters?: Record<string, CharacterSpec>;
   style?: string;

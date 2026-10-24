@@ -53,9 +53,17 @@ export async function ensureProject(account, callTool, title) {
  * @param {{ callTool: Function, readFile: Function, complete: Function, fail: Function,
  *           projectId?: string, resolveProject?: Function, maxCredits: number, outDir: string, resolution?: string }} deps
  */
+/** Story jobs live in their own Flow project so characters and keyframes stay together. */
+export function projectTitleFor(job, fallback) {
+  return job?.group ? `Nirmalab · ${job.group}` : fallback;
+}
+
 export async function processJob(claim, deps) {
   const { job, account } = claim;
   try {
+    if (job.kind === 'character' || job.kind === 'image' || (job.kind === 'video' && job.group)) {
+      return await storyJob(job, account, deps);
+    }
     const projectId = deps.resolveProject ? await deps.resolveProject(account) : deps.projectId;
     const duration = [4, 6, 8, 10].includes(job.durationSec) ? job.durationSec : 4;
     if (deps.mode === 'agent') return await agentJob(job, account, projectId, duration, deps);
@@ -163,6 +171,112 @@ async function agentJob(job, account, projectId, duration, deps) {
   return { status: 'done', mediaId, bytes: bytes.byteLength };
 }
 
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+async function projectState(account, projectId, deps) {
+  const p = parseToolResult(await deps.callTool(account, 'flow_get_project', { project_id: projectId })) ?? {};
+  const media = [...(p.media ?? []), ...(p.generations ?? [])];
+  return { characters: p.characters ?? [], media };
+}
+
+/** Make sure every character exists in the project (recreating it from its look if needed); returns their Flow ids. */
+async function ensureCharacters(account, projectId, refs, deps) {
+  const ids = [];
+  for (const ref of refs ?? []) {
+    const { characters } = await projectState(account, projectId, deps);
+    let c = characters.find(x => String(x?.name ?? '').toLowerCase() === ref.name.toLowerCase());
+    if (!c) {
+      const created = parseToolResult(await deps.callTool(account, 'flow_create_character', { project_id: projectId, name: ref.name, portrait_prompt: ref.look }));
+      c = created?.character ?? created;
+    }
+    if (!c?.id) throw new Error(`Flow did not create character ${ref.name}`);
+    ids.push(c.id);
+  }
+  return ids;
+}
+
+/** One still / animated keyframe through the agent. Images are free in Flow; anything that asks for credits above the cap is rejected. */
+export function storyMessage(job, duration) {
+  const aspect = job.aspect === '16:9' ? '16:9' : '9:16';
+  if (job.kind === 'image') {
+    return [
+      `Generate exactly one image (no video, no variations) in ${aspect} aspect ratio with Nano Banana.`,
+      'Keep every attached character exactly as in their character reference. Use this prompt verbatim:', '', job.prompt
+    ].join('\n');
+  }
+  return [
+    `Generate exactly one video (no images, no extra shots, no variations) in ${aspect} aspect ratio, ${duration} seconds long, with the Omni 1.1 Flash model and its native audio.`,
+    job.startFrame ? 'Use the attached image as the first frame and animate it; keep the characters, outfits, colours and style identical to it.' : '',
+    'Use this prompt verbatim, do not rewrite it:', '', job.prompt
+  ].filter(Boolean).join('\n');
+}
+
+async function storyJob(job, account, deps) {
+  const projectId = await ensureProject(account, deps.callTool, projectTitleFor(job));
+  if (job.kind === 'character') {
+    const ref = job.characters?.[0];
+    if (!ref) throw new Error('character job without a character');
+    const { characters } = await projectState(account, projectId, deps);
+    let c = characters.find(x => String(x?.name ?? '').toLowerCase() === ref.name.toLowerCase());
+    if (!c) {
+      const created = parseToolResult(await deps.callTool(account, 'flow_create_character', { project_id: projectId, name: ref.name, portrait_prompt: job.prompt }));
+      c = created?.character ?? created;
+    }
+    if (!c?.id || !c.portraitMediaId) throw new Error(`Flow character ${ref.name} has no portrait`);
+    const downloaded = parseToolResult(await deps.callTool(account, 'flow_download_media', { media_id: c.portraitMediaId, out_dir: deps.outDir }));
+    if (!downloaded?.path) throw new Error('Flow download returned no path');
+    await deps.complete(job.id, await deps.readFile(downloaded.path), { mediaId: c.portraitMediaId, flowCharacterId: c.id });
+    return { status: 'done', mediaId: c.portraitMediaId };
+  }
+
+  const characterIds = await ensureCharacters(account, projectId, job.characters, deps);
+  const before = new Set((await projectState(account, projectId, deps)).media.map(m => m?.mediaId));
+  const isVideo = job.kind === 'video';
+  const duration = [4, 6, 8, 10].includes(job.durationSec) ? job.durationSec : 6;
+  const chat = parseToolResult(await deps.callTool(account, 'flow_agent_chat', {
+    project_id: projectId,
+    message: storyMessage(job, duration),
+    new_session: true,
+    ...(characterIds.length ? { character_ids: characterIds } : {}),
+    ...(isVideo && job.startFrame?.mediaId ? { image_ids: [job.startFrame.mediaId] } : {}),
+    max_credits: isVideo ? deps.maxCredits : 0
+  }));
+  if (chat?.approval === 'awaiting') {
+    await deps.callTool(account, 'flow_agent_respond', { project_id: projectId, answer: 'Reject' }).catch(() => {});
+    const reason = `Flow agent quote ${chat.pendingPermission?.totalCost ?? '?'} credits is above the cap of ${isVideo ? deps.maxCredits : 0}; rejected, nothing spent`;
+    await deps.fail(job.id, reason, 0);
+    return { status: 'failed', error: reason };
+  }
+  let mediaId = chat?.generatedMediaIds?.[0];
+  // The agent stream sometimes drops the ids; the new media still lands in the project.
+  for (let i = 0; !mediaId && i < (deps.pollTries ?? 20); i++) {
+    const fresh = (await projectState(account, projectId, deps)).media
+      .filter(m => m?.mediaId && !before.has(m.mediaId) && (isVideo ? !/image/i.test(String(m.kind ?? '')) : !/video/i.test(String(m.kind ?? ''))));
+    mediaId = fresh[0]?.mediaId;
+    if (!mediaId) await sleep(deps.pollMs ?? 15_000);
+  }
+  if (!mediaId) {
+    const reason = `Flow agent did not create the ${isVideo ? 'video' : 'image'} (${String(chat?.reply ?? '').slice(0, 160)})`;
+    await deps.fail(job.id, reason, classifyError(reason).cooldownMs);
+    return { status: 'failed', error: reason };
+  }
+  if (isVideo) {
+    const status = parseToolResult(await deps.callTool(account, 'flow_video_status', { media_ids: [mediaId], wait: true, timeout_sec: 900 }));
+    const item = status?.items?.find(i => i?.mediaId === mediaId) ?? status?.items?.[0];
+    if (item?.state !== 'succeeded') {
+      const reason = `Flow clip ${status?.timedOut ? 'timed out' : item?.state ?? 'missing'}`;
+      await deps.fail(job.id, reason, classifyError(reason).cooldownMs);
+      return { status: 'failed', error: reason };
+    }
+  }
+  const caption = (await projectState(account, projectId, deps)).media.find(m => m?.mediaId === mediaId)?.caption;
+  const downloaded = parseToolResult(await deps.callTool(account, 'flow_download_media', { media_id: mediaId, out_dir: deps.outDir }));
+  if (!downloaded?.path) throw new Error('Flow download returned no path');
+  const bytes = await deps.readFile(downloaded.path);
+  await deps.complete(job.id, bytes, { mediaId, ...(caption ? { caption } : {}) });
+  return { status: 'done', mediaId, bytes: bytes.byteLength };
+}
+
 /** Dedicated Flow Chrome the bridge drives (undefined = preflight disabled). */
 export function preflightUrl(env) {
   if (env.FLOW_PREFLIGHT === 'off') return undefined;
@@ -184,4 +298,13 @@ export function accountsToProbe(accounts) {
   return (Array.isArray(accounts) ? accounts : [])
     .filter(a => a && typeof a === 'object' && typeof a.id === 'string' && a.status !== 'error' && cdpUrlForAccount(a))
     .map(a => ({ id: a.id, label: a.label, profileDir: a.profileDir, ...(a.proxy ? { proxy: a.proxy } : {}) }));
+}
+
+/** Flow ids of a finished take, as upload headers (URI-encoded: captions are free text). */
+export function resultHeaders(meta = {}) {
+  const h = {};
+  if (meta.mediaId) h['x-flow-media-id'] = encodeURIComponent(meta.mediaId);
+  if (meta.caption) h['x-flow-caption'] = encodeURIComponent(String(meta.caption).slice(0, 200));
+  if (meta.flowCharacterId) h['x-flow-character-id'] = encodeURIComponent(meta.flowCharacterId);
+  return h;
 }
