@@ -238,8 +238,9 @@ async function storyJob(job, account, deps) {
     if (!c?.id || !portrait) throw new Error(`Flow character ${ref.name} has no portrait`);
     const downloaded = parseToolResult(await deps.callTool(account, 'flow_download_media', { media_id: portrait, out_dir: deps.outDir }));
     if (!downloaded?.path) throw new Error('Flow download returned no path');
-    await deps.complete(job.id, await deps.readFile(downloaded.path), { mediaId: portrait, flowCharacterId: c.id });
-    return { status: 'done', mediaId: portrait };
+    const bytes = await deps.readFile(downloaded.path);
+    await deps.complete(job.id, bytes, { mediaId: portrait, flowCharacterId: c.id });
+    return { status: 'done', mediaId: portrait, bytes: bytes.byteLength };
   }
 
   const characterIds = await ensureCharacters(account, projectId, job.characters, deps);
