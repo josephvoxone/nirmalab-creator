@@ -7,11 +7,13 @@ import { fmtUsd, isOpenRouter, type Engine } from '../providers/providersClient.
 import { openRouterOption, type EngineCatalog } from '../providers/useEngines.js';
 import { EngineChoice } from '../providers/EnginePicker.js';
 import { TECHNIQUE_CATEGORIES, filterTechniques, promptWarnings, techniqueKey, type Technique } from './compose.js';
+import { LOOK_FAMILIES, familyById, variantById } from '../bible/looks.js';
 
 const LIST_LIMIT = 60;
 export const DURATIONS = [4, 6, 8] as const;
 const DURATION_OPTIONS = DURATIONS.map(s => ({ value: String(s), label: `${s} detik` }));
 const CATEGORY_OPTIONS = [{ value: 'all', label: 'Semua kategori' }, ...TECHNIQUE_CATEGORIES.map(c => ({ value: c.key, label: c.label }))];
+const FAMILY_OPTIONS = LOOK_FAMILIES.map(f => ({ value: f.id, label: f.label, hint: f.hint }));
 const ASPECT_OPTIONS = [{ value: '9:16' as const, label: '9:16', hint: 'Vertikal (Reels, TikTok, Shorts)' }, { value: '16:9' as const, label: '16:9', hint: 'Horizontal (YouTube)' }];
 
 export type ComposerValue = {
@@ -41,6 +43,17 @@ export function Composer(props: {
   const { value, onChange } = props;
   const [category, setCategory] = useState('all');
   const [query, setQuery] = useState('');
+  // Gaya = family + variant. The chosen variant writes the English Style sentence the prompt uses.
+  const [family, setFamily] = useState('');
+  const [variant, setVariant] = useState('');
+  const variantOptions = (familyById(family)?.variants ?? []).map(v => ({ value: v.id, label: v.label, hint: v.hint }));
+  const pickFamily = (id: string) => {
+    setFamily(id);
+    setVariant('');
+    // Only clear a sentence this picker wrote — a preset's own style text stays.
+    if (value.style.trim() && value.style.trim() === variantById(variant)?.prompt) onChange({ style: '' });
+  };
+  const pickVariant = (id: string) => { setVariant(id); const v = variantById(id); if (v) onChange({ style: v.prompt }); };
   const visible = useMemo(() => filterTechniques(props.techniques, category, query).slice(0, LIST_LIMIT), [props.techniques, category, query]);
   const pickedKeys = useMemo(() => new Set(value.picked.map(techniqueKey)), [value.picked]);
   const warnings = useMemo(() => promptWarnings(value.picked), [value.picked]);
@@ -64,9 +77,18 @@ export function Composer(props: {
               placeholder="mis. a woman in her thirties, yellow raincoat, short black hair" onChange={e => onChange({ character: e.target.value })} />
           </Field>
           <div className="grid gap-3 sm:grid-cols-2">
-            <Field label="Style / grade">
-              <input value={value.style} maxLength={300} className={inputClass} placeholder="mis. soft film grain, muted teal" onChange={e => onChange({ style: e.target.value })} />
-            </Field>
+            <div className="flex min-w-0 flex-col gap-1">
+              <span className="text-[12px] text-muted-foreground">Gaya visual · keluarga + varian</span>
+              <div className="flex gap-1.5">
+                <Choice label="Keluarga gaya" value={family} options={FAMILY_OPTIONS} placeholder="Pilih keluarga"
+                  onChange={pickFamily} className="min-w-32 flex-1" />
+                <Choice label="Varian" value={variant} options={variantOptions} disabled={!family} placeholder={family ? 'Pilih varian' : 'Keluarga dulu'}
+                  onChange={pickVariant} className="min-w-32 flex-1" />
+              </div>
+              <p className="line-clamp-2 text-[11.5px] text-muted-foreground">
+                {value.style.trim() || 'Gaya mengisi bagian Style di prompt; preset juga mengisinya.'}
+              </p>
+            </div>
             <Field label="Negative prompt (pisah koma)">
               <input value={value.negative} maxLength={400} className={inputClass} placeholder="mis. text, watermark, blurry" onChange={e => onChange({ negative: e.target.value })} />
             </Field>

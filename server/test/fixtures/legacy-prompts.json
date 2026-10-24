@@ -1,0 +1,22 @@
+{
+ "prompts": {
+  "clip:00-intro": "Extreme wide shot, the camera pushes in slowly. Morning light over rooftops. Setting: a busy fish market at dawn with wet stone floors. Style: storybook watercolor, intimate emotional drama, cinematic composition. Halation vintage lens look. Color grade: dusky violet shadows. Lighting: warm golden hour sunlight. Audio: soft wind and strings, no voice.\nNegative prompt: subtitles, captions, on-screen text, watermark, logos, warped hands, camera equipment, camera crane, film crew, drone in frame.",
+  "frame:00-intro": "Extreme wide shot, the camera pushes in slowly. Morning light over rooftops. Setting: a busy fish market at dawn with wet stone floors. Style: storybook watercolor, intimate emotional drama, cinematic composition. Halation vintage lens look. Color grade: dusky violet shadows. Lighting: warm golden hour sunlight. Vertical 9:16 cinematic frame, no text.",
+  "clip:01-laras": "Medium shot, the camera stays still. Laras buys fish from a stall. Setting: a busy fish market at dawn with wet stone floors. Style: storybook watercolor, intimate emotional drama, cinematic composition. Halation vintage lens look. Color grade: dusky violet shadows. Lighting: warm golden hour sunlight. Audio: voice-over by a warm Indonesian female storyteller, speaking Bahasa Indonesia slowly: \"Laras pergi ke pasar pagi itu.\" Quiet ambience.\nNegative prompt: subtitles, captions, on-screen text, watermark, logos, warped hands, camera equipment, camera crane, film crew, drone in frame.",
+  "frame:01-laras": "Medium shot, the camera stays still. Laras buys fish from a stall. Setting: a busy fish market at dawn with wet stone floors. Style: storybook watercolor, intimate emotional drama, cinematic composition. Halation vintage lens look. Color grade: dusky violet shadows. Lighting: warm golden hour sunlight. Keep Laras exactly as in their character reference (same face, hair, outfit, colours). Vertical 9:16 cinematic frame, no text.",
+  "clip:02-kapas": "Wide shot, the camera tracks slowly. Kapas hops between trees. Setting: a misty pine forest. Style: storybook watercolor, intimate emotional drama, cinematic composition. Halation vintage lens look. Color grade: dusky violet shadows. Lighting: warm golden hour sunlight. Audio: voice-over by a warm Indonesian female storyteller, speaking Bahasa Indonesia slowly: \"Kapas menunggu di hutan.\" Quiet ambience.\nNegative prompt: subtitles, captions, on-screen text, watermark, logos, warped hands, camera equipment, camera crane, film crew, drone in frame.",
+  "frame:02-kapas": "Wide shot, the camera tracks slowly. Kapas hops between trees. Setting: a misty pine forest. Style: storybook watercolor, intimate emotional drama, cinematic composition. Halation vintage lens look. Color grade: dusky violet shadows. Lighting: warm golden hour sunlight. Keep Kapas exactly as in their character reference (same face, hair, outfit, colours). Vertical 9:16 cinematic frame, no text.",
+  "sheet:LARAS": "Full body character reference sheet of Laras on a plain warm white background, front, side and back views, same outfit in every view, no text: a girl with two black braids. Style: storybook watercolor, intimate emotional drama, cinematic composition. Halation vintage lens look. Color grade: dusky violet shadows. Lighting: warm golden hour sunlight.",
+  "sheet:KAPAS": "Full body character reference sheet of Kapas on a plain warm white background, front, side and back views, same outfit in every view, no text: a cream rabbit with a red scarf. Style: storybook watercolor, intimate emotional drama, cinematic composition. Halation vintage lens look. Color grade: dusky violet shadows. Lighting: warm golden hour sunlight."
+ },
+ "hashes": {
+  "clip:00-intro": "0e1a26fcfeb40dd1",
+  "frame:00-intro": "833485da23f4c3e9",
+  "clip:01-laras": "2e9404a1ea250a81",
+  "frame:01-laras": "c22a5f9371f2f1cc",
+  "clip:02-kapas": "4a1e9216ba7c18f9",
+  "frame:02-kapas": "82d3cd84aaa41981",
+  "sheet:LARAS": "71b66b1469088e32",
+  "sheet:KAPAS": "8c4cf9c14936e9f7"
+ }
+}

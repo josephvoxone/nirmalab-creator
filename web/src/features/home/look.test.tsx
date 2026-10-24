@@ -25,6 +25,8 @@ const openLook = async () => userEvent.click(await screen.findByRole('button', {
 describe('Home · look (Higgsfield-style chips on the prompt)', () => {
   it('a template sets the look chips, mode and shot count from its tempo', async () => {
     app();
+    // Two waits: the lazy route import and the catalog fetch each get their own timeout window.
+    await screen.findByRole('heading', { name: /mau bikin video apa/i });
     await userEvent.click(within(await screen.findByRole('list', { name: /mulai dari template/i })).getByRole('button', { name: /dongeng tidur/i }));
     await openLook();
     expect(screen.getByRole('button', { name: /Palet warna.*Pastel Kapas/ })).toBeInTheDocument();
@@ -54,6 +56,42 @@ describe('Home · look (Higgsfield-style chips on the prompt)', () => {
     await userEvent.click(within(dialog).getByRole('tab', { name: 'Tempo' }));
     await userEvent.click(within(dialog).getByRole('button', { name: /Dinamis/ }));
     expect(screen.getByRole('button', { name: 'Durasi' })).toHaveTextContent('10 shot');
+  });
+
+  it('the look chip picks a family, then a variant, and sends family + variant + style', async () => {
+    const drafts = app();
+    await openLook();
+    await userEvent.click(screen.getByRole('button', { name: /^Gaya visual/ }));
+    const dialog = await screen.findByRole('dialog', { name: 'Gaya visual' });
+    const families = within(dialog).getByRole('tablist', { name: /keluarga gaya/i });
+    expect(within(families).getAllByRole('tab').map(t => t.textContent?.replace(/·\s*\d+ varian$/, '').trim()))
+      .toEqual(['Film realis', 'Ilustrasi lukis', 'Animasi cel', 'Clay & mainan', 'Dokumenter', 'Noir']);
+
+    await userEvent.click(within(families).getByRole('tab', { name: /Film realis/ }));
+    // Every option names its family and its variant.
+    const drama = within(dialog).getByRole('button', { name: /Drama sinematik/ });
+    expect(drama).toHaveTextContent(/Film realis/);
+    expect(drama).toHaveTextContent(/Drama sinematik/);
+    await userEvent.click(drama);
+    expect(screen.getByRole('button', { name: /^Gaya visual.*Film realis · Drama sinematik/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /atur gaya: Film realis · Drama sinematik/i })).toBeInTheDocument();
+
+    await userEvent.type(screen.getByRole('textbox', { name: 'Prompt' }), 'Kisah pendekar yang turun gunung');
+    await userEvent.click(screen.getByRole('button', { name: /buat video/i }));
+    await waitFor(() => expect(drafts).toHaveLength(1));
+    // The variant keeps the legacy style id it replaced (`live-action`) so old boards still compose.
+    expect(drafts[0]).toMatchObject({ look: { family: 'film-real', variant: 'cinematic-drama', style: 'live-action', genre: 'auto' } });
+  });
+
+  it('keeps genre, era, camera, lens, aperture, palette and lighting pickers working', async () => {
+    app();
+    await openLook();
+    await userEvent.click(screen.getByRole('button', { name: /Kamera/ }));
+    const dialog = screen.getByRole('dialog', { name: 'Kamera' });
+    await userEvent.click(within(dialog).getByRole('tab', { name: 'Lensa' }));
+    await userEvent.click(within(dialog).getByRole('button', { name: /Halation vintage/ }));
+    await userEvent.click(within(dialog).getByRole('button', { name: /Selesai/ }));
+    expect(screen.getByRole('button', { name: /Kamera.*Halation vintage/ })).toBeInTheDocument();
   });
 
   it('sends the chosen look with the draft', async () => {

@@ -5,17 +5,33 @@
  * not ids. Camera moves follow the Veo rules (one move per shot, never name camera gear).
  */
 
+import { lookById } from '../bible/styles.js';
+
 export type Option = { id: string; label: string; hint?: string; prompt: string };
 export type Palette = Option & { swatches: string[] };
 export type Tempo = Option & { shots: number };
 export type Look = {
   style: string; genre: string; era: string; camera: string; lens: string;
   aperture: string; palette: string; lighting: string; tempo: string;
+  /** Compiler pair (optional): the family+variant this style belongs to. */
+  family?: string; variant?: string;
 };
 export type TemplateCategory = 'drama' | 'anak' | 'faceless' | 'promo' | 'edukasi' | 'horor' | 'budaya';
+
+/** The six look grammars (spec §4.1); variants keep the named styles they replaced (spec §9.1). */
+export type LookFamilyId = 'film-real' | 'painterly' | 'cel-anime' | 'clay' | 'docu' | 'noir';
+export type LookVariant = {
+  id: string; label: string;
+  /** Legacy `look.style` id this variant writes, so old boards and composeStyle keep working. */
+  style: string;
+};
+export type LookFamily = { id: LookFamilyId; label: string; hint: string; variants: LookVariant[] };
 export type Template = {
   id: string; name: string; tagline: string; category: TemplateCategory; mode: 'konsisten' | 'cepat';
-  aspect: '9:16' | '16:9'; narrator: string; example: string; look: Look;
+  aspect: '9:16' | '16:9'; narrator: string; example: string;
+  /** Grammar (6) + named style (variant): the look is derived from this pair, never guessed. */
+  family: LookFamilyId; variant: string;
+  look: Look;
   /** Scene for the template's cover still (generated through the app queue). */
   cover: string;
 };
@@ -43,7 +59,52 @@ const styles: Option[] = [
   { id: 'documentary', label: 'Dokumenter', hint: 'Footage dokumenter nyata', prompt: 'photorealistic documentary footage, natural light, observational framing' },
   { id: 'wayang', label: 'Wayang & batik', hint: 'Ilustrasi Nusantara', prompt: 'Indonesian wayang and batik inspired painted illustration, ornate patterns, warm earthy textures' },
   { id: 'comic', label: 'Komik', hint: 'Novel grafis tinta tebal', prompt: 'graphic novel illustration come alive, bold ink lines, halftone shading' },
-  { id: 'lowpoly', label: 'Low poly', hint: '3D geometris lembut', prompt: 'soft low-poly 3D diorama, faceted geometry, gentle pastel lighting' }
+  { id: 'lowpoly', label: 'Low poly', hint: '3D geometris lembut', prompt: 'soft low-poly 3D diorama, faceted geometry, gentle pastel lighting' },
+  { id: 'noir', label: 'Noir', hint: 'Kontras tinggi hitam putih', prompt: 'high-contrast black and white film noir, hard shadows, deep blacks, drifting smoke' }
+];
+
+/**
+ * Six look families = the grammar of a look (stock, lens, light, grade). Each keeps the named
+ * styles it replaced as `variants`, so a template can still ask for "wayang" or "papercut".
+ * Ids mirror `server/src/bible/styles.ts` and `web/src/features/bible/looks.ts`.
+ */
+export const FAMILIES: LookFamily[] = [
+  {
+    id: 'film-real', label: 'Film realis', hint: 'Live-action sinema: kulit nyata, lensa anamorphic, cahaya termotivasi',
+    variants: [{ id: 'cinematic-drama', label: 'Drama sinematik', style: 'live-action' }]
+  },
+  {
+    id: 'painterly', label: 'Ilustrasi lukis', hint: 'Lukisan tangan: cat air, kertas berlapis, ornamen Nusantara',
+    variants: [
+      { id: 'storybook', label: 'Storybook cat air', style: 'storybook' },
+      { id: 'papercut', label: 'Papercut', style: 'papercut' },
+      { id: 'wayang', label: 'Wayang & batik', style: 'wayang' }
+    ]
+  },
+  {
+    id: 'cel-anime', label: 'Animasi cel', hint: 'Garis tangan dan cel shading dengan latar yang dilukis',
+    variants: [
+      { id: 'anime-2d', label: 'Anime 2D', style: 'anime-2d' },
+      { id: 'comic', label: 'Komik', style: 'comic' }
+    ]
+  },
+  {
+    id: 'clay', label: 'Clay & mainan', hint: 'Stop-motion plastisin dan 3D bergaya mainan, tekstur buatan tangan',
+    variants: [
+      { id: 'pixar-3d', label: 'Animasi 3D', style: 'pixar-3d' },
+      { id: 'lowpoly', label: 'Low poly', style: 'lowpoly' },
+      // The clay base itself (`clay:clay` in bible/styles.ts) — the stop-motion plastisin look.
+      { id: 'clay', label: 'Claymation', style: 'claymation' }
+    ]
+  },
+  {
+    id: 'docu', label: 'Dokumenter', hint: 'Footage observasional, cahaya alami, tanpa gaya yang menonjol',
+    variants: [{ id: 'docu', label: 'Observasional', style: 'documentary' }]
+  },
+  {
+    id: 'noir', label: 'Noir', hint: 'Bayangan keras, kontras tinggi, monokrom',
+    variants: [{ id: 'noir', label: 'Noir monokrom', style: 'noir' }]
+  }
 ];
 
 const genres: Option[] = [
@@ -189,6 +250,31 @@ const look = (l: Partial<Look>): Look => ({
   style: 'storybook', genre: 'auto', era: 'auto', camera: 'auto', lens: 'auto', aperture: 'auto', palette: 'auto', lighting: 'auto', tempo: 'mengalir', ...l
 });
 
+/** Legacy style id → the family/variant it belongs to (one variant id per family, so no ambiguity). */
+const STYLE_FAMILY = new Map<string, { family: LookFamilyId; variant: string }>(
+  FAMILIES.flatMap(f => f.variants.map(v => [v.style, { family: f.id, variant: v.id }] as const))
+);
+
+/** Family of a legacy `look.style` id ('documentary' → 'docu'), undefined for ids we never shipped. */
+export function familyOfStyle(style: string | undefined): LookFamilyId | undefined {
+  return style ? STYLE_FAMILY.get(style)?.family : undefined;
+}
+
+/** The legacy `look.style` id a variant writes ('docu' → 'documentary'), undefined if unknown. */
+export function styleForVariant(variant: string | undefined): string | undefined {
+  return variant ? FAMILIES.flatMap(f => f.variants).find(v => v.id === variant)?.style : undefined;
+}
+
+/**
+ * The template's look, derived from its family+variant: `style` is the variant's legacy style id,
+ * the rest is the explicit pick (genre, palette, …). An unknown pair falls back to storybook so a
+ * typo can never compile a look that does not exist.
+ */
+export function deriveLook(family: LookFamilyId, variant: string, rest: Partial<Omit<Look, 'style'>> = {}): Look {
+  const known = FAMILIES.find(f => f.id === family)?.variants.find(v => v.id === variant);
+  return look({ ...rest, style: known ? known.style : 'storybook' });
+}
+
 const NARRATOR = {
   hangat: 'a warm, gentle Indonesian female storyteller',
   anak: 'a cheerful, soft Indonesian children\'s storyteller',
@@ -205,114 +291,147 @@ const NARRATOR = {
 
 const templates: Template[] = [
   { id: 'drama-hewan', category: 'drama', cover: 'An orange cat sits alone in front of a wooden gate at dusk, waiting, a moving truck driving away down the village road.', name: 'Drama Hewan', tagline: 'Kisah sedih hewan peliharaan yang menyentuh', mode: 'konsisten', aspect: '9:16', narrator: NARRATOR.hangat,
-    look: look({ style: 'storybook', genre: 'drama', palette: 'aksen-merah', lighting: 'golden-hour', lens: 'halation', aperture: 'f14', tempo: 'mengalir' }),
+    family: 'painterly', variant: 'storybook',
+    look: deriveLook('painterly', 'storybook', { genre: 'drama', palette: 'aksen-merah', lighting: 'golden-hour', lens: 'halation', aperture: 'f14', tempo: 'mengalir' }),
     example: 'Seekor kucing oranye bernama Jingga ditinggal pemiliknya pindah rumah. Ia menunggu di depan pagar setiap sore sampai suatu hari pemiliknya kembali menjemput.' },
   { id: 'dongeng-anak', category: 'anak', cover: 'A tiny shy star with a soft sleepy face floats beside a gentle smiling crescent moon above quiet sleeping rooftops.', name: 'Dongeng Tidur', tagline: 'Cerita lembut pengantar tidur anak', mode: 'konsisten', aspect: '9:16', narrator: NARRATOR.anak,
-    look: look({ style: 'storybook', genre: 'dongeng', palette: 'pastel-kapas', lighting: 'soft-window', aperture: 'f14', tempo: 'tenang' }),
+    family: 'painterly', variant: 'storybook',
+    look: deriveLook('painterly', 'storybook', { genre: 'dongeng', palette: 'pastel-kapas', lighting: 'soft-window', aperture: 'f14', tempo: 'tenang' }),
     example: 'Bintang kecil bernama Kerlip takut gelap. Bulan mengajaknya berkeliling langit malam sampai Kerlip sadar bahwa cahayanya justru membuat malam indah.' },
   { id: 'fabel-3d', category: 'anak', cover: 'A smug mouse-deer and a determined little snail at the start line of a race beside a river, forest animals cheering.', name: 'Fabel 3D', tagline: 'Animasi 3D lucu dengan pesan moral', mode: 'konsisten', aspect: '9:16', narrator: NARRATOR.anak,
-    look: look({ style: 'pixar-3d', genre: 'komedi', palette: 'riviera', lighting: 'golden-hour', lens: 'clean', aperture: 'f4', tempo: 'mengalir' }),
+    family: 'clay', variant: 'pixar-3d',
+    look: deriveLook('clay', 'pixar-3d', { genre: 'komedi', palette: 'riviera', lighting: 'golden-hour', lens: 'clean', aperture: 'f4', tempo: 'mengalir' }),
     example: 'Kancil yang sombong menantang siput balapan menyeberangi sungai. Karena terlalu percaya diri ia tertidur, dan siput yang sabar sampai lebih dulu.' },
   { id: 'legenda-nusantara', category: 'budaya', cover: 'A princess in Javanese royal attire stands before rows of unfinished stone temples on a moonlit night, torches burning.', name: 'Legenda Nusantara', tagline: 'Cerita rakyat dengan nuansa wayang & batik', mode: 'konsisten', aspect: '9:16', narrator: NARRATOR.hangat,
-    look: look({ style: 'wayang', genre: 'epik', era: 'kerajaan', palette: 'batik-tanah', lighting: 'contre-jour', tempo: 'mengalir' }),
+    family: 'painterly', variant: 'wayang',
+    look: deriveLook('painterly', 'wayang', { genre: 'epik', era: 'kerajaan', palette: 'batik-tanah', lighting: 'contre-jour', tempo: 'mengalir' }),
     example: 'Seorang putri dari kerajaan di lereng gunung menolak dinikahkan dengan raja yang kejam, lalu meminta dibuatkan seribu candi dalam satu malam sebagai syarat.' },
   { id: 'anime-petualangan', category: 'drama', cover: 'A boy and his small dog sail a little wooden boat across a misty sea, an old lighthouse glowing behind them.', name: 'Petualangan Anime', tagline: 'Perjalanan epik bergaya anime 2D', mode: 'konsisten', aspect: '9:16', narrator: NARRATOR.hangat,
-    look: look({ style: 'anime-2d', genre: 'petualangan', palette: 'hutan-zamrud', lighting: 'golden-hour', tempo: 'dinamis' }),
+    family: 'cel-anime', variant: 'anime-2d',
+    look: deriveLook('cel-anime', 'anime-2d', { genre: 'petualangan', palette: 'hutan-zamrud', lighting: 'golden-hour', tempo: 'dinamis' }),
     example: 'Anak penjaga mercusuar menemukan peta tua di dalam botol dan berlayar dengan perahu kecil bersama anjingnya untuk mencari pulau yang hilang di balik kabut.' },
   { id: 'misteri-malam', category: 'horor', cover: 'A teenager peeks through the window of an abandoned house at midnight, a single warm lamp glowing inside, light rain.', name: 'Misteri Malam', tagline: 'Cerita seram ringan yang bikin penasaran', mode: 'konsisten', aspect: '9:16', narrator: NARRATOR.misteri,
-    look: look({ style: 'live-action', genre: 'horor', palette: 'hujan-biru', lighting: 'moonlight', camera: 'film35', aperture: 'f14', tempo: 'mengalir' }),
+    family: 'film-real', variant: 'cinematic-drama',
+    look: deriveLook('film-real', 'cinematic-drama', { genre: 'horor', palette: 'hujan-biru', lighting: 'moonlight', camera: 'film35', aperture: 'f14', tempo: 'mengalir' }),
     example: 'Setiap malam jam dua belas, lampu di rumah kosong ujung gang menyala sendiri. Seorang remaja memberanikan diri mengintip dan menemukan rahasia yang mengharukan.' },
   { id: 'claymation-lucu', category: 'anak', cover: 'A chicken wearing a tiny helmet, tied to colorful balloons, tries to take off from a farmyard fence.', name: 'Claymation Lucu', tagline: 'Sketsa komedi stop-motion', mode: 'konsisten', aspect: '9:16', narrator: NARRATOR.anak,
-    look: look({ style: 'claymation', genre: 'komedi', palette: 'pastel-kapas', lighting: 'soft-cross', aperture: 'f4', tempo: 'dinamis' }),
+    family: 'clay', variant: 'clay',
+    look: deriveLook('clay', 'clay', { genre: 'komedi', palette: 'pastel-kapas', lighting: 'soft-cross', aperture: 'f4', tempo: 'dinamis' }),
     example: 'Seekor ayam yang ingin terbang mencoba segala cara: payung, balon, sampai ketapel. Semua gagal, sampai seekor burung pipit mengajaknya naik ke punggungnya.' },
   { id: 'fakta-faceless', category: 'faceless', cover: 'Close macro view of an octopus changing colour on a coral reef, sunbeams through clear water.', name: 'Fakta Unik', tagline: 'Faceless edukasi, tanpa tokoh tetap', mode: 'cepat', aspect: '9:16', narrator: NARRATOR.dokumenter,
-    look: look({ style: 'documentary', genre: 'dokumenter', palette: 'teal-oranye', lighting: 'overcast', camera: 'modern', lens: 'clean', tempo: 'dinamis' }),
+    family: 'docu', variant: 'docu',
+    look: deriveLook('docu', 'docu', { genre: 'dokumenter', palette: 'teal-oranye', lighting: 'overcast', camera: 'modern', lens: 'clean', tempo: 'dinamis' }),
     example: 'Lima fakta mengejutkan tentang gurita: punya tiga jantung, darah biru, bisa berubah warna dalam sekejap, sangat cerdas, dan mampu kabur lewat celah sekecil koin.' },
   { id: 'motivasi', category: 'faceless', cover: 'A runner ties her shoes on an empty stadium track just before sunrise, breath visible in the cold air.', name: 'Motivasi Pagi', tagline: 'Video motivasi sinematik', mode: 'cepat', aspect: '9:16', narrator: NARRATOR.motivasi,
-    look: look({ style: 'live-action', genre: 'drama', palette: 'pagi-keemasan', lighting: 'golden-hour', camera: 'film35', lens: 'vintage-anamorphic', aperture: 'f14', tempo: 'mengalir' }),
+    family: 'film-real', variant: 'cinematic-drama',
+    look: deriveLook('film-real', 'cinematic-drama', { genre: 'drama', palette: 'pagi-keemasan', lighting: 'golden-hour', camera: 'film35', lens: 'vintage-anamorphic', aperture: 'f14', tempo: 'mengalir' }),
     example: 'Kegagalan bukan akhir. Seorang pelari yang jatuh di lintasan bangkit lagi setiap pagi sebelum matahari terbit, sampai akhirnya ia melewati garis finis.' },
   { id: 'promo-produk', category: 'promo', cover: 'A glass of iced palm sugar coffee with milk swirling into it, on a wooden table beside a rainy window.', name: 'Promo Produk', tagline: 'Iklan pendek produk lokal', mode: 'cepat', aspect: '9:16', narrator: NARRATOR.motivasi,
-    look: look({ style: 'live-action', genre: 'auto', palette: 'riviera', lighting: 'soft-window', camera: 'modern', lens: 'clean', aperture: 'f14', tempo: 'tenang' }),
+    family: 'film-real', variant: 'cinematic-drama',
+    look: deriveLook('film-real', 'cinematic-drama', { genre: 'auto', palette: 'riviera', lighting: 'soft-window', camera: 'modern', lens: 'clean', aperture: 'f14', tempo: 'tenang' }),
     example: 'Kopi susu gula aren dari kedai kecil di Yogyakarta: biji kopi disangrai, susu dituang perlahan, lalu dinikmati di beranda saat hujan sore.' },
   { id: 'romansa-kota', category: 'drama', cover: 'Two strangers wait at a rainy city bus stop at dusk, one of them holding two umbrellas.', name: 'Romansa Kota', tagline: 'Cerita cinta hangat di kota hujan', mode: 'konsisten', aspect: '9:16', narrator: NARRATOR.hangat,
-    look: look({ style: 'anime-2d', genre: 'romansa', palette: 'malam-hangat', lighting: 'practicals', aperture: 'f14', tempo: 'mengalir' }),
+    family: 'cel-anime', variant: 'anime-2d',
+    look: deriveLook('cel-anime', 'anime-2d', { genre: 'romansa', palette: 'malam-hangat', lighting: 'practicals', aperture: 'f14', tempo: 'mengalir' }),
     example: 'Dua orang asing selalu berteduh di halte yang sama setiap hujan. Mereka tidak pernah bicara, sampai suatu sore salah satunya membawa dua payung.' },
   // — Drama —
   { id: 'perjuangan-ibu', category: 'drama', cover: 'A mother in a headscarf loads trays of homemade cakes onto an old bicycle under a single bulb before dawn, her son asleep beyond the doorway.', name: 'Perjuangan Ibu', tagline: 'Kisah haru pengorbanan orang tua', mode: 'konsisten', aspect: '9:16', narrator: NARRATOR.hangat,
-    look: look({ style: 'live-action', genre: 'drama', era: '2000s', camera: 'film35', lens: 'warm-vintage', aperture: 'f14', palette: 'pagi-keemasan', lighting: 'practicals', tempo: 'mengalir' }),
+    family: 'film-real', variant: 'cinematic-drama',
+    look: deriveLook('film-real', 'cinematic-drama', { genre: 'drama', era: '2000s', camera: 'film35', lens: 'warm-vintage', aperture: 'f14', palette: 'pagi-keemasan', lighting: 'practicals', tempo: 'mengalir' }),
     example: 'Setiap subuh Bu Sari bersepeda menjual kue keliling kampung agar anaknya bisa kuliah. Bertahun-tahun kemudian, sang anak pulang memakai toga dan membawakan sepeda baru untuk ibunya.' },
   { id: 'romansa-sekolah', category: 'drama', cover: 'Two high school students in white and grey uniforms share one pair of earphones on a school rooftop at sunset, a rose-colored sky behind them.', name: 'Romansa Sekolah', tagline: 'Cinta pertama masa SMA yang manis', mode: 'konsisten', aspect: '9:16', narrator: NARRATOR.hangat,
-    look: look({ style: 'anime-2d', genre: 'romansa', era: '2000s', lens: 'halation', aperture: 'f14', palette: 'senja-dongeng', lighting: 'golden-hour', tempo: 'mengalir' }),
+    family: 'cel-anime', variant: 'anime-2d',
+    look: deriveLook('cel-anime', 'anime-2d', { genre: 'romansa', era: '2000s', lens: 'halation', aperture: 'f14', palette: 'senja-dongeng', lighting: 'golden-hour', tempo: 'mengalir' }),
     example: 'Setiap Senin Nadia menemukan surat tanpa nama di laci mejanya. Di hari kelulusan ia akhirnya tahu pengirimnya dari tulisan tangan di buku catatan yang dipinjamkan Raka.' },
   { id: 'komedi-keluarga', category: 'drama', cover: 'A dad in a flowery apron stares up at a pancake stuck to the kitchen ceiling while grandma and two kids freeze mid-laugh in a flour-covered kitchen.', name: 'Komedi Keluarga', tagline: 'Kekacauan lucu sehari-hari di rumah', mode: 'konsisten', aspect: '9:16', narrator: NARRATOR.jenaka,
-    look: look({ style: 'pixar-3d', genre: 'komedi', era: '2020s', lens: 'clean', aperture: 'f4', palette: 'pagi-keemasan', lighting: 'soft-window', tempo: 'dinamis' }),
+    family: 'clay', variant: 'pixar-3d',
+    look: deriveLook('clay', 'pixar-3d', { genre: 'komedi', era: '2020s', lens: 'clean', aperture: 'f4', palette: 'pagi-keemasan', lighting: 'soft-window', tempo: 'dinamis' }),
     example: 'Ayah bertekad memasak sarapan sendiri saat Ibu ke pasar. Dapur berubah jadi medan perang tepung, dan Nenek diam-diam memesan nasi uduk untuk semua.' },
   { id: 'sci-fi-pendek', category: 'drama', cover: 'A courier in a rain-soaked jacket steers a small hovering boat between flooded skyscrapers glowing with magenta and cyan light.', name: 'Sci-Fi Pendek', tagline: 'Fiksi ilmiah singkat dengan twist di akhir', mode: 'konsisten', aspect: '9:16', narrator: NARRATOR.misteri,
-    look: look({ style: 'live-action', genre: 'petualangan', camera: 'modern', lens: 'anamorphic', aperture: 'f14', palette: 'neon-malam', lighting: 'neon', tempo: 'dinamis' }),
+    family: 'film-real', variant: 'cinematic-drama',
+    look: deriveLook('film-real', 'cinematic-drama', { genre: 'petualangan', camera: 'modern', lens: 'anamorphic', aperture: 'f14', palette: 'neon-malam', lighting: 'neon', tempo: 'dinamis' }),
     example: 'Di Jakarta tahun 2089 yang sudah tenggelam, Bima si kurir perahu terbang menerima paket berisi biji padi terakhir di dunia. Ia harus mengantarnya ke kebun rahasia di atap gedung tertinggi sebelum fajar.' },
   { id: 'cinta-dewasa', category: 'drama', cover: 'A man and a woman in their forties sit across a small table in a quiet train station cafe, two cups of tea between them and rain on the window.', name: 'Cinta Dewasa', tagline: 'Romansa matang yang hangat dan berkelas', mode: 'konsisten', aspect: '9:16', narrator: NARRATOR.hangat,
-    look: look({ style: 'live-action', genre: 'romansa', camera: 'film35', lens: 'warm-vintage', aperture: 'f14', palette: 'kodak-70', lighting: 'soft-window', tempo: 'tenang' }),
+    family: 'film-real', variant: 'cinematic-drama',
+    look: deriveLook('film-real', 'cinematic-drama', { genre: 'romansa', camera: 'film35', lens: 'warm-vintage', aperture: 'f14', palette: 'kodak-70', lighting: 'soft-window', tempo: 'tenang' }),
     example: 'Dua sahabat lama yang dulu saling suka bertemu lagi di stasiun Yogyakarta setelah dua puluh tahun. Satu sore dan satu kereta terakhir menentukan apakah mereka berani jujur.' },
   // — Anak —
   { id: 'fabel-nusantara', category: 'anak', cover: 'A papercut monkey and a tortoise argue beside a banana tree on a riverbank, layers of paper jungle glowing softly behind them.', name: 'Fabel Nusantara', tagline: 'Fabel klasik dalam diorama kertas berlapis', mode: 'konsisten', aspect: '9:16', narrator: NARRATOR.anak,
-    look: look({ style: 'papercut', genre: 'dongeng', aperture: 'f4', palette: 'hutan-zamrud', lighting: 'soft-cross', tempo: 'mengalir' }),
+    family: 'painterly', variant: 'papercut',
+    look: deriveLook('painterly', 'papercut', { genre: 'dongeng', aperture: 'f4', palette: 'hutan-zamrud', lighting: 'soft-cross', tempo: 'mengalir' }),
     example: 'Monyet yang licik membagi pohon pisang dan memberi kura-kura bagian bawahnya. Ternyata hanya bagian milik kura-kura yang tumbuh dan berbuah lebat.' },
   { id: 'lagu-anak', category: 'anak', cover: 'A round yellow duckling brushes its tiny teeth at a pastel bathroom sink overflowing with soap bubbles while a little frog cheers.', name: 'Lagu Anak', tagline: 'Video lagu ceria tentang kebiasaan baik', mode: 'konsisten', aspect: '9:16', narrator: NARRATOR.lagu,
-    look: look({ style: 'lowpoly', genre: 'dongeng', aperture: 'f4', palette: 'pastel-kapas', lighting: 'soft-cross', tempo: 'dinamis' }),
+    family: 'clay', variant: 'lowpoly',
+    look: deriveLook('clay', 'lowpoly', { genre: 'dongeng', aperture: 'f4', palette: 'pastel-kapas', lighting: 'soft-cross', tempo: 'dinamis' }),
     example: 'Lagu tentang Bebek Kuning yang belajar sikat gigi pagi dan malam, dengan reff "gosok, gosok, kiri kanan" yang mudah ditirukan balita. Setiap bait mengenalkan satu kebiasaan baik.' },
   // — Faceless —
   { id: 'fakta-antariksa', category: 'faceless', cover: 'A ringed gas giant rises over the horizon of an icy moon, a distant sun flaring through its rings.', name: 'Fakta Antariksa', tagline: 'Fakta luar angkasa yang bikin takjub', mode: 'cepat', aspect: '9:16', narrator: NARRATOR.dokumenter,
-    look: look({ style: 'live-action', genre: 'dokumenter', camera: 'large-format', lens: 'clean', aperture: 'f11', palette: 'ungu-mistis', lighting: 'contre-jour', tempo: 'dinamis' }),
+    family: 'film-real', variant: 'cinematic-drama',
+    look: deriveLook('film-real', 'cinematic-drama', { genre: 'dokumenter', camera: 'large-format', lens: 'clean', aperture: 'f11', palette: 'ungu-mistis', lighting: 'contre-jour', tempo: 'dinamis' }),
     example: 'Lima fakta luar angkasa yang jarang diketahui: sehari di Venus lebih lama dari setahunnya, dan Saturnus cukup ringan untuk mengapung di air. Ditutup dengan berapa menit cahaya Matahari sampai ke Bumi.' },
   { id: 'misteri-sejarah', category: 'faceless', cover: 'A farmer kneels in a muddy rice field beside his hoe, brushing volcanic ash from a carved stone emerging from the earth.', name: 'Misteri Sejarah', tagline: 'Penemuan dan teka-teki masa lalu Nusantara', mode: 'cepat', aspect: '9:16', narrator: NARRATOR.misteri,
-    look: look({ style: 'documentary', genre: 'noir', camera: 'film35', lens: 'warm-vintage', aperture: 'f4', palette: 'sepia-kenangan', lighting: 'overcast', tempo: 'mengalir' }),
+    family: 'docu', variant: 'docu',
+    look: deriveLook('docu', 'docu', { genre: 'noir', camera: 'film35', lens: 'warm-vintage', aperture: 'f4', palette: 'sepia-kenangan', lighting: 'overcast', tempo: 'mengalir' }),
     example: 'Tahun 1966 seorang petani di Sleman mencangkul sawah dan membentur batu berukir. Di bawahnya ternyata terkubur sebuah candi utuh yang tertimbun abu Merapi selama ratusan tahun.' },
   { id: 'motivasi-stoik', category: 'faceless', cover: 'A lone figure in a long coat stands on a rocky cliff above a sea of fog at dawn, perfectly still against the wind.', name: 'Stoik Harian', tagline: 'Kebijaksanaan stoik untuk hidup lebih tenang', mode: 'cepat', aspect: '9:16', narrator: NARRATOR.bijak,
-    look: look({ style: 'live-action', genre: 'epik', camera: 'large-format', lens: 'anamorphic', aperture: 'f11', palette: 'kabut-industri', lighting: 'silhouette', tempo: 'tenang' }),
+    family: 'film-real', variant: 'cinematic-drama',
+    look: deriveLook('film-real', 'cinematic-drama', { genre: 'epik', camera: 'large-format', lens: 'anamorphic', aperture: 'f11', palette: 'kabut-industri', lighting: 'silhouette', tempo: 'tenang' }),
     example: 'Bedakan yang bisa kamu kendalikan dan yang tidak: pendapat orang, cuaca, dan masa lalu bukan milikmu. Satu prinsip stoik dibahas dengan contoh sehari-hari seperti macet dan komentar pedas.' },
   { id: 'tips-keuangan', category: 'faceless', cover: 'A soft low-poly diorama of a tiny house with a glass jar of coins on its porch slowly growing into a small tree.', name: 'Tips Keuangan', tagline: 'Edukasi uang singkat untuk anak muda', mode: 'cepat', aspect: '9:16', narrator: NARRATOR.ceria,
-    look: look({ style: 'lowpoly', aperture: 'f4', palette: 'hijau-sawah', lighting: 'soft-cross', tempo: 'dinamis' }),
+    family: 'clay', variant: 'lowpoly',
+    look: deriveLook('clay', 'lowpoly', { aperture: 'f4', palette: 'hijau-sawah', lighting: 'soft-cross', tempo: 'dinamis' }),
     example: 'Aturan 50-30-20 untuk gaji pertama: 50 persen kebutuhan, 30 persen keinginan, 20 persen tabungan dan dana darurat. Dijelaskan lewat tiga toples koin yang terisi sedikit demi sedikit.' },
   { id: 'resep-masakan', category: 'faceless', cover: 'Fried rice leaps from a blackened wok over a roaring flame, sliced shallots and a fried egg waiting on a banana leaf beside the stove.', name: 'Resep Kilat', tagline: 'Resep masakan rumahan dalam satu menit', mode: 'cepat', aspect: '9:16', narrator: NARRATOR.ceria,
-    look: look({ style: 'live-action', era: '2020s', camera: 'modern', lens: 'clean', aperture: 'f14', palette: 'malam-hangat', lighting: 'practicals', tempo: 'dinamis' }),
+    family: 'film-real', variant: 'cinematic-drama',
+    look: deriveLook('film-real', 'cinematic-drama', { era: '2020s', camera: 'modern', lens: 'clean', aperture: 'f14', palette: 'malam-hangat', lighting: 'practicals', tempo: 'dinamis' }),
     example: 'Nasi goreng kampung ala warung tenda: bawang merah, cabai, dan terasi diulek kasar, lalu nasi dingin diaduk di wajan panas sampai harum. Disajikan dengan telur ceplok dan kerupuk.' },
   { id: 'asmr-alam', category: 'faceless', cover: 'Raindrops fall on broad banana leaves beside a bamboo spout trickling into a mossy stone basin in a misty village garden.', name: 'Suara Alam', tagline: 'B-roll alam menenangkan untuk relaksasi', mode: 'cepat', aspect: '9:16', narrator: NARRATOR.bisik,
-    look: look({ style: 'documentary', camera: 'large-format', lens: 'clean', aperture: 'f4', palette: 'hutan-zamrud', lighting: 'overcast', tempo: 'tenang' }),
+    family: 'docu', variant: 'docu',
+    look: deriveLook('docu', 'docu', { camera: 'large-format', lens: 'clean', aperture: 'f4', palette: 'hutan-zamrud', lighting: 'overcast', tempo: 'tenang' }),
     example: 'Hujan sore di sebuah desa Sunda: tetes air di daun pisang, pancuran bambu, dan kodok bersahutan di sawah. Narasi berbisik sesekali mengajak penonton menarik napas pelan.' },
   // — Promo —
   { id: 'ulasan-produk', category: 'promo', cover: 'Hands lift a plain white pair of running shoes from a cardboard box on a cozy bed, tissue paper scattered in soft morning light.', name: 'Ulasan Produk', tagline: 'Gaya UGC jujur untuk review dan afiliasi', mode: 'cepat', aspect: '9:16', narrator: NARRATOR.ceria,
-    look: look({ style: 'live-action', era: '2020s', camera: 'modern', lens: 'clean', aperture: 'f14', palette: 'pastel-kapas', lighting: 'soft-window', tempo: 'dinamis' }),
+    family: 'film-real', variant: 'cinematic-drama',
+    look: deriveLook('film-real', 'cinematic-drama', { era: '2020s', camera: 'modern', lens: 'clean', aperture: 'f14', palette: 'pastel-kapas', lighting: 'soft-window', tempo: 'dinamis' }),
     example: 'Ulasan jujur sepatu lari lokal setelah dipakai 30 hari: unboxing, lari pagi, cek sol, lalu kesimpulan cocok untuk siapa. Gaya santai seperti cerita ke teman.' },
   { id: 'kisah-umkm', category: 'promo', cover: 'An older woman slices tempeh paper-thin at a wooden table in a sunlit home kitchen, golden chips cooling on bamboo trays around her.', name: 'Kisah UMKM', tagline: 'Iklan bercerita tentang usaha lokal', mode: 'konsisten', aspect: '9:16', narrator: NARRATOR.hangat,
-    look: look({ style: 'live-action', genre: 'drama', era: '2020s', camera: 'film35', lens: 'warm-vintage', aperture: 'f14', palette: 'batik-tanah', lighting: 'golden-hour', tempo: 'mengalir' }),
+    family: 'film-real', variant: 'cinematic-drama',
+    look: deriveLook('film-real', 'cinematic-drama', { genre: 'drama', era: '2020s', camera: 'film35', lens: 'warm-vintage', aperture: 'f14', palette: 'batik-tanah', lighting: 'golden-hour', tempo: 'mengalir' }),
     example: 'Bu Ningsih memulai usaha keripik tempe dari dapur rumahnya di Malang dengan satu wajan. Kini keripiknya dikirim ke seluruh Indonesia, tapi setiap irisan masih dipotong dengan tangan.' },
   // — Edukasi —
   { id: 'belajar-angka-huruf', category: 'edukasi', cover: 'Ten handmade clay apples roll one by one into a woven basket on a bright tabletop, each a slightly different shade of red.', name: 'Belajar Angka & Huruf', tagline: 'Mengenal angka dan huruf lewat benda sehari-hari', mode: 'cepat', aspect: '9:16', narrator: NARRATOR.anak,
-    look: look({ style: 'claymation', aperture: 'f4', palette: 'riviera', lighting: 'soft-cross', tempo: 'montase' }),
+    family: 'clay', variant: 'clay',
+    look: deriveLook('clay', 'clay', { aperture: 'f4', palette: 'riviera', lighting: 'soft-cross', tempo: 'montase' }),
     example: 'Hitung bersama dari satu sampai sepuluh: satu apel, dua bebek, tiga balon, sampai sepuluh bintang. Setiap angka muncul bersama benda yang bisa dihitung anak dengan jarinya.' },
   { id: 'sains-anak', category: 'edukasi', cover: 'A curious girl and a small round robot gaze through a giant magnifying glass at a rainbow arching over a city park after rain.', name: 'Sains Cilik', tagline: 'Menjawab pertanyaan "kenapa" anak dengan ceria', mode: 'konsisten', aspect: '9:16', narrator: NARRATOR.anak,
-    look: look({ style: 'pixar-3d', genre: 'petualangan', lens: 'clean', aperture: 'f4', palette: 'riviera', lighting: 'golden-hour', tempo: 'mengalir' }),
+    family: 'clay', variant: 'pixar-3d',
+    look: deriveLook('clay', 'pixar-3d', { genre: 'petualangan', lens: 'clean', aperture: 'f4', palette: 'riviera', lighting: 'golden-hour', tempo: 'mengalir' }),
     example: 'Tara bertanya kenapa pelangi muncul setelah hujan. Robot kecilnya, Bolt, mengajak Tara mengecil dan masuk ke dalam tetes air untuk melihat cahaya terpecah menjadi tujuh warna.' },
   { id: 'sejarah-singkat', category: 'edukasi', cover: 'A fleet of wooden sailing ships with woven sails leaves a busy ancient harbor at sunrise, sacks of cloves and nutmeg stacked on the docks.', name: 'Sejarah Singkat', tagline: 'Peristiwa sejarah dalam satu menit', mode: 'cepat', aspect: '9:16', narrator: NARRATOR.dokumenter,
-    look: look({ style: 'live-action', genre: 'epik', era: 'kerajaan', camera: 'film35', lens: 'anamorphic', aperture: 'f4', palette: 'sepia-kenangan', lighting: 'golden-hour', tempo: 'dinamis' }),
+    family: 'film-real', variant: 'cinematic-drama',
+    look: deriveLook('film-real', 'cinematic-drama', { genre: 'epik', era: 'kerajaan', camera: 'film35', lens: 'anamorphic', aperture: 'f4', palette: 'sepia-kenangan', lighting: 'golden-hour', tempo: 'dinamis' }),
     example: 'Bagaimana cengkih dan pala dari Nusantara pernah lebih berharga dari emas dan mengubah peta dunia. Kisah jalur rempah dari pelabuhan kuno sampai datangnya kapal-kapal Eropa.' },
   // — Horor & misteri —
   { id: 'urban-legend', category: 'horor', cover: 'Three teenagers with flashlights stand at the gate of an old colonial school building at night, mist curling around a huge banyan tree.', name: 'Legenda Urban', tagline: 'Kisah seram kampung yang aman ditonton', mode: 'konsisten', aspect: '9:16', narrator: NARRATOR.misteri,
-    look: look({ style: 'live-action', genre: 'horor', era: '1990s', camera: 'film35', lens: 'halation', aperture: 'f14', palette: 'kabut-industri', lighting: 'moonlight', tempo: 'mengalir' }),
+    family: 'film-real', variant: 'cinematic-drama',
+    look: deriveLook('film-real', 'cinematic-drama', { genre: 'horor', era: '1990s', camera: 'film35', lens: 'halation', aperture: 'f14', palette: 'kabut-industri', lighting: 'moonlight', tempo: 'mengalir' }),
     example: 'Setiap malam Jumat terdengar suara gamelan dari aula sekolah tua. Tiga sahabat memberanikan diri masuk dan menemukan penjaga sekolah yang diam-diam berlatih untuk pentas perpisahannya.' },
   { id: 'kasus-misteri', category: 'horor', cover: 'An empty museum gallery at night with a bare picture frame on the wall, a stopped clock and a single desk lamp casting long shadows.', name: 'Kasus Misteri', tagline: 'Narasi detektif ala true crime, tanpa kekerasan', mode: 'cepat', aspect: '9:16', narrator: NARRATOR.misteri,
-    look: look({ style: 'live-action', genre: 'noir', era: '1980s', camera: 'film35', lens: 'anamorphic', aperture: 'f14', palette: 'noir', lighting: 'practicals', tempo: 'mengalir' }),
+    family: 'film-real', variant: 'cinematic-drama',
+    look: deriveLook('film-real', 'cinematic-drama', { genre: 'noir', era: '1980s', camera: 'film35', lens: 'anamorphic', aperture: 'f14', palette: 'noir', lighting: 'practicals', tempo: 'mengalir' }),
     example: 'Tahun 1987 sebuah lukisan hilang dari museum kota kecil tanpa satu pun pintu dibobol. Detektif tua Pak Hasan memecahkannya hanya dari jam dinding yang berhenti tepat pukul dua.' },
   // — Budaya —
   { id: 'silat-nusantara', category: 'budaya', cover: 'Two silat fighters in batik sarongs face each other in a misty bamboo forest, fallen leaves suspended in the air between them.', name: 'Silat Nusantara', tagline: 'Laga pendekar silat di zaman kerajaan', mode: 'konsisten', aspect: '9:16', narrator: NARRATOR.epik,
-    look: look({ style: 'live-action', genre: 'aksi', era: 'kerajaan', camera: 'film35', lens: 'anamorphic', aperture: 'f4', palette: 'hutan-zamrud', lighting: 'contre-jour', tempo: 'dinamis' }),
+    family: 'film-real', variant: 'cinematic-drama',
+    look: deriveLook('film-real', 'cinematic-drama', { genre: 'aksi', era: 'kerajaan', camera: 'film35', lens: 'anamorphic', aperture: 'f4', palette: 'hutan-zamrud', lighting: 'contre-jour', tempo: 'dinamis' }),
     example: 'Seorang pendekar muda harus menghadapi gurunya sendiri yang kini mengabdi pada raja lalim. Di akhir duel ia menurunkan kerisnya dan memenangkan hati sang guru tanpa menumpahkan darah.' },
   { id: 'wisata-nusantara', category: 'budaya', cover: 'Sunrise over the jagged green ridges of an island above three curved turquoise bays, wooden boats anchored far below.', name: 'Wisata Nusantara', tagline: 'Jelajah destinasi Indonesia yang memukau', mode: 'cepat', aspect: '9:16', narrator: NARRATOR.dokumenter,
-    look: look({ style: 'documentary', genre: 'petualangan', camera: 'large-format', lens: 'clean', aperture: 'f11', palette: 'hijau-sawah', lighting: 'golden-hour', tempo: 'dinamis' }),
+    family: 'docu', variant: 'docu',
+    look: deriveLook('docu', 'docu', { genre: 'petualangan', camera: 'large-format', lens: 'clean', aperture: 'f11', palette: 'hijau-sawah', lighting: 'golden-hour', tempo: 'dinamis' }),
     example: 'Tiga hari di Flores: mendaki Pulau Padar saat matahari terbit, berenang di Pantai Merah Muda, lalu menyaksikan danau tiga warna Kelimutu. Ditutup dengan waktu terbaik berkunjung dan perkiraan biaya.' }
 ];
 
-export const CATALOG = { templates, categories: TEMPLATE_CATEGORIES, styles, genres, eras, tempos, cameras, lenses, apertures, palettes, lighting, framings, moves };
+export const CATALOG = { templates, categories: TEMPLATE_CATEGORIES, families: FAMILIES, styles, genres, eras, tempos, cameras, lenses, apertures, palettes, lighting, framings, moves };
 export type Catalog = typeof CATALOG;
 
 const pick = <T extends Option>(list: T[], id: string | undefined, fallback = 'auto') =>
@@ -322,7 +441,12 @@ const pick = <T extends Option>(list: T[], id: string | undefined, fallback = 'a
 export function resolveLook(input: { template?: string; look?: Partial<Record<keyof Look, unknown>> }): Look {
   const base = templates.find(t => t.id === input.template)?.look ?? look({});
   const want = (key: keyof Look) => (typeof input.look?.[key] === 'string' ? (input.look[key] as string) : base[key]);
+  // Keep the family/variant pair when the caller sends a valid one (the compiler prefers it over `style`).
+  const fam = typeof input.look?.family === 'string' ? input.look.family.trim() : '';
+  const vrt = typeof input.look?.variant === 'string' ? input.look.variant.trim() : '';
+  const resolved = fam ? lookById(vrt && vrt !== fam ? `${fam}:${vrt}` : fam) ?? lookById(fam) : undefined;
   return {
+    ...(resolved ? { family: resolved.family, variant: resolved.variant } : {}),
     style: pick(styles, want('style'), 'storybook').id,
     genre: pick(genres, want('genre')).id,
     era: pick(eras, want('era')).id,

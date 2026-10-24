@@ -177,6 +177,22 @@ describe('StudioPage — prompt', () => {
     expect(screen.getByRole('status', { name: /pemberitahuan/i })).toHaveTextContent(/masuk antrean/i);
   });
 
+  it('gaya di composer = keluarga + varian, dan varian mengisi baris Style di prompt', async () => {
+    const user = userEvent.setup();
+    renderPage(makeFetch());
+    await ready();
+    await toPrompt(user);
+    await user.type(screen.getByLabelText(/subjek/i), 'a paper boat on a rainy street');
+    expect(screen.getByRole('combobox', { name: /varian/i })).toHaveTextContent(/keluarga dulu/i);
+    await user.click(screen.getByRole('combobox', { name: /keluarga gaya/i }));
+    await user.click(await screen.findByRole('option', { name: /^Dokumenter/ }));
+    await user.click(screen.getByRole('combobox', { name: /varian/i }));
+    await user.click(await screen.findByRole('option', { name: /^Observasional/ }));
+    expect(screen.getByTestId('composed-prompt').textContent).toContain('Style: photorealistic documentary footage');
+    // Gaya is a picker, never a native select.
+    expect(document.querySelectorAll('select, input[type=radio], input[type=checkbox]')).toHaveLength(0);
+  });
+
   it('durasi lewat Choice dan rasio lewat Segmented ikut terkirim', async () => {
     const user = userEvent.setup();
     let posted: Record<string, unknown> | undefined;

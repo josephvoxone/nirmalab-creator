@@ -1,12 +1,13 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { Aperture, Clapperboard, Palette as PaletteIcon, Sparkles, SunMedium, X } from 'lucide-react';
 import { DEFAULT_LOOK, LIST_OF, optionOf, type Catalog, type Look, type LookKey, type Option, type Palette } from './catalog.js';
+import { LOOK_FAMILIES, lookLabel, readLookPick, variantPatch, type LookFamily, type LookVariant } from '../bible/looks.js';
 
 type Tab = { key: LookKey; label: string; hint: string };
 type ChipDef = { id: string; label: string; icon: ReactNode; tabs: Tab[] };
 
 export const CHIPS: ChipDef[] = [
-  { id: 'style', label: 'Gaya visual', icon: <Sparkles size={16} />, tabs: [{ key: 'style', label: 'Gaya', hint: 'Satu gaya untuk semua shot, karakter dan keyframe' }] },
+  { id: 'style', label: 'Gaya visual', icon: <Sparkles size={16} />, tabs: [{ key: 'style', label: 'Gaya', hint: 'Keluarga gaya + varian, satu untuk semua shot, karakter dan keyframe' }] },
   { id: 'film', label: 'Film setup', icon: <Clapperboard size={16} />, tabs: [
     { key: 'genre', label: 'Genre', hint: 'Konvensi cerita yang diikuti model' },
     { key: 'era', label: 'Era', hint: 'Periode dan nuansa zaman' },
@@ -22,6 +23,8 @@ export const CHIPS: ChipDef[] = [
 ];
 
 function summary(catalog: Catalog, look: Look, chip: ChipDef): string {
+  // Gaya is a family + variant now; the other chips still name their catalog option.
+  if (chip.id === 'style') return lookLabel(look);
   const labels = chip.tabs
     .filter(t => t.key !== 'tempo' && (look[t.key] !== 'auto' || chip.tabs.length === 1))
     .map(t => optionOf(catalog, t.key, look[t.key])?.label ?? 'Auto');
@@ -103,6 +106,43 @@ function LookDialog({ catalog, chip, look, onChange, onClose }: { catalog: Catal
   );
 }
 
+
+/** Gaya: six families first, then their named variants — both labels on every option. */
+function StyleDialog({ look, onChange, onClose }: { look: Look; onChange: (p: Partial<Look>) => void; onClose: () => void }) {
+  const current = readLookPick(look);
+  const [family, setFamily] = useState<LookFamily>(current?.family ?? LOOK_FAMILIES[0]!);
+  const pick = (variant: LookVariant) => { onChange(variantPatch(family, variant) as Partial<Look>); onClose(); };
+  return (
+    <Dialog title="Gaya visual" onClose={onClose} wide>
+      <div className="dialog-body">
+        <nav className="dialog-tabs" role="tablist" aria-label="Keluarga gaya">
+          {LOOK_FAMILIES.map(f => (
+            <button key={f.id} type="button" role="tab" aria-selected={f.id === family.id} className={f.id === family.id ? 'active' : ''} onClick={() => setFamily(f)}>
+              {f.label}
+              <span aria-hidden="true">· {f.variants.length} varian</span>
+            </button>
+          ))}
+        </nav>
+        <div className="dialog-panel" role="tabpanel">
+          <div className="dialog-panel-head"><b>{family.label}</b><span>{family.hint}</span></div>
+          <div className="option-grid">
+            {family.variants.map(v => {
+              const selected = current?.family.id === family.id && current.variant.id === v.id;
+              return (
+                <button key={v.id} type="button" className={`option-card${selected ? ' selected' : ''}`} aria-pressed={selected} onClick={() => pick(v)}>
+                  <b>{v.label}</b>
+                  <span>{family.label} · {v.hint}</span>
+                </button>
+              );
+            })}
+          </div>
+          <div className="dialog-foot"><button type="button" className="btn btn-primary" onClick={onClose}>Selesai</button></div>
+        </div>
+      </div>
+    </Dialog>
+  );
+}
+
 /** Higgsfield-style chip row: caption + current value, each opens its picker. */
 export function LookChips({ catalog, look, onChange, disabled }: { catalog: Catalog; look: Look; onChange: (p: Partial<Look>) => void; disabled?: boolean }) {
   const [open, setOpen] = useState<string>();
@@ -118,7 +158,9 @@ export function LookChips({ catalog, look, onChange, disabled }: { catalog: Cata
           </button>
         ))}
       </div>
-      {chip && <LookDialog catalog={catalog} chip={chip} look={look} onChange={onChange} onClose={() => setOpen(undefined)} />}
+      {chip && (chip.id === 'style'
+        ? <StyleDialog look={look} onChange={onChange} onClose={() => setOpen(undefined)} />
+        : <LookDialog catalog={catalog} chip={chip} look={look} onChange={onChange} onClose={() => setOpen(undefined)} />)}
     </>
   );
 }

@@ -14,7 +14,8 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type { FlowStore } from '../flow/store.js';
 import { linkOrCopy } from '../media/link.js';
-import { CREDITS_PER_SHOT, buildShotPrompt, castOf, characterSheetPrompt, framePrompt, normalizeScenes, shotCast, validateStoryboard, type Storyboard } from './storyboard.js';
+import { CREDITS_PER_SHOT, castOf, frameHashFor, framePromptFor, hashFor, normalizeScenes, sheetHashFor, sheetPromptFor, shotCast, shotPromptFor, validateStoryboard, type Storyboard } from './storyboard.js';
+import { ShotCompileError } from '../bible/compiler.js';
 
 import { composeStyle, resolveLook } from './looks.js';
 import { usdLabel } from '../providers/catalog.js';
@@ -250,12 +251,13 @@ export class StoryService {
       // must not throw away paid clips because the stored hash came from an older builder.
       const beforeShots = new Map((before?.shots ?? []).map(s => [s.id, s]));
       const beforeCast = new Map(before ? castOf(before).map(c => [c.token, c]) : []);
-      const clipHash = (b: Storyboard, shot: Storyboard['shots'][number]) => (shot.reuse ? hash(JSON.stringify(shot.reuse)) : hash(buildShotPrompt(b, shot)));
+      // Bible boards hash PROMPT_VERSION + the compiled prompt; legacy boards hash exactly what they did before.
+      const clipHash = (b: Storyboard, shot: Storyboard['shots'][number]) => hashFor(b, shot);
       const same = (stored: string | undefined, now: string, was: () => string | undefined) => stored === now || was() === now;
       record.cast = konsisten ? castOf(board).map(c => {
         const old = oldCast.get(c.token);
-        const h = hash(characterSheetPrompt(c, board));
-        const was = () => { const bc = beforeCast.get(c.token); return bc && before ? hash(characterSheetPrompt(bc, before)) : undefined; };
+        const h = sheetHashFor(c, board);
+        const was = () => { const bc = beforeCast.get(c.token); return bc && before ? sheetHashFor(bc, before) : undefined; };
         return old && old.status === 'done' && same(old.promptHash, h, was) ? { ...old, promptHash: h } : { token: c.token, name: c.name, status: 'pending' as const, attempts: 0 };
       }) : undefined;
       const castChanged = new Set((record.cast ?? []).filter(c => c.status !== 'done').map(c => c.token));
@@ -264,9 +266,9 @@ export class StoryService {
         const old = previous.get(shot.id);
         const prev = beforeShots.get(shot.id);
         const promptHash = clipHash(board, shot);
-        const frameHash = konsisten && !shot.reuse ? hash(framePrompt(board, shot)) : undefined;
+        const frameHash = konsisten && !shot.reuse ? frameHashFor(board, shot) : undefined;
         const keepFrame = konsisten && old?.frame?.status === 'done' && frameHash !== undefined
-          && same(old.frame.promptHash, frameHash, () => (prev && before && !prev.reuse ? hash(framePrompt(before, prev)) : undefined))
+          && same(old.frame.promptHash, frameHash, () => (prev && before && !prev.reuse ? frameHashFor(before, prev) : undefined))
           && !shotCast(board, shot).some(c => castChanged.has(c.token));
         const frame = konsisten && !shot.reuse ? (keepFrame ? { ...old!.frame!, promptHash: frameHash } : { status: 'pending' as const, attempts: 0 }) : undefined;
         const keepClip = old?.status === 'done' && same(old.promptHash, promptHash, () => (prev && before ? clipHash(before, prev) : undefined));
@@ -319,7 +321,7 @@ export class StoryService {
   private async queueShot(record: StoryRecord, board: Storyboard, shotId: string): Promise<void> {
     const shot = board.shots.find(s => s.id === shotId)!;
     const state = record.shots.find(s => s.id === shotId)!;
-    const prompt = buildShotPrompt(board, shot);
+    const prompt = this.compiled(() => shotPromptFor(board, shot), shotId);
     const konsisten = record.mode === 'konsisten';
     const engine = this.engine(board, 'video');
     const job = await this.deps.flow.createJob({
@@ -340,7 +342,7 @@ export class StoryService {
       } : {})
     });
     state.jobId = job.id;
-    state.promptHash = hash(prompt);
+    state.promptHash = hashFor(board, shot);
     state.status = 'queued';
     state.error = undefined;
   }
@@ -659,21 +661,31 @@ export class StoryService {
     });
   }
 
+  /** A bible shot with a missing slot is a bad storyboard (400), not a provider failure (503). */
+  private compiled(build: () => string, shotId?: string): string {
+    try {
+      return build();
+    } catch (error) {
+      if (error instanceof ShotCompileError) throw new StoryError('INVALID', `${shotId ? `${shotId}: ` : ''}${error.message}`);
+      throw error;
+    }
+  }
+
   private async queueCast(record: StoryRecord, board: Storyboard, cast: CastState): Promise<void> {
     const member = castOf(board).find(c => c.token === cast.token)!;
-    const prompt = characterSheetPrompt(member, board);
+    const prompt = sheetPromptFor(member, board);
     const job = await this.deps.flow.createJob({
       prompt, kind: 'character', group: record.id, aspect: '16:9', durationSec: 6, ...this.owner(record), ...this.engine(board, 'image'),
       technique: `story:${record.id}/cast:${cast.token}`,
       characters: [{ name: member.name, look: member.look }]
     });
-    Object.assign(cast, { jobId: job.id, status: 'queued', promptHash: hash(prompt), error: undefined });
+    Object.assign(cast, { jobId: job.id, status: 'queued', promptHash: sheetHashFor(member, board), error: undefined });
   }
 
   private async queueFrame(record: StoryRecord, board: Storyboard, shotId: string): Promise<void> {
     const shot = board.shots.find(s => s.id === shotId)!;
     const state = record.shots.find(s => s.id === shotId)!;
-    const prompt = framePrompt(board, shot);
+    const prompt = this.compiled(() => framePromptFor(board, shot), shot.id);
     const engine = this.engine(board, 'image');
     const job = await this.deps.flow.createJob({
       prompt, kind: 'image', group: record.id, aspect: board.aspect ?? '9:16', durationSec: 6, ...this.owner(record), ...engine,
@@ -682,7 +694,7 @@ export class StoryService {
       // OpenRouter gets the approved cast sheets as input references.
       ...(engine.provider === 'openrouter' ? { references: shotCast(board, shot).map(c => this.castPath(record.id, c.token)) } : {})
     });
-    state.frame = { ...(state.frame ?? { attempts: 0 }), status: 'queued', jobId: job.id, promptHash: hash(prompt), error: undefined } as TakeState;
+    state.frame = { ...(state.frame ?? { attempts: 0 }), status: 'queued', jobId: job.id, promptHash: frameHashFor(board, shot), error: undefined } as TakeState;
   }
 
   private async queueFrames(record: StoryRecord, board: Storyboard): Promise<void> {

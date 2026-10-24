@@ -1,8 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { CATALOG, TEMPLATE_CATEGORIES, composeStyle, resolveLook, setShotSetup } from '../src/stories/looks.js';
+import {
+  CATALOG, FAMILIES, TEMPLATE_CATEGORIES, composeStyle, deriveLook, familyOfStyle, resolveLook, setShotSetup, styleForVariant
+} from '../src/stories/looks.js';
+import { LEGACY_STYLE_MAP } from '../src/bible/styles.js';
 import { validateStoryboard } from '../src/stories/storyboard.js';
 
 const ids = <T extends { id: string }>(xs: T[]) => xs.map(x => x.id);
+
+const FAMILY_IDS = ['film-real', 'painterly', 'cel-anime', 'clay', 'docu', 'noir'];
+// Every variant the picker offers; `clay` is the clay base (claymation) and `docu` the docu one.
+const NAMED_VARIANTS = ['storybook', 'papercut', 'wayang', 'comic', 'anime-2d', 'pixar-3d', 'lowpoly', 'clay', 'docu', 'cinematic-drama', 'noir'];
 
 describe('looks catalog', () => {
   it('is complete enough to pick from like a studio', () => {
@@ -40,6 +47,61 @@ describe('looks catalog', () => {
       const board = { title: 't', shots: [{ id: 'a', prompt: setShotSetup('A girl walks home.', 'medium', m.id), narration: 'Halo.' }] };
       expect(validateStoryboard(board), m.id).toEqual([]);
     }
+  });
+});
+
+describe('look families (family + variant)', () => {
+  it('exposes the six families, each with labelled variants; named styles stay variants', () => {
+    expect(FAMILIES.map(f => f.id)).toEqual(FAMILY_IDS);
+    expect(CATALOG.families).toBe(FAMILIES);
+    for (const family of FAMILIES) {
+      expect(family.label.length, family.id).toBeGreaterThan(2);
+      expect(family.hint.length, family.id).toBeGreaterThan(10);
+      expect(family.variants.length, family.id).toBeGreaterThanOrEqual(1);
+      for (const v of family.variants) {
+        expect(v.id, family.id).toMatch(/^[a-z0-9]+(-[a-z0-9]+)*$/);
+        expect(v.label.trim().length, `${family.id}/${v.id}`).toBeGreaterThan(2);
+      }
+    }
+    const all = FAMILIES.flatMap(f => f.variants.map(v => v.id));
+    // One variant id belongs to exactly one family, so family+variant resolves deterministically.
+    expect(new Set(all).size).toBe(all.length);
+    for (const id of NAMED_VARIANTS) expect(all, `${id} is still pickable`).toContain(id);
+    for (const id of ['wayang', 'comic', 'papercut', 'lowpoly']) expect(FAMILY_IDS).not.toContain(id);
+  });
+
+  it('every template maps to an existing family + variant and derives its look from it', () => {
+    for (const t of CATALOG.templates) {
+      const family = FAMILIES.find(f => f.id === t.family);
+      expect(family, `${t.id}: family ${t.family}`).toBeDefined();
+      expect(family!.variants.map(v => v.id), `${t.id}: variant ${t.variant}`).toContain(t.variant);
+      expect(styleForVariant(t.variant), `${t.id}: variant -> legacy style`).toBe(t.look.style);
+      expect(deriveLook(t.family, t.variant).style, `${t.id}: derived look`).toBe(t.look.style);
+      expect(familyOfStyle(t.look.style), `${t.id}: style -> family`).toBe(t.family);
+      expect(ids(CATALOG.styles), `${t.id}: style exists`).toContain(t.look.style);
+    }
+  });
+
+  it('agrees with the bible source of truth (bible/styles.ts LEGACY_STYLE_MAP), so a board picked here compiles', () => {
+    for (const style of CATALOG.styles) {
+      const legacy = LEGACY_STYLE_MAP[style.id];
+      if (!legacy) continue; // styles only the legacy path knows
+      expect(familyOfStyle(style.id), style.id).toBe(legacy.family);
+      expect(styleForVariant(legacy.variant), `${legacy.family}:${legacy.variant}`).toBe(style.id);
+    }
+  });
+
+  it('covers every legacy style with exactly one family, and falls back deterministically', () => {
+    for (const s of CATALOG.styles) expect(familyOfStyle(s.id), s.id).toBeDefined();
+    for (const [style, family] of [['documentary', 'docu'], ['live-action', 'film-real'], ['claymation', 'clay']] as const) {
+      expect(familyOfStyle(style)).toBe(family);
+    }
+    expect(familyOfStyle('nope')).toBeUndefined();
+    expect(styleForVariant('nope')).toBeUndefined();
+    expect(deriveLook('painterly', 'wayang').style).toBe('wayang');
+    expect(deriveLook('painterly', 'nope').style).toBe('storybook');
+    expect(deriveLook('nope', 'wayang').style).toBe('storybook');
+    expect(deriveLook('clay', 'lowpoly', { genre: 'komedi' })).toMatchObject({ style: 'lowpoly', genre: 'komedi', palette: 'auto' });
   });
 });
 

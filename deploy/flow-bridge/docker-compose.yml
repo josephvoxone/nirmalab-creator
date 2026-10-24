@@ -1,0 +1,33 @@
+# Dokploy compose app: nirmalab-flow-bridge
+#
+# Same two processes as the Mac (bridge daemon + a real signed-in Chrome), but in a
+# container on the VPS. No inbound port is needed for normal work — the bridge claims
+# jobs over outbound HTTPS. Publish 6080 only for the one-time Flow login, then remove.
+#
+# Deploy: build the image locally (context ~/tools), push to your registry, and point
+# this app at that image. Do NOT let Dokploy build from git: the build context needs
+# google-flow-mcp next to nirmalab-creator/bridge.
+services:
+  flow-bridge:
+    image: registry.nirmalab.com/nirmalab-flow-bridge:0.1
+    command: ["/app/run.sh"]
+    restart: unless-stopped
+    shm_size: "1gb"                 # Chrome crashes on the 64 MB default /dev/shm
+    environment:
+      - FLOW_BRIDGE_TOKEN=${FLOW_BRIDGE_TOKEN}     # must equal /data/flow/bridge-token on the app
+      - CREATOR_URL=${CREATOR_URL}                 # https://creator.nirmalab.com
+      - FLOW_MAX_CREDITS=${FLOW_MAX_CREDITS:-20}
+      - FLOW_RESOLUTION=${FLOW_RESOLUTION:-360p}
+      - FLOW_LOGIN=${FLOW_LOGIN:-0}                # 1 = expose noVNC for the first login
+    volumes:
+      - flow-bridge-data:/data
+    # ports:
+    #   - "6080:6080"                # noVNC, only while FLOW_LOGIN=1
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 3G               # a real job peaked at 1.24 GB — 1500M would OOM-kill mid-clip
+
+volumes:
+  flow-bridge-data:

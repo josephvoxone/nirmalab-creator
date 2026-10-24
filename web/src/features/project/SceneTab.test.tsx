@@ -86,11 +86,13 @@ describe('Scene tab — scene board header', () => {
     await open(api);
     const title = within(board()).getByRole('textbox', { name: 'Judul scene' });
     await userEvent.clear(title);
+    await waitFor(() => expect(title).toHaveValue(''));
     await userEvent.type(title, 'Menanti{Enter}');
     expect((await lastPut(api)).scenes![0]).toMatchObject({ id: 'menunggu', title: 'Menanti', summary: 'Jingga menunggu di pagar.', location: 'PAGAR' });
 
     const summary = within(board()).getByRole('textbox', { name: 'Ringkasan scene' });
     await userEvent.clear(summary);
+    await waitFor(() => expect(summary).toHaveValue(''));
     await userEvent.type(summary, 'Sore yang panjang.');
     await userEvent.tab();
     await waitFor(() => expect(puts(api).at(-1)!.scenes![0]!.summary).toBe('Sore yang panjang.'));

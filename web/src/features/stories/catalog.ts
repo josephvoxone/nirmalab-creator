@@ -1,22 +1,37 @@
 /** Studio picker catalog (served by GET /api/stories/catalog) + pure prompt helpers. */
 import { useEffect, useState } from 'react';
+import { readLookPick, variantPatch, type LookFamily } from '../bible/looks.js';
 
 export type Option = { id: string; label: string; hint?: string; prompt: string };
 export type Palette = Option & { swatches: string[] };
 export type Tempo = Option & { shots: number };
 export type LookKey = 'style' | 'genre' | 'era' | 'camera' | 'lens' | 'aperture' | 'palette' | 'lighting' | 'tempo';
-export type Look = Record<LookKey, string>;
-export type Template = { id: string; category?: string; cover?: string; name: string; tagline: string; mode: 'konsisten' | 'cepat'; aspect: '9:16' | '16:9'; narrator: string; example: string; look: Look };
+/**
+ * `style` is the legacy id the server composes the Style line from; `family`+`variant` are the
+ * grammar the picker now drives (six families, their named variants). Both travel with the board.
+ */
+export type Look = Record<LookKey, string> & { family?: string; variant?: string };
+export type Template = { id: string; category?: string; cover?: string; name: string; tagline: string; mode: 'konsisten' | 'cepat'; aspect: '9:16' | '16:9'; narrator: string; example: string; family?: string; variant?: string; look: Look };
 export type Catalog = {
   templates: Template[]; styles: Option[]; genres: Option[]; eras: Option[]; tempos: Tempo[];
   cameras: Option[]; lenses: Option[]; apertures: Option[]; palettes: Palette[]; lighting: Option[];
-  framings: Option[]; moves: Option[];
+  framings: Option[]; moves: Option[]; families?: LookFamily[];
 };
 
 export type CoverState = { pending: boolean; error?: string; updatedAtMs?: number };
 export type Covers = Record<string, CoverState>;
 
-export const DEFAULT_LOOK: Look = { style: 'storybook', genre: 'auto', era: 'auto', camera: 'auto', lens: 'auto', aperture: 'auto', palette: 'auto', lighting: 'auto', tempo: 'mengalir' };
+export const DEFAULT_LOOK: Look = {
+  style: 'storybook', family: 'painterly', variant: 'storybook',
+  genre: 'auto', era: 'auto', camera: 'auto', lens: 'auto', aperture: 'auto', palette: 'auto', lighting: 'auto', tempo: 'mengalir'
+};
+
+/** Template → look: family+variant come from the template (or, on an older server, from its style). */
+export function lookForTemplate(t: Template): Look {
+  const look: Look = { ...DEFAULT_LOOK, ...t.look };
+  const pick = readLookPick({ family: t.family ?? look.family, variant: t.variant ?? look.variant, style: look.style });
+  return pick ? { ...look, ...variantPatch(pick.family, pick.variant) } : look;
+}
 
 export const LIST_OF: Record<LookKey, keyof Catalog> = {
   style: 'styles', genre: 'genres', era: 'eras', camera: 'cameras', lens: 'lenses', aperture: 'apertures', palette: 'palettes', lighting: 'lighting', tempo: 'tempos'

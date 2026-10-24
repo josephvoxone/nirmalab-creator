@@ -11,12 +11,14 @@ import { stageOf } from './model.js';
 import { nextStep, type NextStep } from './nextStep.js';
 import { ProjectProvider, useProjectState, type Project } from './useProject.js';
 import { SceneTab } from './SceneTab.js';
+import { BibleTab } from './BibleTab.js';
 import { BreakdownTab } from './BreakdownTab.js';
 import { TimelineTab } from './TimelineTab.js';
 import { ResultTab } from './ResultTab.js';
 
 const TABS = [
   { id: 'scene', label: 'Scene' },
+  { id: 'bible', label: 'Bible' },
   { id: 'breakdown', label: 'Breakdown' },
   { id: 'timeline', label: 'Timeline' },
   { id: 'hasil', label: 'Hasil' },
@@ -184,6 +186,7 @@ export function ProjectPage(props: { pollMs?: number }) {
         </div>
         <div role="tabpanel" id={`ppanel-${tab}`} aria-labelledby={`ptab-${tab}`} className="min-w-0">
           {tab === 'scene' && <SceneTab />}
+          {tab === 'bible' && <BibleTab />}
           {tab === 'breakdown' && <BreakdownTab />}
           {tab === 'timeline' && <TimelineTab />}
           {tab === 'hasil' && <ResultTab />}

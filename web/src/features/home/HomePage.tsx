@@ -9,8 +9,9 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { useSession } from '../../lib/session.js';
 import { useHistory } from '../../shell/history.js';
 import { storiesApi, CREDITS_PER_SHOT } from '../stories/storiesClient.js';
-import { DEFAULT_LOOK, optionOf, useCatalog, type Look } from '../stories/catalog.js';
+import { DEFAULT_LOOK, lookForTemplate, useCatalog, type Look } from '../stories/catalog.js';
 import { LookChips } from '../stories/LookChips.js';
+import { lookLabel } from '../bible/looks.js';
 import '../stories/studio.css';
 import { errorText } from '../settings/settingsClient.js';
 import { readPrefs } from '../../lib/prefs.js';
@@ -72,7 +73,7 @@ export default function HomePage() {
 
   const pick = useCallback((t: CatTemplate) => {
     setTemplate(t);
-    setLook({ ...DEFAULT_LOOK, ...t.look });
+    setLook(lookForTemplate(t));
     const n = shotsFor(t.look.tempo);
     if (n) setShots(n);
     setPrompt(t.example);
@@ -174,9 +175,9 @@ export default function HomePage() {
         <ComposerPick label="Rasio" value={aspect} options={ASPECTS} onValueChange={setAspect} align="start" />
         <ComposerPick label="Durasi" value={shots} options={SHOTS.map(s => ({ value: s, label: `${s} shot · ±${Number(s) * 6} dtk` }))} onValueChange={setShots} align="start" />
         <EngineMenu kind="video" catalog={engines} value={engine.video} onChange={e => setProvider(e.provider)} />
-        <button type="button" aria-expanded={lookOpen} aria-controls="home-look" aria-label={`Atur gaya: ${catalog ? (optionOf(catalog, 'style', look.style)?.label ?? 'Gaya') : 'Gaya'}`} onClick={() => setLookOpen(v => !v)}
+        <button type="button" aria-expanded={lookOpen} aria-controls="home-look" aria-label={`Atur gaya: ${lookLabel(look)}`} onClick={() => setLookOpen(v => !v)}
           className="glass-held flex h-6 items-center gap-1 rounded-sm px-1.5 text-[12px] text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:text-foreground aria-expanded:text-foreground">
-          <Palette className="size-3 shrink-0" /> <span className="max-w-32 truncate whitespace-nowrap">{catalog ? (optionOf(catalog, 'style', look.style)?.label ?? 'Gaya') : 'Gaya'}</span>
+          <Palette className="size-3 shrink-0" /> <span className="max-w-40 truncate whitespace-nowrap">{lookLabel(look)}</span>
         </button>
         <ComposerFooterEnd>
           <span className="text-[12px] text-muted-foreground max-sm:hidden" title={engine.video.provider === 'openrouter' ? 'Perkiraan biaya klip OpenRouter: jumlah shot × harga per klip' : 'Gambar & keyframe gratis; hanya animasi video yang memakai kredit Flow'}>

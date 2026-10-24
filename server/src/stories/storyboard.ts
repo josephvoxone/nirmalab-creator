@@ -2,7 +2,16 @@
  * Storyboard → Veo shot prompts. Pure: no IO. Rules come from the cinematic-footage
  * research (one camera move per shot, never name camera gear, ≤12 narration words
  * per 6 s shot so Veo's native voice-over fits).
+ *
+ * A board with a `bible` compiles its prompts from the production bible (`bible/compiler.ts`)
+ * and hashes them under `PROMPT_VERSION`. A board without one keeps the legacy `style`
+ * string, the legacy prompt text and the legacy hash byte for byte, so migration never
+ * re-renders a paid clip.
  */
+import { createHash } from 'node:crypto';
+import { ShotCompileError, compileShot, type CompiledShot, type ShotIntent } from '../bible/compiler.js';
+import { validateBible, type SceneCard, type StoryBible } from '../bible/story.js';
+import { LEGACY_STYLE_MAP, compileStyleSentence, lookById, type StyleBible } from '../bible/styles.js';
 
 export type Shot = {
   id: string;
@@ -13,6 +22,8 @@ export type Shot = {
   /** Reuse an existing Flow clip instead of generating (optionally trimmed). */
   reuse?: { jobId: string; start?: number };
   transition?: string;
+  /** Bible boards: what the shot must do. Prompts are compiled from this, never from prose. */
+  intent?: ShotIntent;
 };
 
 export type CharacterSpec = string | { name: string; look: string };
@@ -55,6 +66,8 @@ export type Storyboard = {
   shots: Shot[];
   /** image = character sheets + keyframes, video = clips. Absent = Flow for both. */
   engine?: { image?: Engine; video?: Engine };
+  /** Production bible: when present, prompts are compiled (PROMPT_VERSION) instead of prose. */
+  bible?: StoryBible;
 };
 
 export const CREDITS_PER_SHOT = 10;
@@ -149,11 +162,15 @@ export function characterSheetPrompt(c: CastMember, board: Storyboard): string {
   ].filter(Boolean).join(' ');
 }
 
+/** "Keep <names> exactly as in their character reference…" or '' when nobody is in frame. */
+function keepClause(board: Storyboard, shot: Shot): string {
+  const names = shotCast(board, shot).map(c => c.name);
+  return names.length ? ` Keep ${names.join(' and ')} exactly as in their character reference (same face, hair, outfit, colours).` : '';
+}
+
 /** Still keyframe for a shot: composition + characters by name; their look comes from the attached character references. */
 export function framePrompt(board: Storyboard, shot: Shot): string {
-  const names = shotCast(board, shot).map(c => c.name);
-  const keep = names.length ? ` Keep ${names.join(' and ')} exactly as in their character reference (same face, hair, outfit, colours).` : '';
-  return `${expand(board, shot.prompt, true)} ${settingLine(board, shot)} ${board.style ?? ''}${keep} Vertical ${board.aspect ?? '9:16'} cinematic frame, no text.`.replace(/\s+/g, ' ').trim();
+  return `${expand(board, shot.prompt, true)} ${settingLine(board, shot)} ${board.style ?? ''}${keepClause(board, shot)} Vertical ${board.aspect ?? '9:16'} cinematic frame, no text.`.replace(/\s+/g, ' ').trim();
 }
 
 export function buildShotPrompt(board: Storyboard, shot: Shot): string {
@@ -168,9 +185,125 @@ export function newShots(board: Storyboard): Shot[] {
   return board.shots.filter(s => !s.reuse);
 }
 
+// ------------------------------------------------------------------ bible boards (PROMPT_VERSION)
+
+/** Bumped when the compiled prompt text changes: it is part of the clip hash for bible boards. */
+export const PROMPT_VERSION = 2;
+/** Spec §9.5: drama and faceless default to film-real. */
+export const DEFAULT_LOOK_ID = 'film-real';
+
+const digest = (text: string) => createHash('sha256').update(text).digest('hex').slice(0, 16);
+
+/**
+ * The look of a board: an explicit family+variant pick wins, then the legacy style id
+ * (`board.look.style`, the studio picker), then film-real. Deterministic, never random.
+ */
+export function lookFor(board: Storyboard): StyleBible {
+  const family = typeof board.look?.family === 'string' ? board.look.family.trim() : '';
+  const variant = typeof board.look?.variant === 'string' ? board.look.variant.trim() : '';
+  if (family) {
+    const picked = lookById(variant && variant !== family ? `${family}:${variant}` : family) ?? lookById(family);
+    if (picked) return picked;
+  }
+  const legacy = typeof board.look?.style === 'string' ? board.look.style.trim() : '';
+  const mapped = legacy ? LEGACY_STYLE_MAP[legacy] : undefined;
+  if (mapped) return lookById(`${mapped.family}:${mapped.variant}`) ?? lookById(mapped.family)!;
+  return lookById(DEFAULT_LOOK_ID)!;
+}
+
+/** The bible scene a shot belongs to: same scene id, else same title, else same location key, else the only one. */
+export function bibleSceneFor(board: Storyboard, shot: Shot): SceneCard | undefined {
+  const scenes = board.bible?.scenes ?? [];
+  if (!scenes.length) return undefined;
+  const scene = sceneOf(board, shot.id);
+  const byId = scene ? scenes.find(s => s.id === scene.id) : undefined;
+  if (byId) return byId;
+  const byTitle = scene ? scenes.find(s => s.title.trim().toLowerCase() === scene.title.trim().toLowerCase()) : undefined;
+  if (byTitle) return byTitle;
+  const byLocation = scene?.location ? scenes.find(s => s.location === scene.location) : undefined;
+  if (byLocation) return byLocation;
+  return scenes.length === 1 ? scenes[0] : undefined;
+}
+
+/** True when this shot's prompts come from the compiler rather than the legacy prose path. */
+export function usesCompiler(board: Storyboard, shot: Shot): boolean {
+  return !!board.bible && !!shot.intent && !shot.reuse;
+}
+
+/** Compiled prompts for one shot of a bible board. Throws ShotCompileError on a missing slot. */
+export function compileBoardShot(board: Storyboard, shot: Shot): CompiledShot {
+  if (!board.bible) throw new ShotCompileError([`shot ${shot.id}: the board has no bible`]);
+  if (!shot.intent) throw new ShotCompileError([`shot ${shot.id}: intent is empty (subject, action, startState, endState, framing, move)`]);
+  const scene = bibleSceneFor(board, shot);
+  if (!scene) throw new ShotCompileError([`shot ${shot.id}: no bible scene matches its scene — add the scene goal to the bible`]);
+  // Camera picks and the spoken line may live on the shot (the drafter's shape) or on the intent.
+  const camera = shot as Shot & { framing?: string; move?: string };
+  const intent: ShotIntent = {
+    ...shot.intent,
+    framing: shot.intent.framing ?? (typeof camera.framing === 'string' ? camera.framing : undefined),
+    move: shot.intent.move ?? (typeof camera.move === 'string' ? camera.move : undefined),
+    narration: shot.intent.narration ?? shot.narration,
+    silent: shot.intent.silent ?? shot.silent
+  };
+  return compileShot({ look: lookFor(board), bible: board.bible, scene, shot: intent, negative: board.negative });
+}
+
+/** Exact text sent to Flow for a clip: compiled for bible shots, legacy prose otherwise. */
+export function shotPromptFor(board: Storyboard, shot: Shot): string {
+  return usesCompiler(board, shot) ? compileBoardShot(board, shot).videoPrompt : buildShotPrompt(board, shot);
+}
+
+/** Exact text sent for a keyframe. */
+export function framePromptFor(board: Storyboard, shot: Shot): string {
+  if (!usesCompiler(board, shot)) return framePrompt(board, shot);
+  const image = compileBoardShot(board, shot).imagePrompt;
+  return `${image}${keepClause(board, shot)} Vertical ${board.aspect ?? '9:16'} keyframe.`.replace(/\s+/g, ' ').trim();
+}
+
+/** Exact text sent for a character sheet; bible boards also pin the locked style sentence. */
+export function sheetPromptFor(member: CastMember, board: Storyboard): string {
+  const sheet = characterSheetPrompt(member, board);
+  return board.bible ? `${sheet} ${compileStyleSentence(lookFor(board))}` : sheet;
+}
+
+/** Hash input: versioned for bible boards, byte-identical to v1 for legacy boards. */
+const hashInput = (board: Storyboard, prompt: string) => (board.bible ? `${PROMPT_VERSION}|${prompt}` : prompt);
+
+/**
+ * Compiling can fail on an unfinished draft (spec §9.8: loose save, strict render). Such a take
+ * can never be current, so it hashes to a value no real prompt can produce.
+ */
+const UNCOMPILED = 'uncompiled';
+
+/** Clip hash of a shot (reuse clips hash their reuse spec, as before). */
+export function hashFor(board: Storyboard, shot: Shot): string {
+  if (shot.reuse) return digest(JSON.stringify(shot.reuse));
+  try {
+    return digest(hashInput(board, shotPromptFor(board, shot)));
+  } catch (error) {
+    if (error instanceof ShotCompileError) return UNCOMPILED;
+    throw error;
+  }
+}
+
+export function frameHashFor(board: Storyboard, shot: Shot): string {
+  try {
+    return digest(hashInput(board, framePromptFor(board, shot)));
+  } catch (error) {
+    if (error instanceof ShotCompileError) return UNCOMPILED;
+    throw error;
+  }
+}
+
+export function sheetHashFor(member: CastMember, board: Storyboard): string {
+  return digest(hashInput(board, sheetPromptFor(member, board)));
+}
+
 export function validateStoryboard(board: Storyboard): string[] {
   const errors: string[] = [];
   if (!board?.title?.trim()) errors.push('title is empty');
+  // A bible is validated on save (spec §9.8: strict on rules, loose on unfinished slots).
+  if (board?.bible !== undefined) errors.push(...validateBible(board.bible));
   if (!Array.isArray(board?.shots) || board.shots.length === 0) {
     errors.push('storyboard has no shots');
     return errors;
@@ -185,16 +318,20 @@ export function validateStoryboard(board: Storyboard): string[] {
       if (!/^job_[a-f0-9]{16}$/.test(shot.reuse.jobId ?? '')) errors.push(`${shot.id}: reuse.jobId must be a Flow job id`);
       continue;
     }
-    if (!shot.prompt?.trim()) errors.push(`${shot.id}: prompt is empty`);
-    if (GEAR.test(shot.prompt ?? '')) errors.push(`${shot.id}: names camera gear (jib/crane/rig) that Veo renders in frame`);
-    const moves = new Set((shot.prompt ?? '').toLowerCase().match(CAMERA_MOVES) ?? []);
-    if (moves.size > 1) errors.push(`${shot.id}: more than one camera move (${[...moves].join(', ')})`);
+    // Compiled shots (bible + intent) are linted by the compiler; everything else is prose and
+    // keeps the prose rules — a derived intent never excuses bad prose.
+    if (!usesCompiler(board, shot)) {
+      if (!shot.prompt?.trim()) errors.push(`${shot.id}: prompt is empty`);
+      if (GEAR.test(shot.prompt ?? '')) errors.push(`${shot.id}: names camera gear (jib/crane/rig) that Veo renders in frame`);
+      const moves = new Set((shot.prompt ?? '').toLowerCase().match(CAMERA_MOVES) ?? []);
+      if (moves.size > 1) errors.push(`${shot.id}: more than one camera move (${[...moves].join(', ')})`);
+      if (buildShotPrompt(board, shot).length > 3800) errors.push(`${shot.id}: prompt too long`);
+    }
     if (!shot.silent) {
       const words = narrationWords(shot.narration);
       if (words === 0) errors.push(`${shot.id}: narration is empty`);
       if (words > MAX_NARRATION_WORDS) errors.push(`${shot.id}: narration has ${words} words (max ${MAX_NARRATION_WORDS} to fit ~6 s)`);
     }
-    if (buildShotPrompt(board, shot).length > 3800) errors.push(`${shot.id}: prompt too long`);
   }
   errors.push(...validateBreakdown(board));
   errors.push(...validateEngine(board.engine));

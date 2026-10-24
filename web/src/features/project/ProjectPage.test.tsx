@@ -14,7 +14,7 @@ describe('Project page shell', () => {
     expect(within(stages).getAllByRole('listitem').map(li => li.getAttribute('aria-label'))).toEqual(['Naskah', 'Breakdown', 'Keyframe', 'Render', 'Rakit']);
     expect(within(stages).getByRole('listitem', { name: 'Render' })).toHaveAttribute('aria-current', 'step');
     const tabs = screen.getByRole('tablist', { name: /bagian proyek/i });
-    expect(within(tabs).getAllByRole('tab').map(t => t.textContent?.replace(/\d+/g, '').trim())).toEqual(['Scene', 'Breakdown', 'Timeline', 'Hasil', 'Aktivitas']);
+    expect(within(tabs).getAllByRole('tab').map(t => t.textContent?.replace(/\d+/g, '').trim())).toEqual(['Scene', 'Bible', 'Breakdown', 'Timeline', 'Hasil', 'Aktivitas']);
     expect(document.querySelector('.flow-canvas, [data-testid="flow-canvas"]')).toBeNull();
   });
 
