@@ -275,6 +275,17 @@ export class FlowStore {
           changed = true;
         }
       }
+      // Bridges work one job at a time: if this bridge claims again, its running job was
+      // orphaned by a restart. Put it back (no attempt burnt) instead of waiting out the lease.
+      for (const orphan of state.jobs) {
+        if (orphan.status === 'running' && orphan.bridgeId === bridgeId) {
+          orphan.status = 'queued';
+          orphan.bridgeId = undefined;
+          orphan.accountId = undefined;
+          orphan.startedAtMs = undefined;
+          changed = true;
+        }
+      }
       const usedToday = (a: FlowAccount) => (a.dayStamp === day ? a.creditsUsedToday : 0);
       const ready = state.accounts
         .map(a => this.normaliseAccount(a))

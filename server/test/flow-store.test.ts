@@ -120,10 +120,10 @@ describe('FlowStore rotation & lease', () => {
     const { store, dir } = makeStore();
     await store.addAccount({ label: 'A', email: 'a@x' });
     const created = await store.createJob({ prompt: 'p1', aspect: '9:16' });
-    await store.claimJob('mac');
-    expect(await store.claimJob('mac')).toBeUndefined();
+    await store.claimJob('mac-dead');
+    expect(await store.claimJob('mac-2')).toBeUndefined();
     patchState(dir, s => { s.jobs[0].startedAtMs = Date.now() - 60 * 60_000; });
-    const again = await store.claimJob('mac');
+    const again = await store.claimJob('mac-2');
     expect(again?.id).toBe(created.id);
     expect(again?.attempts).toBe(1);
     expect(again?.error).toMatch(/lease/i);
