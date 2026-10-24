@@ -12,7 +12,7 @@
  *      FLOW_RESOLUTION (360p|720p).
  */
 import { flowHome } from './src/paths.mjs';
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { homedir, hostname } from 'node:os';
@@ -147,10 +147,34 @@ async function handle(claim) {
       });
       if (!response.ok) throw new Error(`upload HTTP ${response.status}: ${(await response.text()).slice(0, 200)}`);
     },
-    fail: (id, error, cooldownMs) => postJson(`/api/flow/bridge/jobs/${id}/fail`, { error, cooldownMs })
+    fail: (id, error, cooldownMs) => postJson(`/api/flow/bridge/jobs/${id}/fail`, { error, cooldownMs }),
+    // Chrome fault: leave the job running under this bridge id; the next claim re-queues it
+    // without burning an attempt. After 3 strikes in a row, give up on it the normal way.
+    ...(chromeStrikes < 3 ? { release: async (id, error) => log(`job ${id} released (Chrome fault): ${error.slice(0, 120)}`) } : {})
   });
   log(`job ${job.id} -> ${result.status}`, result.error ?? `${result.bytes} bytes, quote ${result.quotedCredits}`);
   return result;
+}
+
+let chromeStrikes = 0;
+
+/** Restart the dedicated Flow Chrome (only a process started with our flow profile + this port). */
+async function restartFlowChrome(cdp) {
+  const port = new URL(cdp).port || '9333';
+  try {
+    const pids = execFileSync('lsof', ['-tiTCP:' + port, '-sTCP:LISTEN'], { encoding: 'utf8' }).split('\n').filter(Boolean);
+    for (const pid of pids) {
+      const cmd = execFileSync('ps', ['-o', 'command=', '-p', pid], { encoding: 'utf8' });
+      if (cmd.includes(`--remote-debugging-port=${port}`) && cmd.includes('.google-flow-mcp/chrome')) { process.kill(Number(pid)); log(`killed stale Flow Chrome pid ${pid}`); }
+      else log(`not killing pid ${pid} on :${port} — not the Flow Chrome`);
+    }
+  } catch (error) { log('restart: lsof/kill failed', error.message); }
+  for (const client of clients.values()) await client.close().catch(() => {});
+  clients.clear();
+  await new Promise(r => setTimeout(r, 3000));
+  try { execFileSync('launchctl', ['kickstart', '-k', `gui/${process.getuid()}/com.nirmalab.flow-chrome`]); } catch (error) { log('restart: kickstart failed', error.message); }
+  for (let i = 0; i < 20 && !(await cdpReady(cdp)); i++) await new Promise(r => setTimeout(r, 1500));
+  await new Promise(r => setTimeout(r, 5000));
 }
 
 async function loop(once) {
@@ -178,6 +202,11 @@ async function loop(once) {
     }
     if (claim?.job) {
       const result = await handle(claim);
+      if (result.status === 'chrome-broken') {
+        chromeStrikes++;
+        if (cdp) await restartFlowChrome(cdp);
+      } else if (result.status === 'done') chromeStrikes = 0;
+      if (chromeStrikes >= 3 && result.status === 'failed') chromeStrikes = 0;
       await heartbeat();
       if (once) return result;
     } else if (once) {

@@ -33,6 +33,11 @@ export function classifyError(message) {
   if (/recaptcha|captcha|sign in|signed out|not signed/.test(m)) {
     return { kind: 'auth', cooldownMs: 60 * MIN };
   }
+  // The Flow Chrome answers /json/version but refuses to be driven (stale after hours / an update):
+  // not the job's or the account's fault — release the job and restart that Chrome.
+  if (/connectovercdp|browser context management is not supported|setdownloadbehavior|econnrefused 127\.0\.0\.1:93\d\d/.test(m)) {
+    return { kind: 'chrome', cooldownMs: 0 };
+  }
   if (/timeout|timed out|net::|econnreset|socket hang up|target closed|browser has been closed/.test(m)) {
     return { kind: 'transient', cooldownMs: 5 * MIN };
   }
@@ -58,8 +63,23 @@ export function projectTitleFor(job, fallback) {
   return job?.group ? `Nirmalab · ${job.group}` : fallback;
 }
 
-export async function processJob(claim, deps) {
+export async function processJob(claim, rawDeps) {
   const { job, account } = claim;
+  let chromeBroken = false;
+  // A Chrome fault never burns an attempt: hand the job back (the bridge restarts Chrome and the
+  // server re-queues a job its own bridge abandoned) when the bridge can release.
+  const deps = !rawDeps.release ? rawDeps : {
+    ...rawDeps,
+    fail: async (id, reason, cooldownMs) => {
+      if (classifyError(reason).kind === 'chrome') { chromeBroken = true; return rawDeps.release(id, reason); }
+      return rawDeps.fail(id, reason, cooldownMs);
+    }
+  };
+  const result = await runJob(job, account, deps);
+  return chromeBroken ? { status: 'chrome-broken', error: result.error } : result;
+}
+
+async function runJob(job, account, deps) {
   try {
     if (job.kind === 'character' || job.kind === 'image' || (job.kind === 'video' && job.group)) {
       return await storyJob(job, account, deps);
