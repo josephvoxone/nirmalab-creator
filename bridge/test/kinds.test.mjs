@@ -12,7 +12,7 @@ function fakeFlow({ imageCost = 0, videoCost = 10, streamLost = false } = {}) {
     switch (name) {
       case 'flow_list_projects': return ok(state.projects);
       case 'flow_create_project': { const p = { id: 'proj-' + state.projects.length, title: args.title }; state.projects.push(p); return ok(p); }
-      case 'flow_get_project': return ok({ characters: state.characters, media: state.media, generations: state.media.map(m => ({ mediaId: m.mediaId, caption: m.caption })) });
+      case 'flow_get_project': return ok({ characters: state.characters, media: state.media.map(({ created, ...m }) => m), generations: [...state.media.map(m => ({ mediaId: m.mediaId, caption: m.caption, ...(m.created ? { created: m.created } : {}) })), ...(state.gens ?? [])] });
       case 'flow_create_character': {
         const c = { id: 'ch-' + args.name, name: args.name, portraitMediaId: 'portrait-' + args.name };
         state.characters.push(c); state.media.push({ mediaId: c.portraitMediaId, kind: 'image', caption: 'sheet ' + args.name });
@@ -122,4 +122,24 @@ test('resultHeaders encodes ids and free-text caption', () => {
   assert.deepEqual(resultHeaders({ mediaId: 'm1', caption: 'Girl, café & rain', flowCharacterId: 'c1' }),
     { 'x-flow-media-id': 'm1', 'x-flow-caption': 'Girl%2C%20caf%C3%A9%20%26%20rain', 'x-flow-character-id': 'c1' });
   assert.deepEqual(resultHeaders(), {});
+});
+
+test('stream lost: a late image from an older, interrupted turn is not mistaken for this job', async () => {
+  const { state, deps } = fakeFlow({ streamLost: true });
+  state.projects.push({ id: 'proj-x', title: 'Nirmalab · g' });
+  const realChat = deps.callTool;
+  let injected = false;
+  deps.callTool = async (acc, name, args) => {
+    if (name === 'flow_agent_chat' && !injected) {
+      injected = true; // the old turn's image lands just now, created 3 minutes ago
+      state.media.push({ mediaId: 'stale-1', kind: 'image', caption: 'princess' });
+      state.gens = [{ mediaId: 'stale-1', created: new Date(Date.now() - 180_000).toISOString() }];
+    }
+    const r = await realChat(acc, name, args);
+    if (name === 'flow_agent_chat') state.media.at(-1).created = new Date().toISOString();
+    return r;
+  };
+  const r = await processJob({ job: { id: 'j', kind: 'image', group: 'g', prompt: 'valley', characters: [] }, account }, deps);
+  assert.equal(r.status, 'done');
+  assert.notEqual(state.completed[0].meta.mediaId, 'stale-1');
 });

@@ -175,7 +175,12 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 async function projectState(account, projectId, deps) {
   const p = parseToolResult(await deps.callTool(account, 'flow_get_project', { project_id: projectId })) ?? {};
-  const media = [...(p.media ?? []), ...(p.generations ?? [])];
+  // media and generations describe the same items (generations carry `created`): merge by id.
+  const byId = new Map();
+  for (const m of [...(p.media ?? []), ...(p.generations ?? [])]) {
+    if (m?.mediaId) byId.set(m.mediaId, { ...(byId.get(m.mediaId) ?? {}), ...m });
+  }
+  const media = [...byId.values()];
   return { characters: p.characters ?? [], media };
 }
 
@@ -231,6 +236,7 @@ async function storyJob(job, account, deps) {
 
   const characterIds = await ensureCharacters(account, projectId, job.characters, deps);
   const before = new Set((await projectState(account, projectId, deps)).media.map(m => m?.mediaId));
+  const startedAt = Date.now();
   const isVideo = job.kind === 'video';
   const duration = [4, 6, 8, 10].includes(job.durationSec) ? job.durationSec : 6;
   const chat = parseToolResult(await deps.callTool(account, 'flow_agent_chat', {
@@ -251,7 +257,9 @@ async function storyJob(job, account, deps) {
   // The agent stream sometimes drops the ids; the new media still lands in the project.
   for (let i = 0; !mediaId && i < (deps.pollTries ?? 20); i++) {
     const fresh = (await projectState(account, projectId, deps)).media
-      .filter(m => m?.mediaId && !before.has(m.mediaId) && (isVideo ? !/image/i.test(String(m.kind ?? '')) : !/video/i.test(String(m.kind ?? ''))));
+      .filter(m => m?.mediaId && !before.has(m.mediaId) && (isVideo ? !/image/i.test(String(m.kind ?? '')) : !/video/i.test(String(m.kind ?? ''))))
+      // An interrupted earlier turn can still land media now; only accept what was created during this turn.
+      .filter(m => !m.created || Date.parse(m.created) >= startedAt - 20_000);
     mediaId = fresh[0]?.mediaId;
     if (!mediaId) await sleep(deps.pollMs ?? 15_000);
   }
