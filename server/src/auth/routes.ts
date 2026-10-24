@@ -145,6 +145,7 @@ export async function registerAuthRoutes(
         createdAt: invite.createdAt,
         expiresAt: invite.expiresAt,
         usedAt: invite.usedAt,
+        ...(invite.revokedAt ? { revokedAt: invite.revokedAt } : {}),
         createdBy: invite.createdBy
       }))
     };

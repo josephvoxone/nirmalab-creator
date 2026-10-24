@@ -1,6 +1,6 @@
 import { del, post, requestJson, type FetchLike } from './http.js';
 
-export type Invite = { tokenHash: string; email?: string; createdAt: string; expiresAt: string; usedAt?: string; createdBy: string };
+export type Invite = { tokenHash: string; email?: string; createdAt: string; expiresAt: string; usedAt?: string; revokedAt?: string; createdBy: string };
 export type CreatedInvite = { token: string; expiresAt: string; email?: string };
 
 export type FlowAccount = {
@@ -57,7 +57,8 @@ export function inviteLink(origin: string, token: string): string {
   return `${origin}/join/${token}`;
 }
 
-export function inviteState(invite: Invite, now = Date.now()): { label: 'Dipakai' | 'Kedaluwarsa' | 'Aktif'; tone: string; active: boolean } {
+export function inviteState(invite: Invite, now = Date.now()): { label: 'Dipakai' | 'Dicabut' | 'Kedaluwarsa' | 'Aktif'; tone: string; active: boolean } {
+  if (invite.revokedAt) return { label: 'Dicabut', tone: '', active: false };
   if (invite.usedAt) return { label: 'Dipakai', tone: 'done', active: false };
   if (Date.parse(invite.expiresAt) <= now) return { label: 'Kedaluwarsa', tone: '', active: false };
   return { label: 'Aktif', tone: 'pending', active: true };

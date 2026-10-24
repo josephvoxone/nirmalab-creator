@@ -19,6 +19,8 @@ export type AuthInvite = {
   expiresAt: string;
   usedAt?: string;
   usedBy?: string;
+  /** Set when an admin revoked it (usedAt is also set, so the token stops working). */
+  revokedAt?: string;
   createdBy: string;
 };
 
@@ -193,6 +195,7 @@ export class UserAuthStore {
     if (!requester?.isAdmin && invite.createdBy !== byUserId) return false;
     invite.usedAt = nowIso();
     invite.usedBy = byUserId;
+    invite.revokedAt = invite.usedAt;
     this.write(doc);
     return true;
   }
@@ -279,6 +282,7 @@ export class UserAuthStore {
       if (invite.createdBy === userId && !invite.usedAt) {
         invite.usedAt = now;
         invite.usedBy = byUserId;
+        invite.revokedAt = now;
       }
     }
     this.write(doc);
