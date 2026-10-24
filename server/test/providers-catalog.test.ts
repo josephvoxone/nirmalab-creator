@@ -71,6 +71,25 @@ describe('mapImageModel', () => {
   });
 });
 
+describe('video catalog: only models that generate a clip', () => {
+  it('drops edit/upscale/avatar models (no supported durations) and keeps generators', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'nc-cat-gen-'));
+    const fetchImpl = (async (url: string) => {
+      const body = String(url).endsWith('/videos/models')
+        ? { data: [
+            video('google/veo-3.1-lite', { supported_durations: [4, 6, 8] }),
+            video('black-forest-labs/flux-video-edit', { supported_durations: null }),
+            video('black-forest-labs/flux-video-upscale', { supported_durations: null }),
+            video('runway/aleph-2', { supported_durations: null }),
+            video('heygen/avatar-iv', { supported_durations: null })
+          ] }
+        : { data: [] };
+      return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
+    }) as typeof fetch;
+    expect((await new OpenRouterCatalog(dataDir, { fetch: fetchImpl }).models()).video.map(m => m.id)).toEqual(['google/veo-3.1-lite']);
+  });
+});
+
 describe('OpenRouterCatalog', () => {
   it('fetches both public catalogs once and caches them on disk for an hour', async () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'nc-cat-'));

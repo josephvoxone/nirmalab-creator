@@ -139,7 +139,10 @@ export class OpenRouterCatalog {
     this.inflight ??= (async () => {
       try {
         const [image, video] = await Promise.all([this.download('/images/models'), this.download('/videos/models')]);
-        const fresh: Cache = { fetchedAtMs: this.now(), image: image.map(mapImageModel), video: video.map(mapVideoModel) };
+        const fresh: Cache = { fetchedAtMs: this.now(), image: image.map(mapImageModel), video: video
+          // Generators only: edit/upscale/avatar endpoints take no duration and need a source video or avatar.
+          .filter(m => Array.isArray(m.supported_durations) && m.supported_durations.length > 0)
+          .map(mapVideoModel) };
         await writePrivateJsonFile(this.path, fresh);
         return { image: fresh.image, video: fresh.video };
       } catch (error) {

@@ -253,7 +253,7 @@ export function ProviderPanel(props: { onOpenFlow: () => void }) {
 
   return (
     <>
-      <p className={cn('text-[12.5px] text-muted-foreground')}>Google Flow gratis lewat pool akun; OpenRouter bayar per pemakaian dengan banyak model. Pilih mesinnya saat mulai membuat.</p>
+      <p className={cn('text-[12.5px] text-muted-foreground')}>Atur mesin pembuat gambar & video. Mesinnya dipilih saat mulai membuat (Buat baru, Studio, Breakdown).</p>
       {error !== undefined && !data ? <Failed what="Pengaturan provider" error={error} onRetry={reload} />
         : !data ? (
           <LoadingState label="Memuat provider" className="flex flex-col gap-2">
