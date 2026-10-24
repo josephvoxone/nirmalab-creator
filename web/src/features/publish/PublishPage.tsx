@@ -183,9 +183,13 @@ export default function PublishPage(props: { now?: Date }) {
       {step === 1 && story && (
         <div className="grid items-start gap-4 md:grid-cols-[240px_1fr]">
           {/* Stacked above the form on small screens; beside it (and sticky) from md. Never stretched. */}
-          <div data-slot="publish-preview" className="glass-panel flex flex-col items-center gap-2 self-start rounded-lg p-2.5 md:sticky md:top-2">
-            <ClipPreview src={`/api/stories/${story.id}/video`} poster={poster.final(story.id, 480)} label={`Pratinjau ${story.title}`} maxH={360} />
-            <p className="w-full truncate px-1 text-[12.5px] text-muted-foreground">{story.title}</p>
+          <div data-slot="publish-preview" className="glass-panel flex items-center gap-3 self-start rounded-lg p-2.5 md:sticky md:top-2 md:flex-col md:items-stretch md:gap-2">
+            <ClipPreview src={`/api/stories/${story.id}/video`} poster={poster.final(story.id, 480)} label={`Pratinjau ${story.title}`} maxH={360}
+              className="shrink-0 self-center [&_video]:!max-h-[220px] md:[&_video]:!max-h-[360px]" />
+            <div className="flex min-w-0 flex-1 flex-col gap-0.5 px-1">
+              <p className="truncate text-[13px]">{story.title}</p>
+              <p className="text-[12px] text-muted-foreground">Video jadi · putar untuk cek sebelum dikirim</p>
+            </div>
           </div>
           <Panel className="flex flex-col gap-3.5">
             <div className="flex flex-col gap-1">
