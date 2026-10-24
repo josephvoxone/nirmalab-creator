@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { requireAdmin } from '../auth/routes.js';
 import type { UserAuthStore } from '../auth/store.js';
-import { FlowStore } from './store.js';
+import { FLOW_ROTATIONS, FlowInputError, FlowStore, type FlowAccountPatch, type FlowRotation } from './store.js';
 
 export type FlowRouteOptions = {
   userAuthStore: UserAuthStore;
@@ -94,6 +94,70 @@ export async function registerFlowRoutes(server: FastifyInstance, options: FlowR
     return removed ? { ok: true } : bad(reply, 404, 'NOT_FOUND', 'Account not found');
   });
 
+  server.patch<{ Params: { id: string }; Body: Record<string, unknown> | undefined }>('/api/flow/accounts/:id', async (request, reply) => {
+    if (!requireAdmin(auth, request, reply)) return undefined;
+    const body = request.body && typeof request.body === 'object' ? request.body : {};
+    const patch: FlowAccountPatch = {};
+    if ('label' in body) {
+      if (typeof body.label !== 'string') return bad(reply, 400, 'INVALID_INPUT', 'label must be a string');
+      patch.label = body.label;
+    }
+    if ('enabled' in body) {
+      if (typeof body.enabled !== 'boolean') return bad(reply, 400, 'INVALID_INPUT', 'enabled must be true or false');
+      patch.enabled = body.enabled;
+    }
+    if ('priority' in body) {
+      if (typeof body.priority !== 'number' || !Number.isInteger(body.priority)) {
+        return bad(reply, 400, 'INVALID_INPUT', 'priority must be an integer');
+      }
+      patch.priority = body.priority;
+    }
+    if ('dailyCreditCap' in body) {
+      const cap = body.dailyCreditCap;
+      if (cap !== null && (typeof cap !== 'number' || !Number.isInteger(cap) || cap < 0)) {
+        return bad(reply, 400, 'INVALID_INPUT', 'dailyCreditCap must be a whole number ≥ 0, or null for no cap');
+      }
+      patch.dailyCreditCap = cap as number | null;
+    }
+    if (Object.keys(patch).length === 0) {
+      return bad(reply, 400, 'INVALID_INPUT', 'Nothing to update (label, enabled, priority, dailyCreditCap)');
+    }
+    try {
+      const account = await store.updateAccount(request.params.id, patch);
+      return account ? { account } : bad(reply, 404, 'NOT_FOUND', 'Account not found');
+    } catch (error) {
+      if (!(error instanceof FlowInputError)) throw error;
+      return bad(reply, /duplicate/i.test(error.message) ? 409 : 400, 'INVALID_INPUT', error.message);
+    }
+  });
+
+  server.get('/api/flow/pool', async (request, reply) => {
+    if (!requireAdmin(auth, request, reply)) return undefined;
+    return { pool: await store.getPool() };
+  });
+
+  server.put<{ Body: { rotation?: unknown } | undefined }>('/api/flow/pool', async (request, reply) => {
+    if (!requireAdmin(auth, request, reply)) return undefined;
+    const rotation = request.body?.rotation;
+    if (typeof rotation !== 'string' || !FLOW_ROTATIONS.includes(rotation as FlowRotation)) {
+      return bad(reply, 400, 'INVALID_INPUT', `rotation must be one of ${FLOW_ROTATIONS.join(', ')}`);
+    }
+    return { pool: await store.setPool({ rotation: rotation as FlowRotation }) };
+  });
+
+  server.get<{ Querystring: { days?: string } }>('/api/flow/usage', async (request, reply) => {
+    if (!requireAdmin(auth, request, reply)) return undefined;
+    const parsed = Number.parseInt(String(request.query?.days ?? ''), 10);
+    const report = await store.usage({ days: Number.isFinite(parsed) ? parsed : 7 });
+    return {
+      ...report,
+      byMember: report.byMember.map(m => {
+        const email = m.userId === 'unknown' ? undefined : auth.findUserById(m.userId)?.email;
+        return email ? { userId: m.userId, email, jobs: m.jobs, done: m.done, credits: m.credits } : m;
+      })
+    };
+  });
+
   server.get('/api/flow/jobs', async (request, reply) => {
     if (!requireAdmin(auth, request, reply)) return undefined;
     return { jobs: await store.listJobs() };
@@ -102,7 +166,8 @@ export async function registerFlowRoutes(server: FastifyInstance, options: FlowR
   server.post<{ Body: { prompt?: unknown; technique?: unknown; aspect?: unknown; durationSec?: unknown; kind?: unknown } }>(
     '/api/flow/jobs',
     async (request, reply) => {
-      if (!requireAdmin(auth, request, reply)) return undefined;
+      const user = requireAdmin(auth, request, reply);
+      if (!user) return undefined;
       const prompt = typeof request.body?.prompt === 'string' ? request.body.prompt : '';
       if (!prompt.trim()) return bad(reply, 400, 'INVALID_INPUT', 'prompt is required');
       const job = await store.createJob({
@@ -112,7 +177,8 @@ export async function registerFlowRoutes(server: FastifyInstance, options: FlowR
         aspect: request.body?.aspect === '16:9' ? '16:9' : '9:16',
         ...(typeof request.body?.durationSec === 'number' ? { durationSec: request.body.durationSec } : {}),
         ...(typeof request.body?.technique === 'string' && request.body.technique.trim()
-          ? { technique: request.body.technique.trim().slice(0, 120) } : {})
+          ? { technique: request.body.technique.trim().slice(0, 120) } : {}),
+        createdBy: user.id
       });
       return { job };
     }

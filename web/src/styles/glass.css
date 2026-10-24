@@ -1,0 +1,58 @@
+/* Solid Glass (MIT, DeepLethe) on Tailwind v4 — see web/src/components/ui/NOTICE.md.
+   Order matters: the vendored theme first, then the bridge that dresses the older
+   page stylesheets (tokens.css / app.css / studio.css) in the same material. */
+@layer theme, base, legacy, components, utilities;
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "./vendor/shadcn-tailwind.css";
+@import "@fontsource-variable/geist";
+@import "@fontsource-variable/geist-mono";
+@import "./vendor/solid-glass.css";
+
+@source "../";
+
+/* Compact density: ChatGPT-sized type and controls. */
+html { font-size: 15px; }
+
+/* Older page CSS speaks in --o-* tokens; point them at the glass palette so every
+   page shares one material. Higher specificity than tokens.css on purpose. */
+html.dark[data-theme="dark"] {
+  --surface-page: var(--background);
+  --bg: var(--background);
+  --conversation-bg: var(--background);
+  --surface-sidebar: transparent;
+  --o-sidebar: transparent;
+  --sidebar-hover: var(--hover);
+  --surface: oklch(1 0 0 / 3.5%);
+  --surface-2: oklch(1 0 0 / 6%);
+  --surface-3: oklch(1 0 0 / 9%);
+  --surface-input: var(--field);
+  --surface-popover: var(--popover);
+  --o-popover: var(--popover);
+  --o-border: var(--border);
+  --border-hairline: oklch(1 0 0 / 7%);
+  --border-strong: oklch(1 0 0 / 22%);
+  --text: var(--foreground);
+  --o-muted: var(--muted-foreground);
+  --subtle: oklch(0.6 0 0);
+  --o-accent: var(--primary);
+  --accent-strong: oklch(1 0 0);
+  --accent-soft: oklch(1 0 0 / 9%);
+  --accent-glow: oklch(1 0 0 / 14%);
+  --on-accent: var(--primary-foreground);
+  --state-focus-ring: var(--focus-line);
+  --o-radius-sm: 8px;
+  --o-radius-md: 10px;
+  --o-radius-lg: 12px;
+  --o-radius: 12px;
+  --font: var(--font-sans);
+  --font-display: var(--font-sans);
+  --o-font-mono: var(--font-mono);
+  --shadow: 0 18px 48px oklch(0 0 0 / 45%);
+  /* Signal colour kept for the brand mark and live states only. */
+  --brand: oklch(0.86 0.17 92);
+  --brand-foreground: oklch(0.25 0.05 92);
+  --brand-muted: oklch(0.86 0.17 92 / 16%);
+}
+body { font-family: var(--font-sans); }
+html[data-density="nyaman"] { font-size: 16px; }

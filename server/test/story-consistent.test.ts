@@ -178,4 +178,28 @@ describe('StoryService consistent pipeline', () => {
     expect(rec.status).toBe('failed');
     expect(rec.error).toMatch(/Kapas.*policy violation/);
   });
+
+  it('every job a story queues (sheets, keyframes, clips) carries the story createdBy', async () => {
+    const t = setup();
+    const story = await t.service.create(board, { createdBy: 'u_owner' });
+    expect(story.createdBy).toBe('u_owner');
+    expect((await t.service.get(story.id))!.createdBy).toBe('u_owner');
+    await t.service.prepare(story.id);
+    await finish(t, 'character', j => ({ mediaId: `sheet-${j.id}`, flowCharacterId: `fc-${j.id}` }));
+    await t.service.reconcile(story.id);
+    await finish(t, 'image');
+    await t.service.reconcile(story.id);
+    await t.service.render(story.id, { force: true });
+    const jobs = await t.flow.listJobs();
+    expect(new Set(jobs.map(j => j.kind))).toEqual(new Set(['character', 'image', 'video']));
+    expect(jobs.every(j => j.createdBy === 'u_owner')).toBe(true);
+  });
+
+  it('create(board) without options still works and leaves createdBy unset', async () => {
+    const t = setup();
+    const story = await t.service.create(board);
+    expect(story.createdBy).toBeUndefined();
+    await t.service.prepare(story.id);
+    expect((await t.flow.listJobs()).every(j => j.createdBy === undefined)).toBe(true);
+  });
 });

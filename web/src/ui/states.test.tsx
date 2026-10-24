@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import { userEvent } from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
@@ -48,14 +48,12 @@ describe('navigation', () => {
     </SessionContext.Provider>
   );
 
-  it('groups the menu by workflow and says what each page is for', () => {
+  it('lists new, search and every tool in the sidebar, the open page highlighted', () => {
     mountLayout(vi.fn(async () => new Response('{}', { status: 404 })));
     const nav = screen.getByRole('navigation', { name: 'Menu utama' });
-    for (const group of ['Buat', 'Distribusi', 'Sistem']) expect(nav.textContent).toContain(group);
-    expect(screen.getByRole('link', { name: /Cerita.*Film pendek dari premis/ })).toBeTruthy();
-    expect(screen.getByRole('link', { name: /Studio.*Klip & gambar satuan/ })).toBeTruthy();
-    expect(screen.getByRole('link', { name: /Alat cepat.*Naskah, suara/ })).toBeTruthy();
-    expect(screen.getByRole('link', { name: /Publish.*YouTube/ })).toBeTruthy();
+    for (const name of [/Buat baru/, /Template/, /Studio/, /Alat cepat/, /Publish/, /Semua cerita/]) expect(within(nav).getByRole('link', { name })).toBeTruthy();
+    expect(within(nav).getByRole('button', { name: /Cari cerita/ })).toBeTruthy();
+    expect(within(nav).getByRole('link', { name: /Semua cerita/ }).getAttribute('aria-current')).toBe('page');
   });
 
   it('shows the real bridge state and credits for admins', async () => {

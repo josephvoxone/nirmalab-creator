@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { FlowStore } from '../src/flow/store.js';
+import { FlowStore, flowDay } from '../src/flow/store.js';
 
 function makeStore(): { store: FlowStore; dir: string } {
   const dir = mkdtempSync(join(tmpdir(), 'flow-'));
@@ -98,7 +98,7 @@ describe('FlowStore rotation & lease', () => {
     const { store, dir } = makeStore();
     const a = await store.addAccount({ label: 'A', email: 'a@x' });
     const b = await store.addAccount({ label: 'B', email: 'b@x' });
-    const today = new Date().toISOString().slice(0, 10);
+    const today = flowDay(Date.now());
     patchState(dir, s => { s.accounts.find((x: any) => x.id === a.id).creditsUsedToday = 3; s.accounts.find((x: any) => x.id === a.id).dayStamp = today; });
     await store.createJob({ prompt: 'p1', aspect: '9:16' });
     const job = await store.claimJob('mac');
@@ -113,7 +113,7 @@ describe('FlowStore rotation & lease', () => {
     await store.claimJob('mac');
     const [account] = await store.listAccounts();
     expect(account?.id).toBe(a.id);
-    expect(account?.creditsUsedToday).toBe(1);
+    expect(account?.creditsUsedToday).toBe(10); // one video claim = CREDITS_PER_SHOT
   });
 
   it('job running yang lewat lease diambil ulang (bridge mati di tengah jalan)', async () => {

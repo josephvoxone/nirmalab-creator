@@ -1,10 +1,12 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { BrowserRouter, MemoryRouter, Navigate, Route, Routes, useNavigate, useParams } from 'react-router-dom';
+import { BrowserRouter, MemoryRouter, Navigate, Route, Routes, useLocation, useNavigate, useParams, type Location } from 'react-router-dom';
 import { authApi, type FetchLike, type User } from './lib/api.js';
 import { SessionContext, type Session } from './lib/session.js';
 import { LoginPage } from './features/auth/LoginPage.js';
 import { JoinPage } from './features/auth/JoinPage.js';
 import { Layout } from './shell/Layout.js';
+import { HistoryProvider } from './shell/history.js';
+import { applyDensity } from './lib/prefs.js';
 import { LoadingState, Skel } from './ui/states.js';
 import { StoriesPage } from './features/stories/StoriesPage.js';
 import { StoryDetailPage } from './features/stories/StoryDetailPage.js';
@@ -12,7 +14,9 @@ import { StoryDetailPage } from './features/stories/StoryDetailPage.js';
 const StudioScreen = lazy(() => import('./features/studio/StudioScreen.js'));
 const GeneratePage = lazy(() => import('./features/generate/GeneratePage.js'));
 const PublishPage = lazy(() => import('./features/publish/PublishPage.js'));
-const SettingsPage = lazy(() => import('./features/settings/SettingsPage.js'));
+const SettingsDialog = lazy(() => import('./features/settings/SettingsDialog.js'));
+const HomePage = lazy(() => import('./features/home/HomePage.js'));
+const TemplatesPage = lazy(() => import('./features/templates/TemplatesPage.js'));
 
 function Loading() {
   return <LoadingState label="Memuat halaman" className="page-skeleton"><Skel w="30%" h={24} /><Skel h={160} /><Skel h={160} /></LoadingState>;
@@ -23,11 +27,43 @@ function JoinRoute(props: { fetchImpl: FetchLike; onSignedIn: (u: User) => void 
   return <JoinPage token={token} fetchImpl={props.fetchImpl} onSignedIn={props.onSignedIn} />;
 }
 
-function Page(props: { title: string; children: ReactNode }) {
+const TITLES: Array<[RegExp, string]> = [
+  [/^\/template/, 'Template'], [/^\/cerita/, 'Cerita'], [/^\/studio/, 'Studio'], [/^\/generate/, 'Alat cepat'], [/^\/publish/, 'Publish']
+];
+
+/** One shell for every signed-in page, so the sidebar keeps its state while you move around. */
+function Shell(props: { fetchImpl: FetchLike }) {
+  const location = useLocation();
+  const background = (location.state as { background?: Location } | null)?.background;
+  const settings = location.pathname.startsWith('/pengaturan');
+  const main = background ?? location;
+  const title = TITLES.find(([re]) => re.test(main.pathname))?.[1] ?? '';
   return (
-    <Layout title={props.title}>
-      <Suspense fallback={<Loading />}>{props.children}</Suspense>
-    </Layout>
+    <HistoryProvider>
+      <Layout title={title} bare={!title}>
+        <Suspense fallback={<Loading />}>
+          <Routes location={main}>
+            <Route path="/" element={<HomePage />} />
+            <Route path="/template" element={<TemplatesPage />} />
+            <Route path="/cerita" element={<StoriesPage />} />
+            <Route path="/cerita/:id" element={<StoryDetailPage />} />
+            <Route path="/studio" element={<StudioScreen baseUrl="" fetchImpl={props.fetchImpl} />} />
+            <Route path="/generate" element={<GeneratePage />} />
+            <Route path="/publish" element={<PublishPage />} />
+            <Route path="/pengaturan/*" element={<HomePage />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        </Suspense>
+      </Layout>
+      {settings && (
+        <Suspense fallback={null}>
+          <Routes>
+            <Route path="/pengaturan" element={<SettingsDialog />} />
+            <Route path="/pengaturan/:tab" element={<SettingsDialog />} />
+          </Routes>
+        </Suspense>
+      )}
+    </HistoryProvider>
   );
 }
 
@@ -42,13 +78,14 @@ function Routed(props: { fetchImpl: FetchLike }) {
     return () => { alive = false; };
   }, [fetchImpl]);
 
-  const signedIn = useCallback((u: User) => { setUser(u); navigate('/cerita', { replace: true }); }, [navigate]);
+  const signedIn = useCallback((u: User) => { setUser(u); navigate('/', { replace: true }); }, [navigate]);
   const session = useMemo<Session | null>(() => (user ? {
     user,
     fetchImpl,
     signOut: async () => { await authApi(fetchImpl).logout().catch(() => undefined); setUser(null); navigate('/', { replace: true }); }
   } : null), [user, fetchImpl, navigate]);
 
+  useEffect(() => applyDensity(), []);
   if (user === undefined) return <Loading />;
 
   return (
@@ -59,16 +96,7 @@ function Routed(props: { fetchImpl: FetchLike }) {
       ) : (
         <Route path="*" element={
           <SessionContext.Provider value={session}>
-            <Routes>
-              <Route path="/" element={<Navigate to="/cerita" replace />} />
-              <Route path="/cerita" element={<Page title="Cerita"><StoriesPage /></Page>} />
-              <Route path="/cerita/:id" element={<Page title="Cerita"><StoryDetailPage /></Page>} />
-              <Route path="/studio" element={<Page title="Studio"><StudioScreen baseUrl="" fetchImpl={fetchImpl} /></Page>} />
-              <Route path="/generate" element={<Page title="Alat cepat"><GeneratePage /></Page>} />
-              <Route path="/publish" element={<Page title="Publish"><PublishPage /></Page>} />
-              <Route path="/pengaturan" element={<Page title="Pengaturan"><SettingsPage /></Page>} />
-              <Route path="*" element={<Navigate to="/cerita" replace />} />
-            </Routes>
+            <Shell fetchImpl={fetchImpl} />
           </SessionContext.Provider>
         } />
       )}

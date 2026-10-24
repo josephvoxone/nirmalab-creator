@@ -15,31 +15,31 @@
   --surface-popover: #1f1f23;
   --bg: var(--surface-page);
   --conversation-bg: var(--surface-page);
-  --sidebar: var(--surface-sidebar);
+  --o-sidebar: var(--surface-sidebar);
   --sidebar-hover: #222226;
   --surface: #1f1f23;
   --surface-2: #222226;
   --surface-3: #27272a;
-  --popover: var(--surface-popover);
-  --border: #323234;
+  --o-popover: var(--surface-popover);
+  --o-border: #323234;
   --border-hairline: #2a2a2e;
   --border-strong: #52525b;
   --text: #feffff;
-  --muted: #d4d4d8;
+  --o-muted: #d4d4d8;
   --subtle: #7f7f7f;
-  --accent: #fecd00;
+  --o-accent: #fecd00;
   --accent-strong: #fdd34d;
   --accent-soft: rgba(254, 205, 0, 0.14);
   --accent-glow: rgba(254, 205, 0, 0.2);
   --on-accent: #423600;
   --danger: #fca5a5;
   --danger-soft: rgba(252, 165, 165, 0.12);
-  --destructive: #fca5a5;
+  --o-destructive: #fca5a5;
   --destructive-hover: #f87171;
   --destructive-soft: rgba(252, 165, 165, 0.13);
   --warning: #fdd34d;
   --warning-soft: rgba(253, 211, 77, 0.12);
-  --success: #86efac;
+  --o-success: #86efac;
   --success-soft: rgba(134, 239, 172, 0.12);
   --status-connected: #86efac;
   --status-connected-soft: rgba(134, 239, 172, 0.14);
@@ -66,10 +66,10 @@
   --ambient-glow: rgba(254, 205, 0, 0.06);
   --scrim: rgba(0, 0, 0, 0.7);
   --logo-filter: grayscale(1) contrast(1.08) brightness(1.4);
-  --radius-sm: 6px;
-  --radius-md: 8px;
-  --radius-lg: 10px;
-  --radius: var(--radius-lg);
+  --o-radius-sm: 6px;
+  --o-radius-md: 8px;
+  --o-radius-lg: 10px;
+  --o-radius: var(--o-radius-lg);
   --control-compact-sm: 30px;
   --control-compact-md: 32px;
   --control-compact-lg: 34px;
@@ -85,7 +85,7 @@
   --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
   --font: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
   --font-display: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-  --font-mono: "SF Mono", "JetBrains Mono", "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+  --o-font-mono: "SF Mono", "JetBrains Mono", "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
 }
 
 :root[data-theme="light"] {
@@ -96,31 +96,31 @@
   --surface-popover: #f2f2f2;
   --bg: var(--surface-page);
   --conversation-bg: var(--surface-page);
-  --sidebar: var(--surface-sidebar);
+  --o-sidebar: var(--surface-sidebar);
   --sidebar-hover: #ececec;
   --surface: #f2f2f2;
   --surface-2: #e9e9ea;
   --surface-3: #e4e4e7;
-  --popover: var(--surface-popover);
-  --border: #e3e3e3;
+  --o-popover: var(--surface-popover);
+  --o-border: #e3e3e3;
   --border-hairline: #ececec;
   --border-strong: #a1a1aa;
   --text: #18181b;
-  --muted: #3f3f46;
+  --o-muted: #3f3f46;
   --subtle: #71717a;
-  --accent: #fecd00;
+  --o-accent: #fecd00;
   --accent-strong: #e5b800;
   --accent-soft: rgba(254, 205, 0, 0.22);
   --accent-glow: rgba(254, 205, 0, 0.3);
   --on-accent: #423600;
   --danger: #b91c1c;
   --danger-soft: rgba(185, 28, 28, 0.08);
-  --destructive: #b91c1c;
+  --o-destructive: #b91c1c;
   --destructive-hover: #991b1b;
   --destructive-soft: rgba(185, 28, 28, 0.09);
   --warning: #a16207;
   --warning-soft: rgba(161, 98, 7, 0.1);
-  --success: #15803d;
+  --o-success: #15803d;
   --success-soft: rgba(21, 128, 61, 0.1);
   --status-connected: #15803d;
   --status-connected-soft: rgba(21, 128, 61, 0.12);
@@ -153,7 +153,7 @@
 }
 
 :root[data-accent="blue"] {
-  --accent: #60a5fa;
+  --o-accent: #60a5fa;
   --accent-strong: #93c5fd;
   --accent-soft: rgba(59, 130, 246, 0.15);
   --accent-glow: rgba(96, 165, 250, 0.2);
@@ -161,7 +161,7 @@
 }
 
 :root[data-theme="light"][data-accent="blue"] {
-  --accent: #2563eb;
+  --o-accent: #2563eb;
   --accent-strong: #1d4ed8;
   --accent-soft: rgba(37, 99, 235, 0.1);
   --accent-glow: rgba(37, 99, 235, 0.16);
@@ -169,7 +169,7 @@
 }
 
 :root[data-accent="cyan"] {
-  --accent: #01d4f3;
+  --o-accent: #01d4f3;
   --accent-strong: #67e8f9;
   --accent-soft: rgba(1, 212, 243, 0.15);
   --accent-glow: rgba(1, 212, 243, 0.22);
@@ -177,7 +177,7 @@
 }
 
 :root[data-theme="light"][data-accent="cyan"] {
-  --accent: #0899b5;
+  --o-accent: #0899b5;
   --accent-strong: #0e7490;
   --accent-soft: rgba(1, 212, 243, 0.16);
   --accent-glow: rgba(1, 212, 243, 0.22);
@@ -185,7 +185,7 @@
 }
 
 :root[data-accent="purple"] {
-  --accent: #a78bfa;
+  --o-accent: #a78bfa;
   --accent-strong: #c4b5fd;
   --accent-soft: rgba(139, 92, 246, 0.15);
   --accent-glow: rgba(167, 139, 250, 0.2);
@@ -193,7 +193,7 @@
 }
 
 :root[data-theme="light"][data-accent="purple"] {
-  --accent: #7c3aed;
+  --o-accent: #7c3aed;
   --accent-strong: #6d28d9;
   --accent-soft: rgba(124, 58, 237, 0.1);
   --accent-glow: rgba(124, 58, 237, 0.15);
@@ -201,7 +201,7 @@
 }
 
 :root[data-accent="orange"] {
-  --accent: #fb923c;
+  --o-accent: #fb923c;
   --accent-strong: #fdba74;
   --accent-soft: rgba(249, 115, 22, 0.15);
   --accent-glow: rgba(251, 146, 60, 0.2);
@@ -209,7 +209,7 @@
 }
 
 :root[data-theme="light"][data-accent="orange"] {
-  --accent: #c2410c;
+  --o-accent: #c2410c;
   --accent-strong: #9a3412;
   --accent-soft: rgba(234, 88, 12, 0.1);
   --accent-glow: rgba(234, 88, 12, 0.15);
@@ -217,7 +217,7 @@
 }
 
 :root[data-accent="red"] {
-  --accent: #f87171;
+  --o-accent: #f87171;
   --accent-strong: #fca5a5;
   --accent-soft: rgba(239, 68, 68, 0.15);
   --accent-glow: rgba(248, 113, 113, 0.2);
@@ -225,7 +225,7 @@
 }
 
 :root[data-theme="light"][data-accent="red"] {
-  --accent: #dc2626;
+  --o-accent: #dc2626;
   --accent-strong: #b91c1c;
   --accent-soft: rgba(220, 38, 38, 0.1);
   --accent-glow: rgba(220, 38, 38, 0.15);
@@ -233,7 +233,7 @@
 }
 
 :root[data-accent="custom"] {
-  --accent: var(--custom-accent-value);
+  --o-accent: var(--custom-accent-value);
   --accent-strong: color-mix(in srgb, var(--custom-accent-value) 88%, var(--text));
   --accent-soft: color-mix(in srgb, var(--custom-accent-value) 14%, transparent);
   --accent-glow: color-mix(in srgb, var(--custom-accent-value) 20%, transparent);

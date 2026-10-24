@@ -13,6 +13,22 @@ export type FlowAccount = {
   creditsUsedToday: number;
   cooldownUntilMs?: number;
   lastError?: string;
+  enabled?: boolean;
+  priority?: number;
+  dailyCreditCap?: number;
+  lastUsedAtMs?: number;
+};
+export type Member = { id: string; email: string; isAdmin: boolean; createdAt: string; lastSeenAt?: string };
+export type Rotation = 'round-robin' | 'least-used' | 'priority';
+export type AccountPatch = { label?: string; enabled?: boolean; priority?: number; dailyCreditCap?: number | null };
+type Count = { jobs: number; done: number; failed: number };
+export type Usage = {
+  range: { from: string; to: string; days: number };
+  totals: Count & { running: number; queued: number; credits: number };
+  byDay: Array<Count & { date: string; credits: number }>;
+  byAccount: Array<Count & { accountId: string; label: string; credits: number; creditsRemaining?: number; enabled: boolean; dailyCreditCap?: number; creditsUsedToday: number; lastUsedAtMs?: number }>;
+  byKind: Record<'video' | 'image' | 'character', { jobs: number; done: number; credits: number }>;
+  byMember: Array<{ userId: string; email?: string; jobs: number; done: number; credits: number }>;
 };
 export type BridgeStatus = { online: boolean; lastSeenMs?: number; bridgeId?: string };
 
@@ -25,6 +41,13 @@ export function settingsApi(fetchImpl: FetchLike) {
     addFlowAccount: (input: { label: string; email: string; profileDir?: string }) =>
       requestJson<{ account: FlowAccount }>(fetchImpl, '/api/flow/accounts', post(input)),
     removeFlowAccount: (id: string) => requestJson<{ ok: boolean }>(fetchImpl, `/api/flow/accounts/${encodeURIComponent(id)}`, del()),
+    members: () => requestJson<{ members: Member[] }>(fetchImpl, '/api/auth/members'),
+    setAdmin: (id: string, isAdmin: boolean) => requestJson<{ member: Member }>(fetchImpl, `/api/auth/members/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ isAdmin }) }),
+    removeMember: (id: string) => requestJson<{ ok: boolean }>(fetchImpl, `/api/auth/members/${encodeURIComponent(id)}`, del()),
+    usage: (days: number) => requestJson<Usage>(fetchImpl, `/api/flow/usage?days=${days}`),
+    pool: () => requestJson<{ pool: { rotation: Rotation } }>(fetchImpl, '/api/flow/pool'),
+    setPool: (rotation: Rotation) => requestJson<{ pool: { rotation: Rotation } }>(fetchImpl, '/api/flow/pool', { method: 'PUT', body: JSON.stringify({ rotation }) }),
+    updateAccount: (id: string, patch: AccountPatch) => requestJson<{ account: FlowAccount }>(fetchImpl, `/api/flow/accounts/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(patch) }),
     changePassword: (currentPassword: string, newPassword: string) =>
       requestJson<{ ok: boolean }>(fetchImpl, '/api/auth/change-password', post({ currentPassword, newPassword }))
   };

@@ -68,6 +68,8 @@ export type StoryRecord = {
   error?: string;
   video?: { bytes: number; finishedAtMs: number };
   events: Array<{ atMs: number; message: string }>;
+  /** User id that created the story; every Flow job it queues is attributed to them. */
+  createdBy?: string;
 };
 
 export type StoryDeps = {
@@ -156,7 +158,7 @@ export class StoryService {
     if (errors.length) throw new StoryError('INVALID', errors.join('; '));
   }
 
-  async create(board: Storyboard): Promise<StoryRecord> {
+  async create(board: Storyboard, options: { createdBy?: string } = {}): Promise<StoryRecord> {
     this.assertValid(board);
     const id = `story_${randomBytes(8).toString('hex')}`;
     await mkdir(this.storyDir(id), { recursive: true, mode: 0o700 });
@@ -173,7 +175,8 @@ export class StoryService {
         id: s.id, status: 'pending', attempts: 0,
         ...(board.mode === 'konsisten' && !s.reuse ? { frame: { status: 'pending' as const, attempts: 0 } } : {})
       })),
-      events: []
+      events: [],
+      ...(options.createdBy ? { createdBy: options.createdBy } : {})
     };
     await this.writeJson(join(this.storyDir(id), 'storyboard.json'), { ...board, slug: id });
     await this.save(record, 'Storyboard dibuat');
@@ -244,6 +247,10 @@ export class StoryService {
     return accounts.length ? accounts.reduce((sum, a) => sum + (a.credits ?? 0), 0) : undefined;
   }
 
+  private owner(record: StoryRecord): { createdBy?: string } {
+    return record.createdBy ? { createdBy: record.createdBy } : {};
+  }
+
   private async queueShot(record: StoryRecord, board: Storyboard, shotId: string): Promise<void> {
     const shot = board.shots.find(s => s.id === shotId)!;
     const state = record.shots.find(s => s.id === shotId)!;
@@ -255,6 +262,7 @@ export class StoryService {
       aspect: board.aspect ?? '9:16',
       durationSec: 6,
       kind: 'video',
+      ...this.owner(record),
       ...(konsisten ? {
         group: record.id,
         characters: shotCast(board, shot).map(c => ({ name: c.name, look: c.look })),
@@ -497,7 +505,7 @@ export class StoryService {
     const member = castOf(board).find(c => c.token === cast.token)!;
     const prompt = characterSheetPrompt(member, board);
     const job = await this.deps.flow.createJob({
-      prompt, kind: 'character', group: record.id, aspect: '16:9', durationSec: 6,
+      prompt, kind: 'character', group: record.id, aspect: '16:9', durationSec: 6, ...this.owner(record),
       technique: `story:${record.id}/cast:${cast.token}`,
       characters: [{ name: member.name, look: member.look }]
     });
@@ -509,7 +517,7 @@ export class StoryService {
     const state = record.shots.find(s => s.id === shotId)!;
     const prompt = framePrompt(board, shot);
     const job = await this.deps.flow.createJob({
-      prompt, kind: 'image', group: record.id, aspect: board.aspect ?? '9:16', durationSec: 6,
+      prompt, kind: 'image', group: record.id, aspect: board.aspect ?? '9:16', durationSec: 6, ...this.owner(record),
       technique: `story:${record.id}/frame:${shot.id}`,
       characters: shotCast(board, shot).map(c => ({ name: c.name, look: c.look }))
     });

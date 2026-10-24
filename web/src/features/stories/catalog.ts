@@ -6,7 +6,7 @@ export type Palette = Option & { swatches: string[] };
 export type Tempo = Option & { shots: number };
 export type LookKey = 'style' | 'genre' | 'era' | 'camera' | 'lens' | 'aperture' | 'palette' | 'lighting' | 'tempo';
 export type Look = Record<LookKey, string>;
-export type Template = { id: string; name: string; tagline: string; mode: 'konsisten' | 'cepat'; aspect: '9:16' | '16:9'; narrator: string; example: string; look: Look };
+export type Template = { id: string; category?: string; cover?: string; name: string; tagline: string; mode: 'konsisten' | 'cepat'; aspect: '9:16' | '16:9'; narrator: string; example: string; look: Look };
 export type Catalog = {
   templates: Template[]; styles: Option[]; genres: Option[]; eras: Option[]; tempos: Tempo[];
   cameras: Option[]; lenses: Option[]; apertures: Option[]; palettes: Palette[]; lighting: Option[];
@@ -23,7 +23,7 @@ export const LIST_OF: Record<LookKey, keyof Catalog> = {
 };
 
 export function optionOf(catalog: Catalog, key: LookKey, id: string | undefined): Option | undefined {
-  return (catalog[LIST_OF[key]] as Option[]).find(o => o.id === id);
+  return (catalog[LIST_OF[key]] as Option[] | undefined)?.find(o => o.id === id);
 }
 
 export function useCatalog(load: () => Promise<{ catalog: Catalog; covers?: Covers }>, pollMs = 8000) {

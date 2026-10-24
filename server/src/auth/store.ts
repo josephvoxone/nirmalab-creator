@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { basename, dirname, join } from 'node:path';
 import { hashPassword, newAuthToken, normalizeEmail, verifyPassword } from './password.js';
 
 export type AuthUser = {
@@ -28,6 +28,24 @@ export type AuthSession = {
   createdAt: string;
   expiresAt: string;
 };
+
+export type PublicMember = {
+  id: string;
+  email: string;
+  isAdmin: boolean;
+  createdAt: string;
+  /** Newest session start (login) for this user, when one is on file. */
+  lastSeenAt?: string;
+};
+
+export type MemberErrorCode = 'SELF' | 'LAST_ADMIN' | 'NOT_FOUND';
+
+export class MemberError extends Error {
+  constructor(readonly code: MemberErrorCode, message: string) {
+    super(message);
+    this.name = 'MemberError';
+  }
+}
 
 type AuthDocument = {
   version: 1;
@@ -216,6 +234,56 @@ export class UserAuthStore {
     this.write(doc);
   }
 
+  listUsers(): PublicMember[] {
+    const doc = this.read();
+    const lastSeen = new Map<string, string>();
+    for (const session of doc.sessions) {
+      const prev = lastSeen.get(session.userId);
+      if (!prev || Date.parse(session.createdAt) > Date.parse(prev)) lastSeen.set(session.userId, session.createdAt);
+    }
+    return doc.users.map(user => {
+      const seen = lastSeen.get(user.id);
+      return { ...this.publicUser(user), ...(seen === undefined ? {} : { lastSeenAt: seen }) };
+    });
+  }
+
+  /** Change a user's role. Nobody demotes themselves, and the workspace always keeps one admin. */
+  setAdmin(userId: string, isAdmin: boolean, byUserId: string): PublicMember {
+    const doc = this.read();
+    const user = doc.users.find(entry => entry.id === userId);
+    if (!user) throw new MemberError('NOT_FOUND', 'User not found');
+    if (!isAdmin && userId === byUserId) throw new MemberError('SELF', 'You cannot remove your own admin role');
+    if (!isAdmin && user.isAdmin && doc.users.filter(entry => entry.isAdmin).length <= 1) {
+      throw new MemberError('LAST_ADMIN', 'The workspace needs at least one admin');
+    }
+    if (user.isAdmin !== isAdmin) {
+      user.isAdmin = isAdmin;
+      this.write(doc);
+    }
+    return this.publicUser(user);
+  }
+
+  /** Delete a user with their sessions (signed out everywhere) and their still-open invites. */
+  removeUser(userId: string, byUserId: string): void {
+    const doc = this.read();
+    const user = doc.users.find(entry => entry.id === userId);
+    if (!user) throw new MemberError('NOT_FOUND', 'User not found');
+    if (userId === byUserId) throw new MemberError('SELF', 'You cannot remove yourself');
+    if (user.isAdmin && doc.users.filter(entry => entry.isAdmin).length <= 1) {
+      throw new MemberError('LAST_ADMIN', 'The workspace needs at least one admin');
+    }
+    const now = nowIso();
+    doc.users = doc.users.filter(entry => entry.id !== userId);
+    doc.sessions = doc.sessions.filter(entry => entry.userId !== userId);
+    for (const invite of doc.invites) {
+      if (invite.createdBy === userId && !invite.usedAt) {
+        invite.usedAt = now;
+        invite.usedBy = byUserId;
+      }
+    }
+    this.write(doc);
+  }
+
   publicUser(user: AuthUser): { id: string; email: string; isAdmin: boolean; createdAt: string } {
     return { id: user.id, email: user.email, isAdmin: user.isAdmin, createdAt: user.createdAt };
   }
@@ -237,8 +305,18 @@ export class UserAuthStore {
     }
   }
 
+  /** Temp file + rename so a crash mid-write never leaves a truncated auth.json. */
   private write(doc: AuthDocument): void {
-    mkdirSync(dirname(this.file), { recursive: true });
-    writeFileSync(this.file, `${JSON.stringify(doc, null, 2)}\n`, { mode: 0o600 });
+    const parent = dirname(this.file);
+    mkdirSync(parent, { recursive: true });
+    const temporary = join(parent, `.${basename(this.file)}.${process.pid}.${newAuthToken(6)}.tmp`);
+    try {
+      writeFileSync(temporary, `${JSON.stringify(doc, null, 2)}\n`, { mode: 0o600, flag: 'wx' });
+      if (process.platform !== 'win32') chmodSync(temporary, 0o600);
+      renameSync(temporary, this.file);
+    } catch (error) {
+      rmSync(temporary, { force: true });
+      throw error;
+    }
   }
 }

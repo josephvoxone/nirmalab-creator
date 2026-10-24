@@ -1,18 +1,22 @@
+/* Older page styles: above Tailwind preflight, below utilities (see styles/glass.css). */
+@layer legacy {
 /* Skeleton shimmer: shows where content will land; motion stops for reduced-motion users. */
 .skel { display: block; border-radius: 6px; background: linear-gradient(90deg, var(--surface-2) 0%, var(--surface-3) 40%, var(--surface-2) 80%); background-size: 300% 100%; animation: skel 1.4s var(--ease-out, ease) infinite; min-height: 10px; }
 @keyframes skel { from { background-position: 100% 0; } to { background-position: -50% 0; } }
 @media (prefers-reduced-motion: reduce) { .skel { animation: none; } }
 
-.state-empty { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding: 24px; border: 1px dashed var(--border); background: var(--surface); }
+.state-empty { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; padding: 18px; border: 1px dashed var(--o-border); background: var(--surface); }
 .state-empty h3, .state-error h3 { margin: 0; font-size: 14px; font-weight: 600; color: var(--text); }
-.state-empty p, .state-error p { margin: 0; font-size: 13px; color: var(--muted); line-height: 1.5; max-width: 60ch; }
+.state-empty p, .state-error p { margin: 0; font-size: 13px; color: var(--o-muted); line-height: 1.5; max-width: 60ch; }
 .state-icon { color: var(--subtle); }
-.state-action { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.state-action { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
 
-.state-error { display: flex; gap: 12px; padding: 14px 16px; background: var(--danger-soft); border: 1px solid rgba(252, 165, 165, 0.35); color: var(--danger); }
-.state-error.compact { padding: 8px 10px; gap: 8px; }
+.state-error { display: flex; gap: 9px; padding: 10px 12px; background: var(--danger-soft); border: 1px solid rgba(252, 165, 165, 0.35); color: var(--danger); }
+.state-error.compact { padding: 6px 8px; gap: 6px; }
 .state-error.compact h3 { font-size: 12px; }
 .state-error.compact p { font-size: 12px; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 
-.page-skeleton { display: flex; flex-direction: column; gap: 12px; }
+.page-skeleton { display: flex; flex-direction: column; gap: 9px; }
+
+}

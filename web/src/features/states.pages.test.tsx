@@ -76,7 +76,7 @@ describe('Settings states', () => {
       if (url.includes('/invites')) return json({ invites: [] });
       return json({});
     });
-    withSession(<SettingsPage />, fetchImpl);
+    withSession(<SettingsPage tab="flow" />, fetchImpl);
     expect(await screen.findByRole('heading', { name: 'Belum ada akun Flow' })).toBeTruthy();
   });
 });

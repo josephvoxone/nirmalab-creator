@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { isValidEmail, normalizeEmail } from './password.js';
-import { UserAuthStore } from './store.js';
+import { MemberError, UserAuthStore } from './store.js';
 
 export const SESSION_COOKIE = 'oc_session';
 const SESSION_MAX_AGE = 30 * 24 * 60 * 60;
@@ -162,6 +162,37 @@ export async function registerAuthRoutes(
     return { ok: true };
   });
 
+  server.get('/auth/members', async (request, reply) => {
+    const user = requireAdmin(store, request, reply);
+    if (!user) return undefined;
+    return { members: store.listUsers() };
+  });
+
+  server.patch<{ Params: { id: string }; Body: { isAdmin?: unknown } }>('/auth/members/:id', async (request, reply) => {
+    const user = requireAdmin(store, request, reply);
+    if (!user) return undefined;
+    const isAdmin = request.body?.isAdmin;
+    if (typeof isAdmin !== 'boolean') {
+      return reply.code(400).send({ error: { code: 'INVALID_INPUT', message: 'isAdmin must be true or false' } });
+    }
+    try {
+      return { member: store.setAdmin(request.params.id, isAdmin, user.id) };
+    } catch (error) {
+      return sendMemberError(reply, error);
+    }
+  });
+
+  server.delete<{ Params: { id: string } }>('/auth/members/:id', async (request, reply) => {
+    const user = requireAdmin(store, request, reply);
+    if (!user) return undefined;
+    try {
+      store.removeUser(request.params.id, user.id);
+      return { ok: true };
+    } catch (error) {
+      return sendMemberError(reply, error);
+    }
+  });
+
   server.get<{ Querystring: { token?: string } }>('/auth/invites/peek', async request => {
     const invite = typeof request.query.token === 'string' && request.query.token
       ? store.peekInvite(request.query.token)
@@ -203,6 +234,12 @@ export function requireAdmin(store: UserAuthStore, request: FastifyRequest, repl
     return undefined;
   }
   return user;
+}
+
+function sendMemberError(reply: FastifyReply, error: unknown) {
+  if (!(error instanceof MemberError)) throw error;
+  const status = error.code === 'NOT_FOUND' ? 404 : 409;
+  return reply.code(status).send({ error: { code: error.code, message: error.message } });
 }
 
 function setSessionCookie(reply: FastifyReply, token: string): void {

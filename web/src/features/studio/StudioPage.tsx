@@ -466,7 +466,7 @@ export function StudioPage(props: { baseUrl: string; fetchImpl: FlowFetch; techn
                   <span className={`studio-dot is-${account.status}`} aria-hidden="true" />
                   <div>
                     <strong>{account.label}</strong>
-                    <p>{STATUS_LABEL[account.status] ?? account.status} · {account.credits ?? '?'} kredit · {account.creditsUsedToday} klip hari ini</p>
+                    <p>{STATUS_LABEL[account.status] ?? account.status} · {account.credits ?? '?'} kredit · {account.creditsUsedToday} kredit terpakai hari ini</p>
                     {account.status === 'cooldown' && account.lastError ? <p className="studio-job-error">{account.lastError}</p> : null}
                   </div>
                   <button type="button" className="studio-icon-btn" aria-label={`Hapus akun ${account.label}`} onClick={() => void removeAccount(account.id)}>

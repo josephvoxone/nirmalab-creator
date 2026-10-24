@@ -4,7 +4,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
 import { SessionContext } from '../../lib/session.js';
 import type { User } from '../../lib/api.js';
-import SettingsPage from './SettingsPage.js';
+import SettingsPage, { type SettingsTab } from './SettingsPage.js';
 
 type Handler = (url: string, init?: RequestInit) => { status: number; body: unknown };
 
@@ -22,10 +22,10 @@ const HASH_B = 'b'.repeat(64);
 const future = new Date(Date.now() + 3 * 86_400_000).toISOString();
 const past = new Date(Date.now() - 86_400_000).toISOString();
 
-function renderPage(fetchImpl: ReturnType<typeof fakeFetch>, user: User = admin) {
+function renderPage(fetchImpl: ReturnType<typeof fakeFetch>, user: User = admin, tab: SettingsTab = 'umum') {
   return render(
     <SessionContext.Provider value={{ user, fetchImpl, signOut: async () => undefined }}>
-      <MemoryRouter><SettingsPage /></MemoryRouter>
+      <MemoryRouter><SettingsPage tab={tab} /></MemoryRouter>
     </SessionContext.Provider>
   );
 }
@@ -47,7 +47,7 @@ describe('SettingsPage · Undang anggota', () => {
       if (url === '/api/flow/accounts') return { status: 200, body: flowBody() };
       return { status: 404, body: {} };
     });
-    renderPage(fetchImpl);
+    renderPage(fetchImpl, admin, 'anggota');
     const card = screen.getByRole('region', { name: /undang anggota/i });
     await userEvent.type(within(card).getByLabelText(/email/i), 'baru@nirmalab.com');
     await userEvent.click(within(card).getByRole('button', { name: /buat undangan/i }));
@@ -76,7 +76,7 @@ describe('SettingsPage · Undang anggota', () => {
       if (url === '/api/flow/accounts') return { status: 200, body: flowBody() };
       return { status: 404, body: {} };
     });
-    renderPage(fetchImpl);
+    renderPage(fetchImpl, admin, 'anggota');
     const card = screen.getByRole('region', { name: /undang anggota/i });
     const active = await within(card).findByRole('listitem', { name: 'a@x.io' });
     expect(active).toHaveTextContent('Aktif');
@@ -95,7 +95,7 @@ describe('SettingsPage · Undang anggota', () => {
       if (url === '/api/flow/accounts') return { status: 200, body: flowBody() };
       return { status: 404, body: {} };
     });
-    renderPage(fetchImpl);
+    renderPage(fetchImpl, admin, 'anggota');
     const card = screen.getByRole('region', { name: /undang anggota/i });
     await userEvent.click(within(card).getByRole('button', { name: /buat undangan/i }));
     expect(await within(card).findByRole('alert')).toHaveTextContent('Valid email required');
@@ -113,7 +113,7 @@ describe('SettingsPage · Akun Flow & bridge', () => {
       ], { online: true, lastSeenMs: Date.now() - 120_000, bridgeId: 'mac-mini' }) };
       return { status: 404, body: {} };
     });
-    renderPage(fetchImpl);
+    renderPage(fetchImpl, admin, 'flow');
     const card = screen.getByRole('region', { name: /akun flow/i });
     expect(await within(card).findByText('Online')).toBeInTheDocument();
     expect(within(card).getByText(/2 menit lalu/)).toBeInTheDocument();
@@ -121,7 +121,7 @@ describe('SettingsPage · Akun Flow & bridge', () => {
     expect(within(card).getByTestId('credits-total')).toHaveTextContent('150');
     const utama = within(card).getByRole('listitem', { name: 'Utama' });
     expect(utama).toHaveTextContent('120 kredit');
-    expect(utama).toHaveTextContent('40 terpakai hari ini');
+    expect(utama).toHaveTextContent('40 kredit terpakai hari ini');
     expect(within(card).getByRole('listitem', { name: 'Cadangan' })).toHaveTextContent('Login kedaluwarsa');
     expect(within(card).getByRole('listitem', { name: 'Baru' })).toHaveTextContent('kredit belum diketahui');
   });
@@ -132,7 +132,7 @@ describe('SettingsPage · Akun Flow & bridge', () => {
       if (url === '/api/flow/accounts') return { status: 200, body: flowBody([], { online: false }) };
       return { status: 404, body: {} };
     });
-    renderPage(fetchImpl);
+    renderPage(fetchImpl, admin, 'flow');
     const card = screen.getByRole('region', { name: /akun flow/i });
     expect(await within(card).findByText('Offline')).toBeInTheDocument();
     expect(within(card).getByText(/belum pernah terhubung/i)).toBeInTheDocument();
@@ -154,7 +154,7 @@ describe('SettingsPage · Akun Flow & bridge', () => {
       if (url === '/api/flow/accounts') return { status: 200, body: flowBody(accounts) };
       return { status: 404, body: {} };
     });
-    renderPage(fetchImpl);
+    renderPage(fetchImpl, admin, 'flow');
     const card = screen.getByRole('region', { name: /akun flow/i });
     await within(card).findByRole('listitem', { name: 'Utama' });
     await userEvent.type(within(card).getByLabelText(/label/i), 'Kedua');
@@ -176,7 +176,7 @@ describe('SettingsPage · Akun Flow & bridge', () => {
       if (url === '/api/flow/accounts') return { status: 200, body: flowBody() };
       return { status: 404, body: {} };
     });
-    renderPage(fetchImpl);
+    renderPage(fetchImpl, admin, 'flow');
     const card = screen.getByRole('region', { name: /akun flow/i });
     await userEvent.type(within(card).getByLabelText(/label/i), 'X');
     await userEvent.click(within(card).getByRole('button', { name: /tambah akun/i }));
@@ -203,7 +203,7 @@ describe('SettingsPage · Ganti password', () => {
 
   it('changes the password and confirms it', async () => {
     const fetchImpl = passwordFetch({ status: 200, body: { ok: true } });
-    renderPage(fetchImpl);
+    renderPage(fetchImpl, admin, 'akun');
     const card = screen.getByRole('region', { name: /ganti password/i });
     await fill(card, 'old-pass-1', 'new-pass-12', 'new-pass-12');
     expect(await within(card).findByRole('status')).toHaveTextContent(/password diganti/i);
@@ -214,7 +214,7 @@ describe('SettingsPage · Ganti password', () => {
 
   it('refuses a mismatched confirmation without calling the server', async () => {
     const fetchImpl = passwordFetch({ status: 200, body: { ok: true } });
-    renderPage(fetchImpl);
+    renderPage(fetchImpl, admin, 'akun');
     const card = screen.getByRole('region', { name: /ganti password/i });
     await fill(card, 'old-pass-1', 'new-pass-12', 'new-pass-13');
     expect(await within(card).findByRole('alert')).toHaveTextContent(/tidak sama/i);
@@ -223,7 +223,7 @@ describe('SettingsPage · Ganti password', () => {
 
   it('shows the server message when the current password is wrong', async () => {
     const fetchImpl = passwordFetch({ status: 400, body: { error: { code: 'WRONG_PASSWORD', message: 'Current password is wrong' } } });
-    renderPage(fetchImpl);
+    renderPage(fetchImpl, admin, 'akun');
     const card = screen.getByRole('region', { name: /ganti password/i });
     await fill(card, 'bad-pass-1', 'new-pass-12', 'new-pass-12');
     expect(await within(card).findByRole('alert')).toHaveTextContent('Current password is wrong');
@@ -231,13 +231,16 @@ describe('SettingsPage · Ganti password', () => {
 });
 
 describe('SettingsPage · member', () => {
-  it('a non-admin sees only the password section and loads no admin data', async () => {
+  it('a non-admin gets only the personal tabs, falls back from admin tabs, and loads no admin data', async () => {
     const fetchImpl = fakeFetch(() => ({ status: 403, body: {} }));
-    renderPage(fetchImpl, { ...admin, isAdmin: false });
-    expect(screen.getByRole('region', { name: /ganti password/i })).toBeInTheDocument();
+    renderPage(fetchImpl, { ...admin, isAdmin: false }, 'anggota');
+    const tabs = screen.getByRole('tablist', { name: /pengaturan/i });
+    expect(within(tabs).getAllByRole('tab').map(t => t.textContent)).toEqual(['Umum', 'Akun']);
+    expect(screen.getByRole('tab', { name: 'Umum' })).toHaveAttribute('aria-selected', 'true');
     expect(screen.queryByRole('region', { name: /undang anggota/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole('region', { name: /akun flow/i })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('tab', { name: 'Akun' }));
+    expect(screen.getByRole('region', { name: /ganti password/i })).toBeInTheDocument();
     await new Promise(r => setTimeout(r, 20));
-    expect(fetchImpl.mock.calls.map(([u]) => u).filter(u => /invites|flow/.test(String(u)))).toEqual([]);
+    expect(fetchImpl.mock.calls.map(([u]) => u).filter(u => /invites|flow|members/.test(String(u)))).toEqual([]);
   });
 });

@@ -28,22 +28,22 @@ describe('App shell', () => {
     await userEvent.type(screen.getByLabelText(/email/i), 'joseph@nirmalab.com');
     await userEvent.type(screen.getByLabelText(/password/i), 'secret-pass-1');
     await userEvent.click(screen.getByRole('button', { name: /masuk/i }));
-    expect(await screen.findByRole('heading', { name: /cerita/i, level: 1 })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: /mau bikin video apa/i })).toBeInTheDocument();
   });
 
-  it('shows the five sections in the sidebar and the account only in the avatar popover', async () => {
+  it('shows the ChatGPT-style sidebar and keeps the account in its menu', async () => {
     const fetchImpl = fakeFetch(url => (url === '/api/auth/me' ? { status: 200, body: { user: admin } } : { status: 200, body: { stories: [] } }));
     render(<App fetchImpl={fetchImpl} initialPath="/cerita" />);
     const nav = await screen.findByRole('navigation', { name: /menu utama/i });
-    for (const label of ['Cerita', 'Studio', 'Alat cepat', 'Publish', 'Pengaturan']) {
+    for (const label of ['Buat baru', 'Cari cerita', 'Template', 'Studio', 'Alat cepat', 'Publish', 'Semua cerita']) {
       expect(nav).toHaveTextContent(label);
     }
     expect(screen.queryByText(admin.email)).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: /akun/i }));
-    expect(screen.getByText(admin.email)).toBeInTheDocument();
+    expect(await screen.findByText(admin.email)).toBeInTheDocument();
     expect(screen.getByRole('menuitem', { name: /keluar/i })).toBeInTheDocument();
     await userEvent.keyboard('{Escape}');
-    expect(screen.queryByText(admin.email)).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText(admin.email)).not.toBeInTheDocument());
   });
 
   it('accepts an invite on /join/<token> and lands signed in', async () => {
@@ -64,7 +64,7 @@ describe('App shell', () => {
     await waitFor(() => expect(screen.getByLabelText(/email/i)).toHaveValue('baru@nirmalab.com'));
     await userEvent.type(screen.getByLabelText(/password/i), 'secret-pass-1');
     await userEvent.click(screen.getByRole('button', { name: /buat akun/i }));
-    expect(await screen.findByRole('heading', { name: /cerita/i, level: 1 })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: /mau bikin video apa/i })).toBeInTheDocument();
   });
 
   it('shows the login error message from the server', async () => {

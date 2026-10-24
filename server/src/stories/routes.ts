@@ -63,9 +63,10 @@ export async function registerStoryRoutes(
   });
 
   server.post<{ Body: { storyboard?: unknown } }>('/api/stories', async (request, reply) => {
-    if (!requireAdmin(auth, request, reply)) return undefined;
+    const user = requireAdmin(auth, request, reply);
+    if (!user) return undefined;
     try {
-      return reply.code(201).send({ story: await stories.create(asBoard(request.body?.storyboard)) });
+      return reply.code(201).send({ story: await stories.create(asBoard(request.body?.storyboard), { createdBy: user.id }) });
     } catch (error) { return fail(reply, error); }
   });
 
@@ -93,7 +94,8 @@ export async function registerStoryRoutes(
   });
 
   server.post<{ Body: { premise?: unknown; shots?: unknown; style?: unknown; template?: unknown; look?: unknown; mode?: unknown; aspect?: unknown; narrator?: unknown } }>('/api/stories/draft', async (request, reply) => {
-    if (!requireAdmin(auth, request, reply)) return undefined;
+    const user = requireAdmin(auth, request, reply);
+    if (!user) return undefined;
     const premise = typeof request.body?.premise === 'string' ? request.body.premise.trim() : '';
     if (premise.length < 5) return reply.code(400).send({ error: { code: 'INVALID', message: 'Tulis premis cerita (min. 5 karakter)' } });
     try {
@@ -107,7 +109,7 @@ export async function registerStoryRoutes(
         aspect: request.body?.aspect === '16:9' || request.body?.aspect === '9:16' ? request.body.aspect : undefined,
         narrator: typeof request.body?.narrator === 'string' ? request.body.narrator.slice(0, 200) : undefined
       }, options.generateText);
-      return reply.code(201).send({ story: await stories.create(board) });
+      return reply.code(201).send({ story: await stories.create(board, { createdBy: user.id }) });
     } catch (error) { return fail(reply, error); }
   });
 
