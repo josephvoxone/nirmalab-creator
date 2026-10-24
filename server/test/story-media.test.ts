@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { assembleStory, probeClip } from '../src/stories/media.js';
 
-const hasTools = spawnSync('ffmpeg', ['-version']).status === 0 && spawnSync('python3', ['-c', 'import PIL']).status === 0;
+const hasTools = spawnSync('ffmpeg', ['-version']).status === 0 && spawnSync(process.env.STORY_PYTHON ?? 'python3', ['-c', 'import PIL']).status === 0;
 
 function clip(file: string, seconds: number, audio: boolean) {
   const args = ['-v', 'error', '-y', '-f', 'lavfi', '-i', `testsrc2=s=720x1280:r=24:d=${seconds}`];

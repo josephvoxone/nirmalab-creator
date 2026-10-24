@@ -56,7 +56,7 @@ describe('Pengaturan › Provider', () => {
     const user = userEvent.setup();
     open(fake());
     expect(screen.getByRole('tab', { name: 'Provider' })).toHaveAttribute('aria-selected', 'true');
-    expect(screen.getByText(/google flow gratis lewat pool akun.*openrouter bayar per pemakaian/i)).toBeInTheDocument();
+    expect(screen.getByText(/atur mesin pembuat gambar & video.*dipilih saat mulai membuat/i)).toBeInTheDocument();
     const flow = await screen.findByRole('region', { name: /google flow/i });
     expect(await within(flow).findByText(/3 akun · 450 kredit · bridge online/i)).toBeInTheDocument();
     expect(within(flow).queryByRole('button', { name: /tambah akun/i })).toBeNull();
