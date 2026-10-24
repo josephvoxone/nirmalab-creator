@@ -1,0 +1,93 @@
+{
+  "success": true,
+  "data": {
+    "items": [
+      {
+        "platform": "tiktok",
+        "content_id": "7300000000000000001",
+        "kind": "video",
+        "web_url": "https://www.tiktok.com/@pixelpasar/video/7300000000000000001",
+        "title": "POV: kamu bangun dan semua poster di kamar bergerak",
+        "description": "POV: kamu bangun dan semua poster di kamar bergerak. #aivideo #storytelling Follow buat part 2!",
+        "created_at": "2026-10-25T02:00:00+00:00",
+        "duration_ms": 21000,
+        "author": {
+          "uid": "6900000000000000001",
+          "unique_id": "pixelpasar",
+          "nickname": "Pixel Pasar"
+        },
+        "stats": {
+          "play_count": 1200000,
+          "digg_count": 98000,
+          "comment_count": 2400,
+          "share_count": 5100,
+          "collect_count": 12000
+        },
+        "media": {
+          "covers": [
+            {
+              "url": "https://p16-sign.example-cdn.invalid/cover-01.jpeg"
+            }
+          ],
+          "video": {
+            "url": "https://v16-webapp.example-cdn.invalid/video/7300000000000000001"
+          }
+        },
+        "music": {
+          "music_id": "7000000000000000001",
+          "title": "original sound - pixelpasar",
+          "author": "Pixel Pasar",
+          "duration_ms": 21000
+        },
+        "tags": [
+          "aivideo",
+          "storytelling"
+        ]
+      },
+      {
+        "platform": "tiktok",
+        "content_id": "7300000000000000002",
+        "kind": "video",
+        "web_url": "https://www.tiktok.com/@dapurkecil/video/7300000000000000002",
+        "title": "3 hal yang bikin video masak kelihatan mahal",
+        "description": "3 hal yang bikin video masak kelihatan mahal. Tanpa caption, cuma teks besar. Sound tren 2026.",
+        "created_at": "2026-10-23T08:00:00+00:00",
+        "duration_ms": 9500,
+        "author": {
+          "uid": "6900000000000000002",
+          "unique_id": "dapurkecil",
+          "nickname": "Dapur Kecil"
+        },
+        "statsV2": {
+          "playCount": "430000",
+          "diggCount": "51000",
+          "commentCount": "980"
+        },
+        "media": {
+          "covers": [
+            {
+              "url": "https://p16-sign.example-cdn.invalid/cover-02.jpeg"
+            }
+          ]
+        },
+        "music": {
+          "music_id": "7000000000000000002",
+          "title": "trending audio 2026",
+          "author": "viral",
+          "duration_ms": 15000
+        },
+        "tags": [
+          "masak",
+          "teksbesar"
+        ]
+      }
+    ],
+    "cursor": null,
+    "has_more": false
+  },
+  "error": null,
+  "meta": {
+    "request_id": "b6f0f2c6-4a5f-4a0e-9a1f-2b7c2b6f1f21",
+    "cached": false
+  }
+}

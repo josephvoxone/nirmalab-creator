@@ -108,6 +108,11 @@ export default function PublishPage(props: { now?: Date }) {
     setStoryId(s.id);
     if (chosen.length === 0) setChosen(connected.map(c => c.platform));
     setStep(1);
+    // P4: start the caption from the story's own facts (concrete line, tension, payoff).
+    // Never overwrite what the user already typed, and never block the page on it.
+    void api.preview(s.id)
+      .then(preview => { if (preview?.caption) setDescription(current => (current.trim() ? current : preview.caption!)); })
+      .catch(() => undefined);
   };
 
   const toggle = (p: Platform, on: boolean) => {

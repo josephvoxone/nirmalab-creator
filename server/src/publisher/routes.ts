@@ -14,6 +14,11 @@ export type PublisherRouteOptions = {
    * story is done. Lets the browser publish by `storyId` instead of a raw path.
    */
   resolveStoryVideo?: (id: string) => Promise<string | undefined>;
+  /**
+   * Resolves a story id to the title + caption shown in the publish preview (P4:
+   * `stories/caption.ts` writes the hook formula). Read-only; publishing stays admin.
+   */
+  resolveStoryPreview?: (id: string) => Promise<{ title: string; caption: string } | undefined>;
 };
 
 const STORY_ID = /^story_[a-f0-9]{16}$/;
@@ -65,6 +70,18 @@ export async function registerPublisherRoutes(server: FastifyInstance, options: 
     const user = sessionUser(userAuthStore, request);
     if (!user) return reply.code(401).send({ error: { code: 'UNAUTHORIZED', message: 'Unauthorized' } });
     return { publishers: await service.statuses() };
+  });
+
+  // The publish preview: title + a caption generated from the story's own facts. Read-only and
+  // available to members; the publish call itself stays admin-only.
+  server.get<{ Params: { storyId: string } }>('/api/publish/preview/:storyId', async (request, reply) => {
+    const user = sessionUser(userAuthStore, request);
+    if (!user) return reply.code(401).send({ error: { code: 'UNAUTHORIZED', message: 'Unauthorized' } });
+    const storyId = request.params.storyId;
+    if (!STORY_ID.test(storyId)) return reply.code(400).send({ error: { code: 'INVALID_INPUT', message: 'Invalid storyId' } });
+    const preview = options.resolveStoryPreview ? await options.resolveStoryPreview(storyId) : undefined;
+    if (!preview) return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Video cerita belum selesai' } });
+    return { title: preview.title, caption: preview.caption };
   });
 
   server.post<{ Params: { platform: string } }>('/api/publish/:platform/connect', async (request, reply) => {

@@ -1,0 +1,84 @@
+{
+  "kind": "youtube#videoListResponse",
+  "etag": "fixture-etag-popular",
+  "nextPageToken": "CAUQAA",
+  "pageInfo": {
+    "totalResults": 3,
+    "resultsPerPage": 25
+  },
+  "items": [
+    {
+      "kind": "youtube#video",
+      "id": "aQ1bC2dE3fG",
+      "snippet": {
+        "publishedAt": "2026-10-24T18:00:00Z",
+        "channelId": "UCnirmala0000000000000001",
+        "title": "Kenapa AI bikin film terasa aneh?",
+        "description": "Prompt film AI yang gagal karena satu slot kosong. Follow buat part 2.",
+        "thumbnails": {
+          "default": {
+            "url": "https://i.ytimg.com/vi/aQ1bC2dE3fG/default.jpg"
+          },
+          "high": {
+            "url": "https://i.ytimg.com/vi/aQ1bC2dE3fG/hqdefault.jpg"
+          },
+          "maxres": {
+            "url": "https://i.ytimg.com/vi/aQ1bC2dE3fG/maxresdefault.jpg"
+          }
+        },
+        "channelTitle": "Studio Nirmala",
+        "tags": [
+          "film ai",
+          "sinematik"
+        ]
+      },
+      "statistics": {
+        "viewCount": "812345",
+        "likeCount": "52310",
+        "commentCount": "1840"
+      }
+    },
+    {
+      "kind": "youtube#video",
+      "id": "zY9xW8vU7tS",
+      "snippet": {
+        "publishedAt": "2026-10-22T09:30:00Z",
+        "channelId": "UCnirmala0000000000000002",
+        "title": "Cinematic b-roll rumah kosong, 3 menit tanpa narasi",
+        "description": "B-roll sinematik: cahaya jendela, debu, lantai kayu. Musik ambient.",
+        "thumbnails": {
+          "high": {
+            "url": "https://i.ytimg.com/vi/zY9xW8vU7tS/hqdefault.jpg"
+          }
+        },
+        "channelTitle": "Arsip Visual"
+      },
+      "statistics": {
+        "viewCount": "2400000",
+        "likeCount": "90500",
+        "commentCount": "4200"
+      }
+    },
+    {
+      "kind": "youtube#video",
+      "id": "pL4kM5nB6vC",
+      "snippet": {
+        "publishedAt": "2026-10-10T05:00:00Z",
+        "channelId": "UCnirmala0000000000000003",
+        "title": "Cerita anak: dongeng kancil dan bulan (storybook)",
+        "description": "Dongeng anak dengan ilustrasi storybook cat air. Narasi hangat.",
+        "thumbnails": {
+          "medium": {
+            "url": "https://i.ytimg.com/vi/pL4kM5nB6vC/mqdefault.jpg"
+          }
+        },
+        "channelTitle": "Cerita Pagi"
+      },
+      "statistics": {
+        "viewCount": "5000000",
+        "likeCount": "210000",
+        "commentCount": "9800"
+      }
+    }
+  ]
+}

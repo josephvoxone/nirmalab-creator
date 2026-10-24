@@ -204,6 +204,25 @@ export async function registerStoryRoutes(
     } catch (error) { return fail(reply, error); }
   });
 
+  server.post<{ Params: { id: string; shotId: string } }>('/api/stories/:id/shots/:shotId/repair', async (request, reply) => {
+    const user = requireAdmin(auth, request, reply);
+    if (!user) return undefined;
+    if (!SHOT_ID.test(request.params.shotId)) return notFound(reply);
+    try {
+      return { story: await stories.repairShot(request.params.id, request.params.shotId, { by: user.id }) };
+    } catch (error) { return fail(reply, error); }
+  });
+
+  /** Human sign-off on a shot the audit refused (spec §4.4): records who approved it. */
+  server.post<{ Params: { id: string; shotId: string } }>('/api/stories/:id/shots/:shotId/approve-audit', async (request, reply) => {
+    const user = requireAdmin(auth, request, reply);
+    if (!user) return undefined;
+    if (!SHOT_ID.test(request.params.shotId)) return notFound(reply);
+    try {
+      return { story: await stories.approveShot(request.params.id, request.params.shotId, { by: user.id }) };
+    } catch (error) { return fail(reply, error); }
+  });
+
   server.get<{ Params: { id: string; token: string } }>('/api/stories/:id/cast/:token/image', async (request, reply) => {
     if (!member(request, reply)) return undefined;
     if (!TOKEN.test(request.params.token)) return notFound(reply, 'Character');

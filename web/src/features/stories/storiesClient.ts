@@ -3,7 +3,26 @@ import { post, put, requestJson, type FetchLike } from '../../lib/api.js';
 export type StoryStatus = 'draft' | 'casting' | 'framing' | 'review' | 'rendering' | 'assembling' | 'done' | 'failed';
 export type TakeState = { status: 'pending' | 'queued' | 'done' | 'failed'; attempts: number; mediaId?: string; caption?: string; lastError?: string; error?: string };
 export type CastState = TakeState & { token: string; name: string };
-export type ShotState = { id: string; frame?: TakeState; status: 'pending' | 'queued' | 'done' | 'failed'; attempts: number; jobId?: string; lastError?: string; error?: string; durationSec?: number };
+/** One vision audit of a take (server: score 0–100, four dimensions, a usable repair line). */
+export type ShotAudit = {
+  score: number;
+  dimensions: { sceneMatch: number; actionMatch: number; moodMatch: number; composition: number };
+  issues: string[];
+  repair: string;
+  model: string;
+  atMs: number;
+  costUsd: number;
+  target?: 'frame' | 'clip';
+};
+export type ShotState = {
+  id: string; frame?: TakeState; status: 'pending' | 'queued' | 'done' | 'failed'; attempts: number; jobId?: string; lastError?: string; error?: string; durationSec?: number;
+  audit?: ShotAudit;
+  /** The shot must be repaired or approved before the video is assembled. */
+  needsReview?: boolean;
+  approvedBy?: string;
+  approvedAtMs?: number;
+};
+export type GateBlocker = { id: string; score?: number; needsReview: boolean };
 export type Story = {
   id: string;
   title: string;
@@ -17,6 +36,8 @@ export type Story = {
   video?: { bytes: number; finishedAtMs: number };
   /** The final video predates the latest storyboard edit (order/content): re-assemble. */
   videoStale?: boolean;
+  /** Shots that block assembly, with the message to show (server gate, spec §4.4). */
+  gate?: { message: string; shots: GateBlocker[] };
   events: Array<{ atMs: number; message: string }>;
 };
 export type StoryboardShot = { id: string; prompt: string; narration?: string; silent?: boolean; reuse?: { jobId: string; start?: number } };
@@ -57,6 +78,8 @@ export function storiesApi(fetchImpl: FetchLike) {
     update: (id: string, storyboard: Storyboard) => requestJson<{ story: Story }>(fetchImpl, `/api/stories/${id}`, put({ storyboard })),
     render: (id: string, force: boolean, scope: { scene?: string; shot?: string } = {}) => requestJson<{ story: Story }>(fetchImpl, `/api/stories/${id}/render`, post({ force, ...scope })),
     retry: (id: string) => requestJson<{ story: Story }>(fetchImpl, `/api/stories/${id}/retry`, post({})),
+    repairShot: (id: string, shotId: string) => requestJson<{ story: Story }>(fetchImpl, `/api/stories/${id}/shots/${shotId}/repair`, post({})),
+    approveShot: (id: string, shotId: string) => requestJson<{ story: Story }>(fetchImpl, `/api/stories/${id}/shots/${shotId}/approve-audit`, post({})),
     remove: (id: string) => requestJson<{ ok: boolean }>(fetchImpl, `/api/stories/${id}`, { method: 'DELETE' }),
     videoUrl: (id: string) => `/api/stories/${id}/video`,
     shotUrl: (id: string, shotId: string) => `/api/stories/${id}/shots/${shotId}/video`

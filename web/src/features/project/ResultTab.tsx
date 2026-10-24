@@ -5,13 +5,14 @@
  */
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Clapperboard, Download, Film, Images, Play, RefreshCw, Send } from 'lucide-react';
+import { Clapperboard, Download, Film, Images, Play, RefreshCw, Send, ShieldAlert } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty';
 import { Progress } from '@/components/ui/progress';
 import { isActive, STATUS_LABEL } from '../stories/storiesClient.js';
+import { AUDIT_BADGE, auditLabel, auditTone, checkLine, shotsToCheck } from './audit.js';
 import { sceneProgress, type Board } from './model.js';
 import { nextStep } from './nextStep.js';
 import { media, useProject, type Project } from './useProject.js';
@@ -71,6 +72,52 @@ function ScenePreviews(props: { p: Project; board: Board }) {
   );
 }
 
+/**
+ * Audit review: one line naming how many shots need a look, and a dialog with the two honest
+ * choices — repair with the instruction the audit wrote, or sign off (spec §4.4). The server
+ * refuses to assemble while a shot here is unresolved.
+ */
+function AuditReview(props: { p: Project }) {
+  const { story, busy } = props.p;
+  const [open, setOpen] = useState(false);
+  if (!story) return null;
+  const list = shotsToCheck(story);
+  if (!list.length) return null;
+  return (
+    <>
+      <div className="glass-panel flex flex-wrap items-center gap-2 rounded-lg px-3 py-2">
+        <ShieldAlert aria-hidden="true" className="size-3.5 shrink-0 text-(--warning)" />
+        <span className="min-w-0 flex-1 text-[12.5px]">{checkLine(list.length)} — belum lolos audit.</span>
+        <Button size="xs" variant="glass" onClick={() => setOpen(true)}>Periksa</Button>
+      </div>
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Shot perlu dicek</DialogTitle>
+            <DialogDescription>Perbaiki dengan instruksi audit, atau setujui kalau hasilnya memang sudah benar.</DialogDescription>
+          </DialogHeader>
+          <ul aria-label="Shot perlu dicek" className="flex max-h-80 flex-col gap-1.5 overflow-y-auto">
+            {list.map(s => (
+              <li key={s.id} className="flex flex-col gap-1 rounded-md border border-border/60 px-2 py-1.5">
+                <div className="flex items-center gap-2 text-[12.5px]">
+                  <span className="font-medium">{s.id}</span>
+                  <span className={cn('rounded px-1 text-[11px] tabular-nums', AUDIT_BADGE[auditTone(s.score)])}>{auditLabel(s.score)}</span>
+                  <span className="ml-auto flex items-center gap-1">
+                    <Button size="xs" variant="glass" disabled={!!busy || !s.repair} onClick={() => void props.p.repair(s.id)}>Repair</Button>
+                    <Button size="xs" variant="ghost" disabled={!!busy} onClick={() => void props.p.approve(s.id)}>Setujui</Button>
+                  </span>
+                </div>
+                {s.issues.length > 0 && <p className="text-[11.5px] leading-snug text-muted-foreground">{s.issues.slice(0, 2).join(' · ')}</p>}
+              </li>
+            ))}
+          </ul>
+          <p className="text-[11.5px] text-muted-foreground">Perbaikan keyframe gratis; perbaikan klip memakai 10 kredit Flow dan tidak melewati batas harian.</p>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
 export function ResultTab() {
   const p = useProject();
   const { id, story, board, busy } = p;
@@ -94,6 +141,7 @@ export function ResultTab() {
 
   return (
     <div className="flex min-w-0 flex-col gap-3">
+      <AuditReview p={p} />
       {story.video ? (
         <div className="glass-panel flex flex-wrap items-start gap-4 rounded-lg p-3">
           <ClipPreview src={media.final(id, String(story.video.finishedAtMs))} poster={poster.final(id, playerPosterWidth(320, board.aspect), String(story.video.finishedAtMs))} label="Video akhir" maxH={320} />

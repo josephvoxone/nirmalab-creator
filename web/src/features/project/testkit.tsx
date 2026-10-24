@@ -71,6 +71,21 @@ export function fakeProjectApi(opts: { board?: Board; story?: Story; fail?: Part
     if (url.startsWith(`/api/stories/${ID}/shots/`) && url.endsWith('/frame') && method === 'POST') return json(200, { story: (story = { ...story, status: 'framing' }) });
     if (url === `/api/stories/${ID}/retry`) return json(200, { story: (story = { ...story, status: 'rendering' }) });
     if (url === `/api/stories/${ID}/look`) return json(200, { story });
+    // Audit actions: repair puts the shot back in flight, approve clears the flag and the gate.
+    const auditAction = new RegExp(`^/api/stories/${ID}/shots/([^/]+)/(repair|approve-audit)$`).exec(url);
+    if (auditAction && method === 'POST') {
+      const [, shotId, action] = auditAction;
+      const repaired = action === 'repair';
+      story = {
+        ...story,
+        ...(repaired ? { status: 'rendering' as const } : {}),
+        ...(repaired ? {} : { gate: undefined }),
+        shots: story.shots.map(s => (s.id === shotId
+          ? { ...s, needsReview: undefined, ...(repaired ? { status: 'queued' as const } : { approvedBy: 'u1', approvedAtMs: Date.now() }) }
+          : s))
+      };
+      return json(200, { story });
+    }
     return json(404, { error: { message: `no fake for ${method} ${url}` } });
   });
   return {

@@ -18,6 +18,7 @@ const SettingsDialog = lazy(() => import('./features/settings/SettingsDialog.js'
 const ProjectPage = lazy(() => import('./features/project/ProjectPage.js').then(m => ({ default: m.ProjectPage })));
 const HomePage = lazy(() => import('./features/home/HomePage.js'));
 const TemplatesPage = lazy(() => import('./features/templates/TemplatesPage.js'));
+const TrendsPage = lazy(() => import('./features/trends/TrendsPage.js').then(m => ({ default: m.TrendsPage })));
 
 /** Content skeleton for the main area (session check and lazy routes); the sidebar stays. */
 function Loading() {
@@ -38,6 +39,7 @@ function JoinRoute(props: { fetchImpl: FetchLike; onSignedIn: (u: User) => void 
 }
 
 const TITLES: Array<[RegExp, string]> = [
+  [/^\/tren/, 'Tren'],
   [/^\/template/, 'Template'], [/^\/cerita\/./, 'Proyek'], [/^\/cerita/, 'Proyek'], [/^\/studio/, 'Studio'], [/^\/generate/, 'Naskah & suara'], [/^\/publish/, 'Publish']
 ];
 
@@ -57,6 +59,7 @@ function Shell(props: { fetchImpl: FetchLike; pending?: boolean }) {
           <Routes location={main}>
             <Route path="/" element={<HomePage />} />
             <Route path="/template" element={<TemplatesPage />} />
+            <Route path="/tren" element={<TrendsPage />} />
             <Route path="/cerita" element={<StoriesPage />} />
             <Route path="/cerita/:id" element={<ProjectPage />} />
             <Route path="/studio" element={<StudioScreen baseUrl="" fetchImpl={props.fetchImpl} />} />

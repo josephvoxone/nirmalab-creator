@@ -1,0 +1,50 @@
+{
+  "success": true,
+  "data": {
+    "items": [
+      {
+        "platform": "tiktok",
+        "content_id": "7300000000000000003",
+        "kind": "video",
+        "web_url": "https://www.tiktok.com/@hutanmini/video/7300000000000000003",
+        "title": "Before vs after: meja kerja jadi hutan mini",
+        "description": "Before vs after meja kerja jadi hutan mini. Tanpa narasi, cuma musik.",
+        "created_at": "2026-10-25T07:00:00+00:00",
+        "duration_ms": 14000,
+        "author": {
+          "uid": "6900000000000000003",
+          "unique_id": "hutanmini",
+          "nickname": "Hutan Mini"
+        },
+        "stats": {
+          "play_count": 640000,
+          "digg_count": 72000,
+          "comment_count": 1500
+        },
+        "media": {
+          "covers": [
+            {
+              "url": "https://p16-sign.example-cdn.invalid/cover-03.jpeg"
+            }
+          ]
+        },
+        "music": {
+          "music_id": "7000000000000000003",
+          "title": "ambient loop",
+          "author": "hutanmini",
+          "duration_ms": 14000
+        },
+        "tags": [
+          "beforeafter"
+        ]
+      }
+    ],
+    "cursor": null,
+    "has_more": false
+  },
+  "error": null,
+  "meta": {
+    "request_id": "b6f0f2c6-4a5f-4a0e-9a1f-2b7c2b6f1f21",
+    "cached": false
+  }
+}

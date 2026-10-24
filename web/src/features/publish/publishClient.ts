@@ -50,6 +50,8 @@ export function publishApi(fetchImpl: FetchLike) {
     disconnect: (platform: Platform) => requestJson<{ ok: boolean }>(fetchImpl, `/api/publish/${platform}/disconnect`, post({})),
     stories: () => requestJson<{ stories?: unknown }>(fetchImpl, '/api/stories')
       .then(r => (Array.isArray(r?.stories) ? (r.stories as StorySummary[]) : [])),
+    /** P4: the caption the preview starts from, built from the story's own facts. */
+    preview: (storyId: string) => requestJson<{ title?: string; caption?: string }>(fetchImpl, `/api/publish/preview/${encodeURIComponent(storyId)}`),
     publish: (platform: Platform, input: PublishInput) =>
       requestJson<PublishResult>(fetchImpl, `/api/publish/${platform}/publish`, post(input))
   };

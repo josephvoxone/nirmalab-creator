@@ -50,7 +50,7 @@ describe('providers wired into the app', () => {
     const t = await setup();
     const res = await t.req('GET', '/api/providers');
     expect(res.statusCode).toBe(200);
-    expect(res.json().openrouter).toEqual({ configured: false, defaults: {} });
+    expect(res.json().openrouter).toEqual({ configured: false, defaults: {}, auditModel: 'google/gemini-2.5-flash' });
   });
 
   it('the draft route puts the engine on the drafted storyboard; a bad engine is 400', async () => {

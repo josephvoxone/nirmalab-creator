@@ -13,6 +13,7 @@ import type { TextGenerator } from './stories/draft.js';
 import { assembleStory, imageSize, probeClip } from './stories/media.js';
 import { registerStoryRoutes } from './stories/routes.js';
 import { CoverService } from './stories/covers.js';
+import { captionFor } from './stories/caption.js';
 import { MediaCache, type FfmpegRunner } from './media/images.js';
 import { registerStorageRoutes, serialCleanup } from './media/storage.js';
 import { StoryService, type StoryDeps } from './stories/service.js';
@@ -21,6 +22,11 @@ import { OpenRouterCatalog } from './providers/catalog.js';
 import { registerProviderRoutes } from './providers/routes.js';
 import { registerQuotaRoutes } from './quota.js';
 import { OpenRouterWorker } from './providers/worker.js';
+import { registerTrendRoutes } from './trends/routes.js';
+import { OpenRouterConfigStore } from './providers/config.js';
+import { auditShot } from './audit/vision.js';
+import { sampleFrames } from './audit/frames.js';
+import { AuditLedger } from './audit/ledger.js';
 
 export type AppOptions = {
   dataDir: string;
@@ -29,7 +35,7 @@ export type AppOptions = {
   env?: NodeJS.ProcessEnv;
   logger?: boolean;
   version?: string;
-  stories?: Partial<Pick<StoryDeps, 'probe' | 'assemble' | 'imageSize'>> & {
+  stories?: Partial<Pick<StoryDeps, 'probe' | 'assemble' | 'imageSize' | 'audit'>> & {
     generateText?: TextGenerator;
     /** Background reconcile interval; 0 disables (tests). Default 5 s. */
     reconcileMs?: number;
@@ -73,12 +79,27 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   const media = new MediaCache({ dataDir: options.dataDir, ffmpeg: options.media?.ffmpeg });
   const providerFetch = options.providers?.fetch ?? fetch;
   const catalog = new OpenRouterCatalog(options.dataDir, { fetch: providerFetch });
+  const providerConfig = new OpenRouterConfigStore(options.dataDir);
+  const auditLedger = new AuditLedger(options.dataDir);
+  // Audit is inert without an OpenRouter key: `model()` returns undefined and nothing is spent or flagged.
+  const audit: StoryDeps['audit'] = options.stories?.audit ?? {
+    model: async () => ((await providerConfig.apiKey()) ? providerConfig.auditModel() : undefined),
+    run: async ({ images, expectation, model }) => {
+      const apiKey = await providerConfig.apiKey();
+      if (!apiKey) throw new Error('OpenRouter belum dikonfigurasi');
+      const result = await auditShot({ images, expectation, model, apiKey, fetch: providerFetch });
+      await auditLedger.record({ atMs: Date.now(), costUsd: result.costUsd }).catch(() => undefined);
+      return result;
+    },
+    frames: (clip, dir, shotId) => sampleFrames(clip, dir, shotId)
+  };
   const stories = new StoryService({
     dataDir: options.dataDir,
     flow: flowStore,
     probe: options.stories?.probe ?? probeClip,
     assemble: options.stories?.assemble ?? assembleStory,
     imageSize: options.stories?.imageSize ?? imageSize,
+    audit,
     openRouter: {
       usdPerClip: async model => {
         try { return (await catalog.find('video', model))?.usdPerClip ?? null; } catch { return null; }
@@ -90,7 +111,25 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
     service: new PublisherService({ dataDir: options.dataDir, env }),
     userAuthStore,
     env,
-    resolveStoryVideo: async id => ((await stories.get(id))?.status === 'done' ? stories.videoPath(id) : undefined)
+    resolveStoryVideo: async id => ((await stories.get(id))?.status === 'done' ? stories.videoPath(id) : undefined),
+    // P4: the preview caption comes from the story's own facts, never from a blank field.
+    resolveStoryPreview: async id => {
+      if ((await stories.get(id))?.status !== 'done') return undefined;
+      const board = await stories.readStoryboard(id).catch(() => undefined);
+      if (!board) return undefined;
+      const bible = board.bible ? { logline: board.bible.logline, theme: board.bible.theme } : null;
+      return {
+        title: board.title,
+        caption: board.caption ?? captionFor({
+          title: board.title,
+          ...(board.logline ? { logline: board.logline } : {}),
+          ...(board.titleCard?.kicker ? { kicker: board.titleCard.kicker } : {}),
+          ...(board.template ? { template: board.template } : {}),
+          lines: board.shots.map(shot => shot.narration).filter((line): line is string => !!line),
+          bible
+        })
+      };
+    }
   });
   await registerFreeGenerateRoutes(server, { userAuthStore, dataDir: options.dataDir });
   await registerFlowRoutes(server, {
@@ -120,6 +159,7 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   )).text);
   const covers = new CoverService({ dataDir: options.dataDir, flow: flowStore, webDist: options.webDist });
   await registerStoryRoutes(server, { userAuthStore, stories, generateText, covers, media });
+  await registerTrendRoutes(server, { userAuthStore, dataDir: options.dataDir, stories, env });
   const reconcileMs = options.stories?.reconcileMs ?? 5000;
   if (reconcileMs > 0) {
     let running = false;

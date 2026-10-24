@@ -1,0 +1,34 @@
+{
+  "kind": "youtube#videoListResponse",
+  "etag": "fixture-etag-durations",
+  "pageInfo": {
+    "totalResults": 3,
+    "resultsPerPage": 3
+  },
+  "items": [
+    {
+      "kind": "youtube#video",
+      "id": "aQ1bC2dE3fG",
+      "contentDetails": {
+        "duration": "PT42S",
+        "definition": "hd"
+      }
+    },
+    {
+      "kind": "youtube#video",
+      "id": "zY9xW8vU7tS",
+      "contentDetails": {
+        "duration": "PT3M18S",
+        "definition": "hd"
+      }
+    },
+    {
+      "kind": "youtube#video",
+      "id": "pL4kM5nB6vC",
+      "contentDetails": {
+        "duration": "PT1H2M3S",
+        "definition": "hd"
+      }
+    }
+  ]
+}

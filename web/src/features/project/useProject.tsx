@@ -35,6 +35,10 @@ export type Project = {
   redraw: (shotId: string, prompt?: string) => Promise<void>;
   setLook: (look: Record<string, string>) => Promise<void>;
   retry: () => Promise<void>;
+  /** Re-run the take with the audit's repair instruction (konsisten: free keyframe, cepat: a clip). */
+  repair: (shotId: string) => Promise<void>;
+  /** Human sign-off on a shot the audit refused. */
+  approve: (shotId: string) => Promise<void>;
   dismiss: () => void;
 };
 
@@ -124,6 +128,8 @@ export function useProjectState(id: string, pollMs = 4000): Project {
     redraw: (shotId, prompt) => quiet(run(`redraw:${shotId}`, () => api.redraw(id, shotId, prompt))),
     setLook: look => quiet(run('look', () => api.setLook(id, look)).then(reload)),
     retry: () => quiet(run('retry', () => api.retry(id))),
+    repair: shotId => quiet(run(`repair:${shotId}`, () => api.repairShot(id, shotId))),
+    approve: shotId => quiet(run(`approve:${shotId}`, () => api.approveShot(id, shotId))),
     dismiss: () => { setError(undefined); setBudget(undefined); }
   };
 }

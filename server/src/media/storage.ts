@@ -142,6 +142,11 @@ export async function cleanupStorage(dataDir: string, deps: CleanupDeps): Promis
     if (entry.st.mtimeMs < now - CACHE_MAX_AGE) await remove(entry);
   }
 
+  // Trend cache: entries live 30 minutes in use, so anything this old is dead weight.
+  for (const entry of await list(join(dataDir, 'trends', 'cache'))) {
+    if (entry.st.mtimeMs < now - CACHE_MAX_AGE) await remove(entry);
+  }
+
   // Orphan clips. An empty job list means "could not tell" (fresh or unreadable flow.json): delete nothing.
   const clips: Entry[] = [];
   for (const entry of await list(join(dataDir, 'flow', 'clips'))) {

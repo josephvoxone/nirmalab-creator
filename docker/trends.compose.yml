@@ -1,0 +1,199 @@
+# Trend data service — self-hosted DTK (Evil0ctal/Douyin_TikTok_Download_API, Apache-2.0)
+# plus its OWN Postgres and Redis. Nothing here is exposed to the internet (spec §9.7: one new
+# stack on the same VPS, internal ports only, its own database separate from the app's data).
+#
+#   docker compose -p nirmalab-trends -f docker/trends.compose.yml up -d
+#   docker compose -p nirmalab-trends -f docker/trends.compose.yml logs api   # prints SETUP TOKEN
+#
+# ── Env the APP (nirmalab-creator) needs, once this is up ───────────────────────────────────
+#   YOUTUBE_API_KEY=AIza...                  # Google Cloud → enable "YouTube Data API v3" (free 10k units/day)
+#   TRENDS_DTK_URL=http://127.0.0.1:8000     # loopback publish below; use the service name if co-located
+#   TRENDS_DTK_TOKEN=dtk_xxxxxxxxxxxx_yyyy   # minted once, see "Provisioning" below
+#   TRENDS_IG_FILE=/data/trends/ig/reels.json  # optional: instaloader export (see header of server/src/trends/instagram.ts)
+# Each is independent: unset means that platform is simply absent from /api/trends (never an error).
+#
+# ── Instagram (instaloader, MIT): the app only READS a JSON export, it never scrapes ───────
+#   mkdir -p /data/trends/ig
+#   instaloader --no-caption --no-pictures --no-video-thumbnails \
+#     --post-filter="post.date_utc >= datetime(2026, 10, 1)" \
+#     --dirname-pattern="/data/trends/ig/{target}" \
+#     "#aivideo" "#storytelling" "#faceless"
+#   # instaloader writes one <shortcode>.json per post; merge them into one export:
+#   jq -s '.' $(find /data/trends/ig -name '*.json') > /data/trends/ig/reels.json
+#   → TRENDS_IG_FILE=/data/trends/ig/reels.json      (the directory also works, no merge needed)
+# Public hashtags only, no personal account (spec §4.5). Run it from cron; the app's own cache is
+# 30 minutes and the file is re-read on every cache miss.
+#
+# ── Provisioning (exactly once) ─────────────────────────────────────────────────────────────
+#   1. Write .env next to this file with the four secrets below (no defaults are shipped):
+#        DTK_SECRET_KEY=$(openssl rand -base64 48)     # ≥32 chars; changing it loses stored cookies
+#        POSTGRES_PASSWORD=$(openssl rand -hex 24)
+#        REDIS_PASSWORD=$(openssl rand -hex 24)
+#        DTK_DATABASE_URL=postgresql+asyncpg://dtk:${POSTGRES_PASSWORD}@postgres:5432/dtk
+#        DTK_REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
+#   2. `up -d`, then read the one-time setup token from `logs api`.
+#   3. POST it to /api/setup/init to create the admin (DTK's own docs, documents/en/01-quickstart.md).
+#   4. Mint the app's key:  POST /api/v1/admin/api-keys  {"name":"nirmalab-creator"}
+#      → copy the `dtk_...` value into the app's TRENDS_DTK_TOKEN. It is shown exactly once.
+#   5. docs/en/09-users-and-api-keys.md covers scopes; the key needs tiktok:read + douyin:read.
+#
+# The app never talks to Postgres or Redis here — only to the DTK HTTP API.
+
+name: nirmalab-trends
+
+x-dtk-image: &dtk-image
+  image: evil0ctal/douyin_tiktok_download_api:${DTK_IMAGE_TAG:-latest}
+  # Building from a checkout instead: uncomment and point at the repository root.
+  # build:
+  #   context: ../Douyin_TikTok_Download_API
+  #   dockerfile: docker/Dockerfile
+
+x-dtk-env: &dtk-env
+  environment:
+    # Every role refuses to start without a ≥32-char master key (it encrypts stored cookies).
+    DTK_SECRET_KEY: ${DTK_SECRET_KEY:?DTK_SECRET_KEY is required (openssl rand -base64 48)}
+    DTK_DATABASE_URL: ${DTK_DATABASE_URL:?DTK_DATABASE_URL is required}
+    DTK_REDIS_URL: ${DTK_REDIS_URL:?DTK_REDIS_URL is required}
+  env_file:
+    # Optional: extra DTK knobs (cache TTLs, rate limits, identity pool) in one place.
+    - path: ./.env.trends
+      required: false
+
+x-dtk-limits: &dtk-limits
+  mem_limit: 512m
+  pids_limit: 256
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+services:
+  # ── Data stores: internal network only, no ports, no route off the host ──────────────────
+  postgres:
+    # TimescaleDB is not optional: DTK's schema runs on it, a stock postgres:17 image will not do.
+    image: timescale/timescaledb-ha:pg17
+    environment:
+      POSTGRES_DB: dtk
+      POSTGRES_USER: dtk
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      POSTGRES_HOST_AUTH_METHOD: scram-sha-256
+      # The database has no use for the key that encrypts its own contents.
+      DTK_SECRET_KEY: ""
+    volumes:
+      # timescaledb-ha keeps PGDATA here; /var/lib/postgresql/data would be lost on rebuild.
+      - postgres-data:/home/postgres/pgdata/data
+    networks: [data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dtk -d dtk"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    mem_limit: 1g
+    restart: unless-stopped
+
+  redis:
+    # Queue, token buckets and the response cache. Losing it costs a cache miss, not data.
+    image: redis:8-alpine
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
+    command:
+      - sh
+      - -c
+      - |
+        if [ -z "$$REDIS_PASSWORD" ]; then echo "redis: REDIS_PASSWORD is empty" >&2; exit 1; fi
+        exec redis-server --requirepass "$$REDIS_PASSWORD" --appendonly yes \
+          --save 60 1 --maxmemory 256mb --maxmemory-policy volatile-lru
+    volumes:
+      - redis-data:/data
+    networks: [data]
+    healthcheck:
+      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$$REDIS_PASSWORD\" redis-cli ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    mem_limit: 384m
+    restart: unless-stopped
+
+  # ── Schema: one-shot, so api and worker can never race on CREATE TABLE ───────────────────
+  migrate:
+    <<: [*dtk-image, *dtk-env]
+    command: ["migrate"]
+    networks: [data]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  # ── The API the app calls. Loopback publish: the VPS talks to it, the internet does not ──
+  api:
+    <<: [*dtk-image, *dtk-env, *dtk-limits]
+    command: ["api"]
+    environment:
+      DTK_SECRET_KEY: ${DTK_SECRET_KEY:?DTK_SECRET_KEY is required}
+      DTK_DATABASE_URL: ${DTK_DATABASE_URL:?DTK_DATABASE_URL is required}
+      DTK_REDIS_URL: ${DTK_REDIS_URL:?DTK_REDIS_URL is required}
+      DTK_BIND_HOST: "0.0.0.0"
+      DTK_BIND_PORT: "8000"
+      DTK_BACKUP_DIR: /var/lib/dtk/backups
+    volumes:
+      - backup-data:/var/lib/dtk/backups
+    ports:
+      # 127.0.0.1 only. To reach it from another compose project on the same host, attach that
+      # service to the `trends` network and drop this publish instead of binding 0.0.0.0.
+      - "127.0.0.1:${DTK_PORT:-8000}:8000"
+    networks: [data, trends]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/readyz', timeout=3).status == 200 else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+
+  # ── The worker that actually fetches upstream (identities, rotation, caching) ────────────
+  worker:
+    <<: [*dtk-image, *dtk-env, *dtk-limits]
+    command: ["worker"]
+    environment:
+      DTK_SECRET_KEY: ${DTK_SECRET_KEY:?DTK_SECRET_KEY is required}
+      DTK_DATABASE_URL: ${DTK_DATABASE_URL:?DTK_DATABASE_URL is required}
+      DTK_REDIS_URL: ${DTK_REDIS_URL:?DTK_REDIS_URL is required}
+      DTK_BACKUP_DIR: /var/lib/dtk/backups
+    volumes:
+      - backup-data:/var/lib/dtk/backups
+    networks: [data, trends]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os,socket,urllib.parse; u=urllib.parse.urlparse(os.environ.get('DTK_REDIS_URL','redis://redis:6379/0')); socket.create_connection((u.hostname or 'redis', u.port or 6379), 5).close()"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+networks:
+  # Postgres and Redis: no gateway, so they cannot reach anything off this host.
+  data:
+    internal: true
+  # The API surface the app uses.
+  trends: {}
+
+volumes:
+  postgres-data:
+  redis-data:
+  backup-data:

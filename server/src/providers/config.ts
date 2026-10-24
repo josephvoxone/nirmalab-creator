@@ -10,10 +10,24 @@ export type Engine = { provider: 'flow' } | { provider: 'openrouter'; model: str
 export type EngineKind = 'image' | 'video';
 
 export type OpenRouterDefaults = { image?: string; video?: string };
-export type OpenRouterView = { configured: boolean; keyHint?: string; defaults: OpenRouterDefaults };
-export type OpenRouterPatch = { apiKey?: string | null; defaults?: { image?: string | null; video?: string | null } };
+export type OpenRouterView = {
+  configured: boolean;
+  keyHint?: string;
+  defaults: OpenRouterDefaults;
+  /** Vision model that audits takes (spec §4.4); always set, default when not chosen. */
+  auditModel: string;
+};
+export type OpenRouterPatch = {
+  apiKey?: string | null;
+  defaults?: { image?: string | null; video?: string | null };
+  /** `null` restores the default. */
+  auditModel?: string | null;
+};
 
-type Stored = { apiKey?: string; defaults?: OpenRouterDefaults };
+type Stored = { apiKey?: string; defaults?: OpenRouterDefaults; auditModel?: string };
+
+/** The vision model used when nobody picked one (cheap, accepts images). */
+export const DEFAULT_AUDIT_MODEL = 'google/gemini-2.5-flash';
 
 /** OpenRouter model slug, e.g. `google/veo-3.1-fast` or `openai/gpt-image-1:free`. */
 export const MODEL_ID = /^[a-z0-9][\w.-]*\/[\w.:-]+$/i;
@@ -42,9 +56,10 @@ export class OpenRouterConfigStore {
   private static view(stored: Stored): OpenRouterView {
     const defaults: OpenRouterDefaults = {};
     for (const kind of ['image', 'video'] as const) if (isModelId(stored.defaults?.[kind])) defaults[kind] = stored.defaults![kind];
+    const auditModel = isModelId(stored.auditModel) ? stored.auditModel : DEFAULT_AUDIT_MODEL;
     return stored.apiKey
-      ? { configured: true, keyHint: `••••${stored.apiKey.slice(-4)}`, defaults }
-      : { configured: false, defaults };
+      ? { configured: true, keyHint: `••••${stored.apiKey.slice(-4)}`, defaults, auditModel }
+      : { configured: false, defaults, auditModel };
   }
 
   async view(): Promise<OpenRouterView> {
@@ -56,6 +71,12 @@ export class OpenRouterConfigStore {
     return typeof key === 'string' && key ? key : undefined;
   }
 
+  /** Model that audits takes: the stored pick, else the default. Never empty. */
+  async auditModel(): Promise<string> {
+    const stored = (await this.read()).auditModel;
+    return isModelId(stored) ? stored : DEFAULT_AUDIT_MODEL;
+  }
+
   async update(patch: OpenRouterPatch): Promise<OpenRouterView> {
     if (patch.apiKey !== undefined && patch.apiKey !== null) {
       const key = typeof patch.apiKey === 'string' ? patch.apiKey.trim() : '';
@@ -64,6 +85,9 @@ export class OpenRouterConfigStore {
     for (const kind of ['image', 'video'] as const) {
       const value = patch.defaults?.[kind];
       if (value !== undefined && value !== null && !isModelId(value)) throw new ProviderInputError(`defaults.${kind}: model id tidak valid`);
+    }
+    if (patch.auditModel !== undefined && patch.auditModel !== null && !isModelId(patch.auditModel)) {
+      throw new ProviderInputError('auditModel: model id tidak valid');
     }
     const run = this.queue.then(async () => {
       const stored = await this.read();
@@ -75,6 +99,8 @@ export class OpenRouterConfigStore {
         if (value === null) delete next.defaults![kind];
         else if (value !== undefined) next.defaults![kind] = value;
       }
+      if (patch.auditModel === null) delete next.auditModel;
+      else if (patch.auditModel !== undefined) next.auditModel = patch.auditModel;
       await writePrivateJsonFile(this.path, next);
       return OpenRouterConfigStore.view(next);
     });

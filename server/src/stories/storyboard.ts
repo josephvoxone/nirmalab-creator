@@ -60,6 +60,8 @@ export type Storyboard = {
   titleCard?: { lines: string[]; kicker?: string };
   /** One Indonesian sentence. */
   logline?: string;
+  /** Publish caption: concrete first line, one tension, one payoff (stories/caption.ts). */
+  caption?: string;
   /** Key: UPPERCASE token, e.g. PASAR_IKAN. */
   locations?: Record<string, Location>;
   scenes?: Scene[];
@@ -68,6 +70,11 @@ export type Storyboard = {
   engine?: { image?: Engine; video?: Engine };
   /** Production bible: when present, prompts are compiled (PROMPT_VERSION) instead of prose. */
   bible?: StoryBible;
+  /**
+   * Let a failing clip audit re-render the clip on its own (10 Flow credits per try, spec §9.5).
+   * Default off: a clip repair waits for an explicit click. Never crosses the daily credit cap.
+   */
+  autoRepairClip?: boolean;
 };
 
 export const CREDITS_PER_SHOT = 10;

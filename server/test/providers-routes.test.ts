@@ -50,7 +50,7 @@ describe('provider routes', () => {
     await t.flow.addAccount({ label: 'B', email: 'b@b.c' });
     expect((await t.admin('GET', '/api/providers')).json()).toEqual({
       flow: { accounts: 2, credits: null, online: false },
-      openrouter: { configured: false, defaults: {} }
+      openrouter: { configured: false, defaults: {}, auditModel: 'google/gemini-2.5-flash' }
     });
     await t.flow.heartbeat('mac', [{ id: a.id, credits: 120 }]);
     expect((await t.admin('GET', '/api/providers')).json().flow).toEqual({ accounts: 2, credits: 120, online: true });
@@ -60,7 +60,7 @@ describe('provider routes', () => {
     const t = await setup();
     const put = await t.admin('PUT', '/api/providers/openrouter', { apiKey: KEY, defaults: { video: 'google/veo-3.1-fast' } });
     expect(put.statusCode).toBe(200);
-    expect(put.json()).toEqual({ configured: true, keyHint: '••••QRST', defaults: { video: 'google/veo-3.1-fast' } });
+    expect(put.json()).toEqual({ configured: true, keyHint: '••••QRST', defaults: { video: 'google/veo-3.1-fast' }, auditModel: 'google/gemini-2.5-flash' });
     expect(put.body).not.toContain(KEY);
     const get = await t.admin('GET', '/api/providers');
     expect(get.body).not.toContain(KEY);
@@ -76,7 +76,24 @@ describe('provider routes', () => {
     expect((await t.admin('PUT', '/api/providers/openrouter', { apiKey: 42 })).statusCode).toBe(400);
     expect((await t.admin('PUT', '/api/providers/openrouter', { defaults: { image: 'bad id' } })).statusCode).toBe(400);
     await t.admin('PUT', '/api/providers/openrouter', { apiKey: KEY });
-    expect((await t.admin('PUT', '/api/providers/openrouter', { apiKey: null })).json()).toEqual({ configured: false, defaults: {} });
+    expect((await t.admin('PUT', '/api/providers/openrouter', { apiKey: null })).json()).toEqual({ configured: false, defaults: {}, auditModel: 'google/gemini-2.5-flash' });
+  });
+
+  it('PUT auditModel: default, a vision pick, and a catalog-known video model is refused', async () => {
+    const t = await setup(url => new Response(JSON.stringify(url.endsWith('/videos/models')
+      ? { data: [{ id: 'google/veo-3.1-fast', name: 'Veo', supported_durations: [6] }] }
+      : { data: [] }), { status: 200 }));
+    expect((await t.admin('GET', '/api/providers')).json().openrouter.auditModel).toBe('google/gemini-2.5-flash');
+    const ok = await t.admin('PUT', '/api/providers/openrouter', { auditModel: 'google/gemini-2.5-pro' });
+    expect(ok.statusCode).toBe(200);
+    expect(ok.json().auditModel).toBe('google/gemini-2.5-pro');
+    expect((await t.admin('GET', '/api/providers')).json().openrouter.auditModel).toBe('google/gemini-2.5-pro');
+
+    const video = await t.admin('PUT', '/api/providers/openrouter', { auditModel: 'google/veo-3.1-fast' });
+    expect(video.statusCode).toBe(400);
+    expect(video.json().error.message).toMatch(/model video/);
+    expect((await t.admin('PUT', '/api/providers/openrouter', { auditModel: 'not a model' })).statusCode).toBe(400);
+    expect((await t.admin('PUT', '/api/providers/openrouter', { auditModel: null })).json().auditModel).toBe('google/gemini-2.5-flash');
   });
 
   it('POST test: 400 without a key, balance with a good key, 400 with the Indonesian message for a rejected key', async () => {

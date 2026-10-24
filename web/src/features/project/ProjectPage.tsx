@@ -109,6 +109,12 @@ function Banners(props: { p: Project }) {
       {story?.status === 'failed' && story.error && !error && (
         <p role="alert" className="rounded-md bg-destructive/10 px-3 py-2 text-[12.5px] text-destructive">Gagal: {story.error}</p>
       )}
+      {/* Audit gate (spec §4.4): the server refused to assemble and named the shots. */}
+      {story?.gate && !error && (
+        <p role="alert" className="rounded-md bg-(--brand-muted) px-3 py-2 text-[12.5px]">
+          <span className="font-medium">Belum bisa dirakit.</span> {story.gate.message}
+        </p>
+      )}
       {stale && story && <p role="status" className="text-[12px] text-muted-foreground">Pembaruan status gagal dimuat — data di bawah mungkin belum terbaru. <button className="underline" onClick={props.p.reload}>Muat ulang</button></p>}
       {story?.videoStale && <p role="status" className="rounded-md bg-muted px-3 py-2 text-[12.5px]">Urutan atau isi berubah sejak video dirakit — rakit ulang (tombol kanan atas) agar video akhir mengikuti timeline.</p>}
     </>

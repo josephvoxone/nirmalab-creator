@@ -5,7 +5,7 @@ import type { UserAuthStore } from '../auth/store.js';
 import type { FlowStore } from '../flow/store.js';
 import { OpenRouterCatalog } from './catalog.js';
 import { OpenRouterError, keyBalance, type FetchLike } from './client.js';
-import { OpenRouterConfigStore, ProviderInputError, type OpenRouterPatch } from './config.js';
+import { OpenRouterConfigStore, ProviderInputError, isModelId, type OpenRouterPatch } from './config.js';
 
 export type ProviderRouteOptions = {
   userAuthStore: UserAuthStore;
@@ -16,6 +16,21 @@ export type ProviderRouteOptions = {
 };
 
 const bad = (reply: FastifyReply, status: number, code: string, message: string) => reply.code(status).send({ error: { code, message } });
+
+/**
+ * The audit model must accept an image as input (spec §4.4). The catalog we have lists what each
+ * OpenRouter model generates, so the check is one-sided and honest: a model the catalog knows as a
+ * video generator is refused; anything else (a vision chat model) passes on its id shape alone.
+ */
+async function auditModelProblem(catalog: OpenRouterCatalog, model: string): Promise<string | undefined> {
+  try {
+    const { video } = await catalog.models();
+    if (video.some(m => m.id === model)) return `auditModel: ${model} adalah model video, bukan model yang menerima gambar`;
+  } catch {
+    // Catalog offline: the id shape is all that can be checked, and that is already done.
+  }
+  return undefined;
+}
 
 export async function registerProviderRoutes(server: FastifyInstance, options: ProviderRouteOptions): Promise<void> {
   const auth = options.userAuthStore;
@@ -55,6 +70,15 @@ export async function registerProviderRoutes(server: FastifyInstance, options: P
         if (value !== null && typeof value !== 'string') return bad(reply, 400, 'INVALID_INPUT', `defaults.${kind} harus berupa model id atau null`);
         patch.defaults[kind] = value as string | null;
       }
+    }
+    if ('auditModel' in body) {
+      const value = body.auditModel;
+      if (value !== null && !isModelId(value)) return bad(reply, 400, 'INVALID_INPUT', 'auditModel harus berupa model id atau null');
+      if (typeof value === 'string') {
+        const problem = await auditModelProblem(catalog, value);
+        if (problem) return bad(reply, 400, 'INVALID_INPUT', problem);
+      }
+      patch.auditModel = value as string | null;
     }
     try {
       return await config.update(patch);

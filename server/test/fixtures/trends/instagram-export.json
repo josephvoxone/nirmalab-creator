@@ -1,0 +1,93 @@
+[
+  {
+    "node": {
+      "__typename": "GraphVideo",
+      "id": "3111111111111111111",
+      "shortcode": "CxAbCdEf001",
+      "is_video": true,
+      "product_type": "clips",
+      "taken_at_timestamp": 1792832400,
+      "video_view_count": 480000,
+      "video_duration": 22.4,
+      "edge_media_preview_like": {
+        "count": 61000
+      },
+      "edge_media_to_comment": {
+        "count": 1290
+      },
+      "edge_media_to_caption": {
+        "edges": [
+          {
+            "node": {
+              "text": "Sebelum vs sesudah: kamar anak jadi hutan. Simpan buat ide!"
+            }
+          }
+        ]
+      },
+      "owner": {
+        "username": "ceritapagi"
+      },
+      "display_url": "https://scontent.example-cdn.invalid/v/cover-01.jpg",
+      "dimensions": {
+        "height": 1920,
+        "width": 1080
+      }
+    }
+  },
+  {
+    "id": "3222222222222222222",
+    "shortcode": "CxAbCdEf002",
+    "__typename": "GraphVideo",
+    "is_video": true,
+    "taken_at_timestamp": 1792152000,
+    "video_view_count": 1200000,
+    "video_duration": 15.0,
+    "edge_liked_by": {
+      "count": 88000
+    },
+    "edge_media_to_parent_comment": {
+      "count": 3100
+    },
+    "edge_media_to_caption": {
+      "edges": [
+        {
+          "node": {
+            "text": "AI bikin storyboard 8 shot dalam 2 menit"
+          }
+        }
+      ]
+    },
+    "owner": {
+      "username": "studionirmala"
+    },
+    "display_url": "https://scontent.example-cdn.invalid/v/cover-02.jpg"
+  },
+  {
+    "node": {
+      "__typename": "GraphImage",
+      "id": "3333333333333333333",
+      "shortcode": "CxAbCdEf003",
+      "is_video": false,
+      "taken_at_timestamp": 1792922400,
+      "edge_media_preview_like": {
+        "count": 5000
+      },
+      "edge_media_to_comment": {
+        "count": 90
+      },
+      "edge_media_to_caption": {
+        "edges": [
+          {
+            "node": {
+              "text": "Poster saja, tanpa video"
+            }
+          }
+        ]
+      },
+      "owner": {
+        "username": "ceritapagi"
+      },
+      "display_url": "https://scontent.example-cdn.invalid/v/cover-03.jpg"
+    }
+  }
+]

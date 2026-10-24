@@ -9,6 +9,8 @@
  * flagged `intentDerived` so the compiler can warn instead of failing the draft.
  */
 import { CATALOG, composeStyle, resolveLook, shotCountFor, type Look, type Option } from './looks.js';
+import { captionFor } from './caption.js';
+import { lintCopy, repairCopy } from '../text/lint.js';
 import { LOCATION_KEY, MAX_LOCATIONS, MAX_NARRATION_WORDS, MAX_SCENES, SCENE_ID, normalizeScenes, validateStoryboard, type CharacterSpec, type Location, type Scene } from './storyboard.js';
 import { anchorIsGeneric, DEFAULT_RULES, validateBible, type Audience, type CharacterCard, type SceneCard, type StructureAct, type StructureBeat, type StoryBible } from '../bible/story.js';
 import type { DraftStoryboard, IntentShot, ShotIntent } from '../bible/intent.js';
@@ -43,6 +45,7 @@ const SYSTEM = `You are a film director planning a short AI-video story for Goog
 You do NOT write the final prompt prose. You write INTENT: what is in frame, the ONE action of the beat, and what visibly changes between the first and the last frame. A deterministic compiler turns your intent plus the bibles into the English prompt, so intent must be concrete, visible and free of camera gear.
 Return ONLY one JSON object, no commentary:
 {"title": "...", "logline": "one Indonesian sentence: who wants what, and what stands in the way",
+ "caption": "3 short Indonesian lines: ONE concrete fact you can see, ONE thing that goes wrong, ONE how it lands",
  "titleCard": {"lines": ["UP TO 2 SHORT", "UPPERCASE LINES"], "kicker": "short Indonesian tagline"},
  "bible": {
    "logline": "the same Indonesian logline",
@@ -64,7 +67,8 @@ Rules (they are checked by code; violations are sent back to you):
 - "title", "titleCard.lines" and "kicker" are in Bahasa Indonesia (no English words), short and evocative.
 - Each shot "id" is a short descriptive Indonesian kebab-case word for the beat (e.g. "pembuka", "badai", "pelukan"), never "shot-1".
 - Shot 1 is a silent establishing intro ("silent": true, no narration) with empty open sky in the upper third for the title.
-- Every other shot has "narration": ONE Indonesian sentence (or two very short ones), max ${MAX_NARRATION_WORDS} words, warm storyteller voice.
+- Every other shot has "narration": one concrete action or image per line, max ${MAX_NARRATION_WORDS} words, name the character (a name, never a TOKEN or a pronoun like "ia"), no adjective without evidence (never "indah", "megah", "epik", "memukau", "luar biasa"), and never describe the camera. If a line runs long, cut it at a full stop — never drop the beat.
+- "caption" has three short lines, each on its own line, Bahasa Indonesia: a concrete first line (a thing you can see: who, where, what), one tension (the ONE thing that goes wrong) and one payoff (how it lands). No adjectives without evidence, no emoji, no ALL CAPS, no "!!", never "dalam dunia yang", "tak hanya", "bukan sekadar", "mari kita", "simak", "yuk". Copy is linted; slop is sent back to you.
 - Write "intent" for every shot. "subject" is a character TOKEN or one concrete noun phrase in the frame; "action" is ONE English verb chain, never two beats joined by "and then"; "startState" and "endState" are visible facts (posture, position, opening, object, light), never feelings, and they must differ.
 - "emotion" is one or two Indonesian mood words for the beat (e.g. "tenang", "takut lalu berani").
 - Shot "framing" must be picked from: ${CATALOG.framings.map(f => f.prompt).join('; ')}.
@@ -381,6 +385,7 @@ function normalise(raw: unknown, style: string): DraftStoryboard {
   const shotsIn = (Array.isArray(r.shots) ? r.shots : []) as Array<Record<string, unknown>>;
   const titleCard = r.titleCard as { lines?: unknown; kicker?: unknown } | undefined;
   const logline = typeof r.logline === 'string' ? r.logline.trim().slice(0, 300) : '';
+  const caption = typeof r.caption === 'string' ? r.caption.replace(/\r/g, '').trim().slice(0, 2200) : '';
   const spine = draftBibleSpine(r.bible, logline);
   const goals = bibleSceneGoals(isObject(r.bible) ? r.bible.scenes : undefined);
   const ids = new Map<string, string>();
@@ -426,6 +431,7 @@ function normalise(raw: unknown, style: string): DraftStoryboard {
       ? { titleCard: { lines: titleCard!.lines.map(String).slice(0, 2), ...(titleCard!.kicker ? { kicker: String(titleCard!.kicker) } : {}) } }
       : {}),
     ...(logline ? { logline } : {}),
+    ...(caption ? { caption } : {}),
     ...(Object.keys(locations).length ? { locations } : {}),
     ...(scenes.length ? { scenes } : {}),
     shots
@@ -454,7 +460,68 @@ function proseFix(board: DraftStoryboard): DraftStoryboard {
     ...(board.logline ? { logline: speak(board.logline) } : {}),
     ...(board.bible ? { bible: { ...board.bible, logline: speak(board.bible.logline) } } : {}),
     ...(board.scenes ? { scenes: board.scenes.map(sc => ({ ...sc, title: speak(sc.title).slice(0, 80), ...(sc.summary ? { summary: speak(sc.summary).slice(0, 300) } : {}) })) } : {}),
-    shots: board.shots.map(s => (s.narration ? { ...s, narration: speak(s.narration) } : s))
+    shots: board.shots.map(s => (s.narration ? { ...s, narration: speak(s.narration) } : s)),
+    ...(board.caption ? { caption: speak(board.caption) } : {})
+  };
+}
+
+// ---------------------------------------------------------------------------
+// copy gate (spec §4.3 lint, §7 P4) — repair the mechanical, reject the rest
+// ---------------------------------------------------------------------------
+
+/**
+ * Repair what a machine can fix honestly, and report what only a rewrite can fix.
+ * Narration and the title are the writer's job, so a surviving issue is a problem the draft is
+ * sent back with; the logline and the kicker are optional, so an unsaveable one is dropped and
+ * the caption is derived from what is left (`stories/caption.ts`).
+ */
+function polishCopy(board: DraftStoryboard): { board: DraftStoryboard; problems: string[] } {
+  const problems: string[] = [];
+  const shots = board.shots.map(shot => {
+    if (!shot.narration) return shot;
+    const line = repairCopy(shot.narration, { kind: 'narration' }).text;
+    const issues = lintCopy(line, { kind: 'narration' });
+    if (issues.length) {
+      problems.push(`shot ${shot.id}: narasi belum lolos lint — ${issues.join('; ')}`);
+      return shot;
+    }
+    return { ...shot, narration: line };
+  });
+  const title = repairCopy(board.title, { kind: 'title' }).text;
+  const titleIssues = lintCopy(title, { kind: 'title' });
+  if (titleIssues.length) problems.push(`judul: ${titleIssues.join('; ')}`);
+
+  const loglineFixed = board.logline ? repairCopy(board.logline, { kind: 'caption' }).text : '';
+  const logline = loglineFixed && !lintCopy(loglineFixed, { kind: 'caption' }).length ? loglineFixed : undefined;
+  const kickerFixed = board.titleCard?.kicker ? repairCopy(board.titleCard.kicker, { kind: 'title' }).text : '';
+  const kicker = kickerFixed && !lintCopy(kickerFixed, { kind: 'title' }).length ? kickerFixed : '';
+  const titleCard = board.titleCard
+    ? { lines: board.titleCard.lines, ...(kicker ? { kicker } : {}) }
+    : undefined;
+
+  // A model caption is used only when it survives the lint; otherwise the story's facts write it.
+  const captionFixed = board.caption ? repairCopy(board.caption, { kind: 'caption' }).text : '';
+  const caption = captionFixed && !lintCopy(captionFixed, { kind: 'caption' }).length
+    ? captionFixed
+    : captionFor({
+      title: titleIssues.length ? board.title : title,
+      ...(logline ? { logline } : {}),
+      ...(kicker ? { kicker } : {}),
+      ...(board.template ? { template: board.template } : {}),
+      lines: shots.map(s => s.narration).filter((line): line is string => !!line),
+      ...(board.bible ? { bible: board.bible } : {})
+    });
+
+  return {
+    problems,
+    board: {
+      ...board,
+      ...(titleIssues.length ? {} : { title }),
+      shots,
+      ...(logline ? { logline } : { logline: undefined }),
+      ...(titleCard ? { titleCard } : {}),
+      ...(caption ? { caption } : {})
+    }
   };
 }
 
@@ -490,9 +557,9 @@ export async function draftStoryboard(input: DraftInput, generate: TextGenerator
     let reply = '';
     try {
       reply = await generate(SYSTEM, prompt);
-      const board = proseFix({ ...normalise(parseJsonBlock(reply), style), ...extra });
-      problems = validateStoryboard(board);
-      if (!problems.length) return board;
+      const polished = polishCopy(proseFix({ ...normalise(parseJsonBlock(reply), style), ...extra }));
+      problems = [...polished.problems, ...validateStoryboard(polished.board)];
+      if (!problems.length) return polished.board;
     } catch (error) {
       problems = [`reply was not valid JSON (${error instanceof Error ? error.message : String(error)})`];
     }

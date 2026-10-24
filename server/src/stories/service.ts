@@ -14,8 +14,9 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type { FlowStore } from '../flow/store.js';
 import { linkOrCopy } from '../media/link.js';
-import { CREDITS_PER_SHOT, castOf, frameHashFor, framePromptFor, hashFor, normalizeScenes, sheetHashFor, sheetPromptFor, shotCast, shotPromptFor, validateStoryboard, type Storyboard } from './storyboard.js';
+import { CREDITS_PER_SHOT, bibleSceneFor, castOf, frameHashFor, framePromptFor, hashFor, normalizeScenes, sceneOf, sheetHashFor, sheetPromptFor, shotCast, shotPromptFor, validateStoryboard, type Shot, type Storyboard } from './storyboard.js';
 import { ShotCompileError } from '../bible/compiler.js';
+import { AUDIT_GATE, AuditParseError, MAX_AUDIT_IMAGES, type AuditDimensions, type AuditExpectation, type AuditResult } from '../audit/vision.js';
 
 import { composeStyle, resolveLook } from './looks.js';
 import { usdLabel } from '../providers/catalog.js';
@@ -24,6 +25,8 @@ const MIN_IMAGE_BYTES = 10_000;
 
 export const MAX_TAKES = 3;
 export const MIN_CLIP_SEC = 3;
+/** Audits that may re-queue a take: the first take plus one repaired take, never a third (spec §4.4). */
+export const AUDIT_REPAIR_LIMIT = 2;
 const STORY_ID = /^story_[a-f0-9]{16}$/;
 
 export type ClipProbe = { durationSec: number; hasAudio: boolean };
@@ -45,6 +48,21 @@ export type TakeState = {
 
 export type CastState = TakeState & { token: string; name: string; flowCharacterId?: string };
 
+/** One stored vision audit (spec §4.4). `target` says which take it judged. */
+export type AuditRecord = {
+  score: number;
+  dimensions: AuditDimensions;
+  issues: string[];
+  repair: string;
+  model: string;
+  atMs: number;
+  costUsd: number;
+  target?: 'frame' | 'clip';
+};
+
+/** A shot the gate refuses: under 70, or flagged for a human. */
+export type GateBlocker = { id: string; score?: number; needsReview: boolean };
+
 export type ShotState = {
   id: string;
   /** konsisten mode: the approved still this shot is animated from. */
@@ -57,6 +75,18 @@ export type ShotState = {
   durationSec?: number;
   lastError?: string;
   error?: string;
+  /** Latest vision audit of this shot's keyframe (konsisten) or clip (cepat). */
+  audit?: AuditRecord;
+  /** `frame:<jobId>` / `clip:<jobId>` of the take the stored audit describes (never audited twice). */
+  auditJobId?: string;
+  /** Audits that led to a re-queue: the first take plus one repair, never more. */
+  auditRepairs?: number;
+  /** Extra instruction the failing audit asked for; appended to the next prompt, then cleared. */
+  auditRepair?: string;
+  /** A human must look at this shot before the video is assembled. */
+  needsReview?: boolean;
+  approvedBy?: string;
+  approvedAtMs?: number;
 };
 
 export type StoryRecord = {
@@ -77,6 +107,8 @@ export type StoryRecord = {
   events: Array<{ atMs: number; message: string }>;
   /** User id that created the story; every Flow job it queues is attributed to them. */
   createdBy?: string;
+  /** Why the last assembly was refused (spec §4.4), so the UI can list the shots. */
+  gate?: { message: string; shots: GateBlocker[] };
 };
 
 export type StoryDeps = {
@@ -91,6 +123,16 @@ export type StoryDeps = {
   openRouter?: {
     usdPerClip: (model: string) => Promise<number | null>;
     balance: () => Promise<{ remainingUsd: number | null } | null>;
+  };
+  /**
+   * Vision audit (spec §4.4, §9.3–9.5). `model()` returns undefined when OpenRouter is not
+   * configured: nothing is audited, nothing is spent and no shot is flagged. `frames()` samples a
+   * rendered clip (ffmpeg) for the `cepat` clip audit.
+   */
+  audit?: {
+    model: () => Promise<string | undefined>;
+    run: (input: { images: string[]; expectation: AuditExpectation; model: string }) => Promise<AuditResult>;
+    frames: (clip: string, dir: string, shotId: string) => Promise<string[]>;
   };
 };
 
@@ -277,6 +319,7 @@ export class StoryService {
       });
       record.error = undefined;
       record.run = undefined;
+      record.gate = undefined;
       // The cut is stale only when what plays changes (order or a take), not scene titles/splits.
       const cut = (shots: ShotState[]) => shots.map(s => `${s.id}:${s.status}:${s.jobId ?? ''}`).join('|');
       if (record.video && changed && cut(record.shots) !== cut([...previous.values()])) record.videoStale = true;
@@ -325,7 +368,7 @@ export class StoryService {
     const konsisten = record.mode === 'konsisten';
     const engine = this.engine(board, 'video');
     const job = await this.deps.flow.createJob({
-      prompt,
+      prompt: state.auditRepair ? `${prompt} ${state.auditRepair}`.trim() : prompt,
       technique: `story:${record.id}/${shot.id}`,
       aspect: board.aspect ?? '9:16',
       durationSec: 6,
@@ -487,6 +530,8 @@ export class StoryService {
         state.status = 'done';
         state.durationSec = (await this.deps.probe(target)).durationSec;
         state.lastError = undefined;
+        // cepat: the clip is the only enforcement point (spec §9.3) — sample it and audit it now.
+        if (record.mode !== 'konsisten') changed = (await this.auditClip(record, board, state, shot, target)) || changed;
       }
       changed = true;
     }
@@ -544,6 +589,13 @@ export class StoryService {
           await this.save(record, `${record.shots.filter(s => s.status === 'done').length}/${record.shots.length} shot siap`);
           return record;
         }
+        // Automatic assembly obeys the same gate: a flagged shot stops here and waits for a human.
+        const blocked = this.setGate(record);
+        if (blocked.length) {
+          record.status = 'review';
+          await this.save(record, record.gate!.message);
+          return record;
+        }
         record.status = 'assembling';
         await this.save(record, 'Semua shot siap, merakit video');
       }
@@ -557,6 +609,14 @@ export class StoryService {
       const record = await this.require(id);
       if (BUSY_STATUSES.includes(record.status)) throw new StoryError('BUSY', 'Story sedang diproses');
       if (!record.shots.every(s => s.status === 'done')) throw new StoryError('INVALID', 'Semua shot harus selesai sebelum video dirakit');
+      // Audit gate (spec §4.4): a shot under 70 or flagged for review blocks the cut until fixed or approved.
+      const blockers = this.setGate(record);
+      if (blockers.length) {
+        record.status = 'review';
+        const message = record.gate!.message;
+        await this.save(record, message);
+        throw new StoryError('INVALID', message);
+      }
       const board = await this.readStoryboard(id);
       record.status = 'assembling';
       record.error = undefined;
@@ -578,6 +638,7 @@ export class StoryService {
       record.video = { bytes: info.size, finishedAtMs: Date.now() };
       record.videoStale = undefined;
       record.error = undefined;
+      record.gate = undefined;
       await rm(backup, { force: true });
       await this.save(record, 'Video selesai');
     } catch (error) {
@@ -685,7 +746,8 @@ export class StoryService {
   private async queueFrame(record: StoryRecord, board: Storyboard, shotId: string): Promise<void> {
     const shot = board.shots.find(s => s.id === shotId)!;
     const state = record.shots.find(s => s.id === shotId)!;
-    const prompt = this.compiled(() => framePromptFor(board, shot), shot.id);
+    const base = this.compiled(() => framePromptFor(board, shot), shot.id);
+    const prompt = state.auditRepair ? `${base} ${state.auditRepair}`.trim() : base;
     const engine = this.engine(board, 'image');
     const job = await this.deps.flow.createJob({
       prompt, kind: 'image', group: record.id, aspect: board.aspect ?? '9:16', durationSec: 6, ...this.owner(record), ...engine,
@@ -736,6 +798,210 @@ export class StoryService {
     return undefined;
   }
 
+  // ------------------------------------------------------------------ vision audit (spec §4.4)
+
+  /**
+   * One audit call. Never throws: a provider failure is recorded in the event log and returns
+   * undefined (an unreachable OpenRouter must not block a render), while an unreadable reply is a
+   * score of 0 — a model that cannot say "pass" never grants one.
+   */
+  private async runAudit(record: StoryRecord, board: Storyboard, shot: Shot, images: string[]): Promise<AuditRecord | undefined> {
+    const audit = this.deps.audit;
+    if (!audit || !images.length) return undefined;
+    const model = await audit.model().catch(() => undefined);
+    if (!model) return undefined;
+    try {
+      const result = await audit.run({ images: images.slice(0, MAX_AUDIT_IMAGES), expectation: this.expectation(board, shot), model });
+      return { score: result.score, dimensions: result.dimensions, issues: result.issues, repair: result.repair, model, atMs: Date.now(), costUsd: result.costUsd };
+    } catch (error) {
+      if (error instanceof AuditParseError) {
+        return {
+          score: 0, dimensions: { sceneMatch: 0, actionMatch: 0, moodMatch: 0, composition: 0 },
+          issues: [error.message], repair: '', model, atMs: Date.now(), costUsd: 0
+        };
+      }
+      record.events = [...record.events, { atMs: Date.now(), message: `Audit gagal: ${error instanceof Error ? error.message : String(error)}`.slice(0, 200) }].slice(-60);
+      return undefined;
+    }
+  }
+
+  /** What the take must deliver (spec §9.4): scene goal, one action, mood, the spoken line. */
+  private expectation(board: Storyboard, shot: Shot): AuditExpectation {
+    const scene = bibleSceneFor(board, shot);
+    const flat = sceneOf(board, shot.id);
+    const location = flat?.location ? board.locations?.[flat.location]?.look : undefined;
+    const intent = shot.intent;
+    // The auditor reads names, never TOKENs: the same expansion the image prompt gets.
+    const named = (text: string) => shotCast(board, shot).reduce((out, c) => out.split(c.token).join(c.name), text);
+    return {
+      scene: [scene?.title ?? flat?.title, scene?.goal ?? flat?.summary, location].filter(Boolean).join(' — ') || board.title,
+      action: intent
+        ? [intent.subject, intent.action, intent.startState && intent.endState ? `from ${intent.startState} to ${intent.endState}` : ''].filter(Boolean).join(': ')
+        : named(shot.prompt),
+      ...(intent?.emotion ?? board.bible?.tone ? { mood: intent?.emotion ?? board.bible?.tone } : {}),
+      ...(shot.silent || !shot.narration ? {} : { dialogue: named(shot.narration) })
+    };
+  }
+
+  /** Cast sheets as identity references — at most two, so take + references never exceed three. */
+  private referenceImages(record: StoryRecord, board: Storyboard, shot: Shot): string[] {
+    return shotCast(board, shot).map(c => this.castPath(record.id, c.token)).filter(f => existsSync(f)).slice(0, MAX_AUDIT_IMAGES - 1);
+  }
+
+  /** konsisten: audit the keyframe before it is animated (a repair costs 0 Flow credits). */
+  private async auditFrame(record: StoryRecord, board: Storyboard, state: ShotState, shot: Shot): Promise<boolean> {
+    const take = state.frame;
+    if (!this.deps.audit || take?.status !== 'done' || !take.jobId) return false;
+    const key = `frame:${take.jobId}`;
+    if (state.auditJobId === key) return false;
+    const file = this.framePath(record.id, state.id);
+    if (!existsSync(file)) return false;
+    const audit = await this.runAudit(record, board, shot, [file, ...this.referenceImages(record, board, shot)]);
+    if (!audit) return false;
+    state.audit = { ...audit, target: 'frame' };
+    state.auditJobId = key;
+    const repairs = (state.auditRepairs ?? 0) + 1;
+    state.auditRepairs = repairs;
+    if (audit.score >= AUDIT_GATE) {
+      state.needsReview = undefined;
+      state.auditRepair = undefined;
+      return true;
+    }
+    if (audit.repair && repairs < AUDIT_REPAIR_LIMIT) {
+      state.auditRepair = audit.repair;
+      state.frame = { status: 'pending', attempts: 0 };
+      await this.queueFrame(record, board, state.id);
+      state.auditRepair = undefined;
+      return true;
+    }
+    state.needsReview = true;
+    return true;
+  }
+
+  /**
+   * cepat: audit three frames sampled across the finished clip (spec §9.3). A clip repair spends
+   * Flow credits, so it waits for `board.autoRepairClip` and never crosses the daily cap.
+   */
+  private async auditClip(record: StoryRecord, board: Storyboard, state: ShotState, shot: Shot, file: string): Promise<boolean> {
+    if (!this.deps.audit || state.status !== 'done') return false;
+    const key = `clip:${state.jobId ?? ''}`;
+    if (state.auditJobId === key) return false;
+    let frames: string[] = [];
+    try {
+      frames = await this.deps.audit.frames(file, this.storyDir(record.id), state.id);
+    } catch (error) {
+      record.events = [...record.events, { atMs: Date.now(), message: `Audit gagal: sampel frame ${state.id} tidak bisa dibuat`.slice(0, 200) }].slice(-60);
+      return false;
+    }
+    const audit = await this.runAudit(record, board, shot, [...frames, ...this.referenceImages(record, board, shot)].slice(0, MAX_AUDIT_IMAGES));
+    if (!audit) return false;
+    state.audit = { ...audit, target: 'clip' };
+    state.auditJobId = key;
+    const repairs = (state.auditRepairs ?? 0) + 1;
+    state.auditRepairs = repairs;
+    if (audit.score >= AUDIT_GATE) {
+      state.needsReview = undefined;
+      return true;
+    }
+    if (!audit.repair || repairs >= AUDIT_REPAIR_LIMIT) {
+      state.needsReview = true;
+      return true;
+    }
+    // Default is a human click (spec §9.5): never burn 10 credits unseen, never cross the cap.
+    if (board.autoRepairClip !== true || !(await this.withinDailyCap())) {
+      state.needsReview = true;
+      return true;
+    }
+    state.status = 'pending';
+    state.attempts = 0;
+    state.auditRepair = audit.repair;
+    await this.queueShot(record, board, state.id);
+    state.auditRepair = undefined;
+    return true;
+  }
+
+  /** A Flow clip repair must fit in the account's daily credit cap (unknown cap = no limit). */
+  private async withinDailyCap(cost = CREDITS_PER_SHOT): Promise<boolean> {
+    const capped = (await this.deps.flow.listAccounts()).filter(a => a.enabled !== false && typeof a.dailyCreditCap === 'number');
+    if (!capped.length) return true;
+    const cap = capped.reduce((sum, a) => sum + (a.dailyCreditCap ?? 0), 0);
+    const used = capped.reduce((sum, a) => sum + (a.creditsUsedToday ?? 0), 0);
+    return used + cost <= cap;
+  }
+
+  /** Shots the gate refuses: audited below 70 or flagged for a human, unless a human already signed off. */
+  gateBlockers(record: Pick<StoryRecord, 'shots'>): GateBlocker[] {
+    return record.shots
+      .filter(s => {
+        if (typeof s.approvedAtMs === 'number' && s.audit && s.approvedAtMs >= s.audit.atMs) return false;
+        return s.needsReview || (typeof s.audit?.score === 'number' && s.audit.score < AUDIT_GATE);
+      })
+      .map(s => ({ id: s.id, ...(typeof s.audit?.score === 'number' ? { score: s.audit.score } : {}), needsReview: !!s.needsReview }));
+  }
+
+  private gateMessage(blockers: GateBlocker[]): string {
+    const parts = blockers.map(b => `${b.id} (${b.needsReview ? 'perlu dicek' : `skor ${b.score}`})`);
+    return `Belum bisa dirakit — audit belum lolos: ${parts.join(', ')}. Perbaiki atau setujui dulu di tab Hasil.`;
+  }
+
+  /** Remember (or clear) why the gate refused, so the UI can list the shots after a reload. */
+  private setGate(record: StoryRecord): GateBlocker[] {
+    const blockers = this.gateBlockers(record);
+    record.gate = blockers.length ? { message: this.gateMessage(blockers), shots: blockers } : undefined;
+    return blockers;
+  }
+
+  /** Human sign-off: clears the flag and records who approved the shot. */
+  async approveShot(id: string, shotId: string, options: { by?: string } = {}): Promise<StoryRecord> {
+    return this.withLock(id, async () => {
+      const record = await this.require(id);
+      const state = record.shots.find(s => s.id === shotId);
+      if (!state) throw new StoryError('NOT_FOUND', 'Shot tidak ditemukan');
+      state.needsReview = undefined;
+      state.approvedAtMs = Date.now();
+      if (options.by) state.approvedBy = options.by;
+      this.setGate(record);
+      await this.save(record, `Audit ${shotId} disetujui${options.by ? ` oleh ${options.by}` : ''}`);
+      return record;
+    });
+  }
+
+  /**
+   * Spend on the repair the audit asked for. konsisten: the keyframe is drawn again (free).
+   * cepat: the clip is re-rendered — allowed here because a human asked, still cap-checked.
+   */
+  async repairShot(id: string, shotId: string, options: { by?: string } = {}): Promise<StoryRecord> {
+    return this.withLock(id, async () => {
+      const record = await this.require(id);
+      if (BUSY_STATUSES.includes(record.status)) throw new StoryError('BUSY', 'Story sedang diproses; tunggu selesai dulu');
+      const board = await this.readStoryboard(id);
+      const shot = board.shots.find(s => s.id === shotId);
+      const state = record.shots.find(s => s.id === shotId);
+      if (!shot || !state) throw new StoryError('NOT_FOUND', 'Shot tidak ditemukan');
+      const repair = state.audit?.repair?.trim();
+      if (!repair) throw new StoryError('INVALID', 'Audit belum memberi instruksi perbaikan untuk shot ini');
+      if (!(await this.withinDailyCap())) throw new StoryError('BUDGET', 'Batas kredit harian akun tersentuh; setujui shot ini atau tunggu besok');
+      record.run = { shots: [shotId] };
+      record.error = undefined;
+      state.needsReview = undefined;
+      state.auditRepair = repair;
+      if (record.mode === 'konsisten' && state.frame) {
+        state.frame = { status: 'pending', attempts: 0 };
+        await this.queueFrame(record, board, shotId);
+        record.status = 'framing';
+      } else {
+        state.status = 'pending';
+        state.attempts = 0;
+        await this.queueShot(record, board, shotId);
+        record.status = 'rendering';
+      }
+      state.auditRepair = undefined;
+      this.setGate(record);
+      await this.save(record, `Perbaikan audit ${shotId}${options.by ? ` oleh ${options.by}` : ''}`);
+      return record;
+    });
+  }
+
   private async advancePrep(record: StoryRecord, board: Storyboard): Promise<StoryRecord> {
     let changed = false;
     if (record.status === 'casting') {
@@ -762,12 +1028,17 @@ export class StoryService {
       await this.save(record, 'Karakter siap, membuat keyframe');
       changed = false;
     }
+    const run = this.runIds(record);
     for (const s of record.shots) {
       if (!s.frame) continue;
       changed = (await this.collectTake(s.frame, this.framePath(record.id, s.id), f => this.imageQc(f, board),
         () => this.queueFrame(record, board, s.id))) || changed;
+      // konsisten: judge the still before it is animated — a repair here costs no Flow credits.
+      const shot = board.shots.find(b => b.id === s.id);
+      if (shot && s.frame.status === 'done' && s.frame.jobId) {
+        changed = (await this.auditFrame(record, board, s, shot)) || changed;
+      }
     }
-    const run = this.runIds(record);
     const frames = record.shots.filter(s => s.frame).map(s => s.frame!);
     const runFrames = record.shots.filter(s => s.frame && run.has(s.id)).map(s => s.frame!);
     const open = frames.some(f => f.status === 'queued');

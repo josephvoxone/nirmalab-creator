@@ -66,7 +66,9 @@ function fixture() {
     sameSizeOther: put(root, `${S}/02-b.mp4`, Buffer.alloc(6000, 8)),
     busyPrev: put(root, 'stories/story_bbbbbbbbbbbbbbbb/final.mp4.prev', 800),
     oldCache: put(root, 'cache/img/aaaa.webp', 700, 31 * DAY),
-    newCache: put(root, 'cache/img/bbbb.webp', 600, 29 * DAY)
+    newCache: put(root, 'cache/img/bbbb.webp', 600, 29 * DAY),
+    oldTrend: put(root, 'trends/cache/ID-24h-semua.json', 500, 31 * DAY),
+    newTrend: put(root, 'trends/cache/US-7h-ai.json', 400, 1 * DAY)
   };
   mkdirSync(join(root, S), { recursive: true });
   linkSync(f.linkedMissing, join(root, S, '03-c.mp4'));
@@ -81,16 +83,16 @@ describe('cleanupStorage', () => {
     const f = fixture();
     const res = await cleanupStorage(f.root, { jobs: async () => f.jobs, now: () => NOW });
     // Removed: failed-job clip, missing-job clip, final.mp4.prev, 31-day cache.
-    for (const gone of [f.failed, f.missing, f.prev, f.oldCache]) expect(existsSync(gone), gone).toBe(false);
-    expect(res.removed).toBe(4);
+    for (const gone of [f.failed, f.missing, f.prev, f.oldCache, f.oldTrend]) expect(existsSync(gone), gone).toBe(false);
+    expect(res.removed).toBe(5);
     // Kept: done job, story-linked, story-referenced, fresh (in-flight), foreign names, the live cut, a busy story's backup, fresh cache.
-    for (const kept of [f.done, f.linkedMissing, f.namedFailed, f.fresh, f.other, f.final, f.busyPrev, f.newCache]) expect(existsSync(kept), kept).toBe(true);
+    for (const kept of [f.done, f.linkedMissing, f.namedFailed, f.fresh, f.other, f.final, f.busyPrev, f.newCache, f.newTrend]) expect(existsSync(kept), kept).toBe(true);
     // The byte-identical story copy now shares the clip's inode; a same-size different file does not.
     expect(sameFile(f.duplicate, f.done)).toBe(true);
     expect(readFileSync(f.duplicate).equals(Buffer.alloc(6000, 7))).toBe(true);
     expect(sameFile(f.sameSizeOther, f.done)).toBe(false);
     expect(res.linked).toBe(1);
-    expect(res.freedBytes).toBe(3000 + 2000 + 4000 + 700 + 6000);
+    expect(res.freedBytes).toBe(3000 + 2000 + 4000 + 700 + 6000 + 500);
   });
 
   it('is idempotent: a second run frees nothing', async () => {

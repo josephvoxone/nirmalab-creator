@@ -4,6 +4,7 @@ import { sessionUser } from './auth/routes.js';
 import type { UserAuthStore } from './auth/store.js';
 import type { FlowStore } from './flow/store.js';
 import { measureStorage } from './media/storage.js';
+import { AuditLedger } from './audit/ledger.js';
 import type { OpenRouterBalance } from './providers/client.js';
 import { OpenRouterConfigStore } from './providers/config.js';
 
@@ -33,6 +34,8 @@ export async function registerQuotaRoutes(server: FastifyInstance, options: Quot
         online: (await options.flow.bridgeStatus()).online
       },
       openrouter: { configured, remainingUsd: balance?.remainingUsd ?? null, usedUsd: balance?.usedUsd ?? null },
+      // Vision audit spend of today (spec §9.5) — money only, no prompts.
+      audit: await new AuditLedger(options.dataDir).today(),
       storage: { usedBytes: storage.usedBytes, diskFreeBytes: storage.diskFreeBytes }
     };
   });

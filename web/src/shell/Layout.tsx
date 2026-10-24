@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import {
-  BookOpenText, Clapperboard, Gauge, LayoutGrid, LogOut, PanelLeft, Search, Send, Cpu, Server, Settings, SquarePen, Users, Wand2, type LucideIcon
+  BookOpenText, Clapperboard, Gauge, LayoutGrid, LogOut, PanelLeft, Search, Send, Cpu, Server, Settings, SquarePen, TrendingUp, Users, Wand2, type LucideIcon
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
@@ -20,6 +20,7 @@ type NavItem = { to: string; label: string; hint?: string; icon: LucideIcon };
 /** The tools, after "new" and "search" — like ChatGPT's Library / GPTs rows. */
 export const TOOLS: NavItem[] = [
   { to: '/template', label: 'Template', hint: 'Resep siap pakai untuk memulai video', icon: LayoutGrid },
+  { to: '/tren', label: 'Tren', hint: 'Yang sedang laku per negara, siap dibedah', icon: TrendingUp },
   { to: '/cerita', label: 'Proyek', hint: 'Semua video yang sedang/sudah kamu buat', icon: BookOpenText },
   { to: '/studio', label: 'Studio', hint: 'Satu klip atau satu gambar, langkah demi langkah', icon: Clapperboard },
   { to: '/generate', label: 'Naskah & suara', hint: 'Tulis narasi lalu jadikan voice-over', icon: Wand2 },

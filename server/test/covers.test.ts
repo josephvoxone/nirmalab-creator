@@ -42,7 +42,7 @@ describe('template covers are generated through the app queue', () => {
     expect(queued.statusCode).toBe(200);
     const job = (await flow.listJobs())[0]!;
     expect(job).toMatchObject({ kind: 'image', aspect: '16:9', technique: 'cover:drama-hewan' });
-    expect(job.prompt).toMatch(/orange cat/);
+    expect(job.prompt).toMatch(/ginger cat/);
     expect(job.prompt).toMatch(/watercolor/);
     expect(job.prompt).toMatch(/no text/i);
     let cat = (await server.inject({ url: '/api/stories/catalog', headers: { cookie } })).json();

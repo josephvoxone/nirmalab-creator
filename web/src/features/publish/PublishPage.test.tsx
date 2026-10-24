@@ -118,6 +118,22 @@ describe('PublishPage (3 steps: Video → Detail → Kirim)', () => {
     expect(screen.getByRole('button', { name: /^lanjut/i })).toBeEnabled();
   });
 
+  it('starts the caption from the story preview (P4), and leaves it alone when there is none', async () => {
+    const caption = 'Hujan turun di teras.\nPayung tertinggal di sekolah.\nIa pulang basah.';
+    renderPage(api({ youtube: true }, url => (
+      url === '/api/publish/preview/story_cccccccccccccccc'
+        ? { status: 200, body: { title: 'Hujan Pertama', caption } }
+        : { status: 404, body: {} }
+    )));
+    await pickStory(/hujan pertama/i);
+    await waitFor(() => expect(screen.getByLabelText('Deskripsi')).toHaveValue(caption));
+    // A story without a preview (older server, draft) must not prefill anything.
+    await userEvent.click(screen.getByRole('button', { name: /kembali/i }));
+    await pickStory(/kucing hilang/i);
+    await waitFor(() => expect(screen.getByLabelText('Judul')).toHaveValue('Kucing Hilang'));
+    expect(screen.getByLabelText('Deskripsi')).toHaveValue(caption);
+  });
+
   it('with no connected platform, Detail says so and opens Settings → Koneksi over the page', async () => {
     renderPage(api({}));
     await pickStory(/kucing hilang/i);

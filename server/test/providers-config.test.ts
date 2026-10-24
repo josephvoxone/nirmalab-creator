@@ -10,10 +10,10 @@ describe('OpenRouterConfigStore', () => {
   it('stores the key in providers/openrouter.json with mode 0600 and only exposes keyHint', async () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'nc-prov-'));
     const store = new OpenRouterConfigStore(dataDir);
-    expect(await store.view()).toEqual({ configured: false, defaults: {} });
+    expect(await store.view()).toEqual({ configured: false, defaults: {}, auditModel: 'google/gemini-2.5-flash' });
 
     const view = await store.update({ apiKey: KEY, defaults: { video: 'google/veo-3.1-fast' } });
-    expect(view).toEqual({ configured: true, keyHint: '••••WXYZ', defaults: { video: 'google/veo-3.1-fast' } });
+    expect(view).toEqual({ configured: true, keyHint: '••••WXYZ', defaults: { video: 'google/veo-3.1-fast' }, auditModel: 'google/gemini-2.5-flash' });
     expect(JSON.stringify(view)).not.toContain(KEY);
 
     const file = join(dataDir, 'providers', 'openrouter.json');
@@ -25,8 +25,8 @@ describe('OpenRouterConfigStore', () => {
   it('keeps the key when only defaults change, clears a default with null, removes the key with null', async () => {
     const store = new OpenRouterConfigStore(mkdtempSync(join(tmpdir(), 'nc-prov-')));
     await store.update({ apiKey: KEY, defaults: { image: 'openai/gpt-image-1', video: 'google/veo-3.1' } });
-    expect(await store.update({ defaults: { image: null } })).toEqual({ configured: true, keyHint: '••••WXYZ', defaults: { video: 'google/veo-3.1' } });
-    expect(await store.update({ apiKey: null })).toEqual({ configured: false, defaults: { video: 'google/veo-3.1' } });
+    expect(await store.update({ defaults: { image: null } })).toEqual({ configured: true, keyHint: '••••WXYZ', defaults: { video: 'google/veo-3.1' }, auditModel: 'google/gemini-2.5-flash' });
+    expect(await store.update({ apiKey: null })).toEqual({ configured: false, defaults: { video: 'google/veo-3.1' }, auditModel: 'google/gemini-2.5-flash' });
     expect(await store.apiKey()).toBeUndefined();
   });
 
@@ -35,5 +35,15 @@ describe('OpenRouterConfigStore', () => {
     await expect(store.update({ apiKey: 'short' })).rejects.toThrow(/API key/);
     await expect(store.update({ apiKey: 'has spaces in the key 1234567890' })).rejects.toThrow(/API key/);
     await expect(store.update({ defaults: { video: 'not a model' } })).rejects.toThrow(/model/);
+    await expect(store.update({ auditModel: 'not a model' })).rejects.toThrow(/auditModel/);
+  });
+
+  it('auditModel defaults to gemini flash, stores a pick, and null restores the default', async () => {
+    const store = new OpenRouterConfigStore(mkdtempSync(join(tmpdir(), 'nc-prov-')));
+    expect(await store.auditModel()).toBe('google/gemini-2.5-flash');
+    expect((await store.update({ auditModel: 'anthropic/claude-haiku-4.5' })).auditModel).toBe('anthropic/claude-haiku-4.5');
+    expect(await store.auditModel()).toBe('anthropic/claude-haiku-4.5');
+    expect((await store.update({ auditModel: null })).auditModel).toBe('google/gemini-2.5-flash');
+    expect(await store.auditModel()).toBe('google/gemini-2.5-flash');
   });
 });

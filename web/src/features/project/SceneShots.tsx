@@ -12,6 +12,7 @@ import {
 import type { Story } from '../stories/storiesClient.js';
 import type { Board, Scene } from './model.js';
 import { TONE_TEXT, dragId, shotStatus, snippet } from './SceneHelpers.js';
+import { AUDIT_BADGE, auditLabel, auditTooltip, auditTone } from './audit.js';
 import { media } from './useProject.js';
 import { poster, sizedImg } from '../../lib/media.js';
 
@@ -108,6 +109,11 @@ function ShotCard(props: {
         <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
           <span className="tabular-nums text-foreground/80">{String(number).padStart(2, '0')}</span>
           <span title={status.label} className={cn('truncate', TONE_TEXT[status.tone])}>{status.label}</span>
+          {/* Audit score: green ≥75, amber 50–74, red <50, a dash until the take is audited. */}
+          <span data-audit={auditTone(st?.audit?.score)} aria-label={`Skor audit ${shotId}`} title={auditTooltip(st ?? {})}
+            className={cn('ml-auto shrink-0 rounded px-1 text-[10px] leading-4 tabular-nums', AUDIT_BADGE[auditTone(st?.audit?.score)])}>
+            {auditLabel(st?.audit?.score)}
+          </span>
         </span>
         <span className="line-clamp-2 min-h-[2lh] text-[11.5px] leading-snug">
           {shot.silent ? <Badge variant="outline" className="h-4 px-1.5 text-[10px] text-muted-foreground">Tanpa narasi</Badge> : (snippet(shot.narration, 7) || <span className="text-muted-foreground">Narasi kosong</span>)}

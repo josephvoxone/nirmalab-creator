@@ -1,0 +1,43 @@
+{
+  "success": true,
+  "data": {
+    "items": [
+      {
+        "word": "film pendek ai 30 detik",
+        "rank": 1,
+        "hot_value": 8123456,
+        "content_count": 2300,
+        "cover": {
+          "url": "https://p3-sign.example-cdn.invalid/hot/01.jpeg"
+        },
+        "web_url": "https://www.douyin.com/hot/7300000000000000011"
+      },
+      {
+        "word": "kucing pulang kampung",
+        "rank": null,
+        "hot_value": null,
+        "content_count": 12,
+        "cover": {
+          "url": "https://p3-sign.example-cdn.invalid/hot/02.jpeg"
+        },
+        "web_url": null
+      },
+      {
+        "word": "cerita horor 1 menit",
+        "rank": 2,
+        "hot_value": 5123000,
+        "content_count": 5400,
+        "cover": {
+          "url": "https://p3-sign.example-cdn.invalid/hot/03.jpeg"
+        },
+        "web_url": "https://www.douyin.com/hot/7300000000000000013"
+      }
+    ],
+    "cursor": null,
+    "has_more": false
+  },
+  "error": null,
+  "meta": {
+    "request_id": "1d5b1a7e-90c7-4f2e-9b3c-6b2f0f9a8d44"
+  }
+}
