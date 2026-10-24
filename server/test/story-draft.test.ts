@@ -94,4 +94,13 @@ describe('draftStoryboard', () => {
     expect(board.aspect).toBe('16:9');
     expect(prompt).toMatch(/exactly 4 shots/);
   });
+
+  it('narration and title read like Indonesian prose: tokens become names, ALL-CAPS title becomes title case', async () => {
+    const reply = JSON.stringify({ title: 'JINGGA DI PAGAR', characters: { JINGGA: 'an orange tabby cat' }, shots: [
+      { id: 'buka', silent: true, prompt: 'Extreme wide shot, the camera pushes in slowly. A gate.' },
+      { id: 'tunggu', prompt: 'Medium shot, the camera stays still. JINGGA waits.', narration: 'Setiap sore, JINGGA menunggu di depan pagar.' }] });
+    const board = await draftStoryboard({ premise: 'x', template: 'drama-hewan', shots: 2 }, async () => reply);
+    expect(board.shots[1]!.narration).toBe('Setiap sore, Jingga menunggu di depan pagar.');
+    expect(board.title).toBe('Jingga di Pagar');
+  });
 });

@@ -96,7 +96,7 @@ export function buildShotPrompt(board: Storyboard, shot: Shot): string {
   const body = expand(board, shot.prompt, board.mode === 'konsisten');
   const audio = shot.silent
     ? board.audioSilent ?? ''
-    : (board.audio ?? '').replace('{narrator}', board.narrator ?? 'a narrator').replace('{line}', (shot.narration ?? '').trim());
+    : (board.audio ?? '').replace('{narrator}', board.narrator ?? 'a narrator').replace('{line}', expand(board, (shot.narration ?? '').trim(), true));
   return [body, board.style, audio].filter(Boolean).join(' ') + (board.negative ? `\n${board.negative}` : '');
 }
 

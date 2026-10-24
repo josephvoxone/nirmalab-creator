@@ -95,6 +95,21 @@ function normalise(raw: unknown, style: string): Storyboard {
   };
 }
 
+const SMALL = new Set(['di', 'ke', 'dan', 'yang', 'dari', 'untuk', 'pada', 'dengan', 'si', 'sang']);
+const titleCase = (text: string) => text.toLowerCase().split(/(\s+)/)
+  .map((w, i) => (i > 0 && SMALL.has(w) ? w : w.charAt(0).toUpperCase() + w.slice(1))).join('');
+
+/** Narration is spoken Indonesian: character TOKENs become their names; an ALL-CAPS title becomes title case. */
+function proseFix(board: Storyboard): Storyboard {
+  const names = Object.keys(board.characters ?? {}).map(token => {
+    const spec = board.characters![token];
+    return [token, typeof spec === 'object' && spec?.name ? spec.name : titleCase(token.replace(/_/g, ' '))] as const;
+  });
+  const speak = (text: string) => names.reduce((t, [token, name]) => t.replace(new RegExp(`\\b${token}\\b`, 'g'), name), text);
+  const title = /[a-z]/.test(board.title) ? board.title : titleCase(board.title);
+  return { ...board, title, shots: board.shots.map(s => (s.narration ? { ...s, narration: speak(s.narration) } : s)) };
+}
+
 export async function draftStoryboard(input: DraftInput, generate: TextGenerator): Promise<Storyboard> {
   const template = CATALOG.templates.find(t => t.id === input.template);
   const useLook = !!template || !!input.look;
@@ -126,7 +141,7 @@ export async function draftStoryboard(input: DraftInput, generate: TextGenerator
     let reply = '';
     try {
       reply = await generate(SYSTEM, prompt);
-      const board = { ...normalise(parseJsonBlock(reply), style), ...extra };
+      const board = proseFix({ ...normalise(parseJsonBlock(reply), style), ...extra });
       problems = validateStoryboard(board);
       if (!problems.length) return board;
     } catch (error) {

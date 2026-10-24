@@ -44,6 +44,11 @@ describe('consistency prompts', () => {
     expect(p).not.toMatch(/voice-over|Audio:/);
   });
 
+  it('narration speaks names, never TOKENs or descriptors', () => {
+    const p = buildShotPrompt({ ...board, mode: 'cepat' }, { id: 'x', prompt: 'Medium shot, the camera stays still. LARAS waits.', narration: 'LARAS menunggu KAPAS.' });
+    expect(p).toContain('"Laras menunggu Kapas."');
+  });
+
   it('in consistent mode the video prompt also uses names, keeps narration audio', () => {
     const p = buildShotPrompt(board, board.shots[1]!);
     expect(p).toContain('Laras holds Kapas');
