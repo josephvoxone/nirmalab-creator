@@ -322,7 +322,7 @@ const templates: Template[] = [
     family: 'docu', variant: 'docu',
     look: deriveLook('docu', 'docu', { genre: 'dokumenter', palette: 'teal-oranye', lighting: 'overcast', camera: 'modern', lens: 'clean', tempo: 'dinamis' }),
     example: 'Lima fakta tentang gurita: punya tiga jantung, darah biru, bisa berubah warna dalam sekejap, sangat cerdas, dan mampu kabur lewat celah sekecil koin.' },
-  { id: 'motivasi', category: 'faceless', cover: 'A runner crouches to tie her shoes on an empty stadium track at first light, breath misting, sun from the right grazing the lane lines, 85mm.', name: 'Motivasi Pagi', tagline: 'Pelari jatuh di lintasan lalu bangun sebelum fajar.', mode: 'cepat', aspect: '9:16', narrator: NARRATOR.motivasi,
+  { id: 'motivasi', category: 'faceless', cover: 'A runner crouches to tie her shoes on an empty stadium track at first light, breath misting, sun from the right grazing the lane lines, 85mm.', name: 'Motivasi Pagi', tagline: 'Pelari jatuh di lintasan lalu bangkit sebelum fajar.', mode: 'cepat', aspect: '9:16', narrator: NARRATOR.motivasi,
     family: 'film-real', variant: 'cinematic-drama',
     look: deriveLook('film-real', 'cinematic-drama', { genre: 'drama', palette: 'pagi-keemasan', lighting: 'golden-hour', camera: 'film35', lens: 'vintage-anamorphic', aperture: 'f14', tempo: 'mengalir' }),
     example: 'Kegagalan bukan akhir. Seorang pelari yang jatuh di lintasan bangkit lagi setiap pagi sebelum matahari terbit, sampai akhirnya ia melewati garis finis.' },
