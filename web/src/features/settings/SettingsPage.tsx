@@ -179,14 +179,14 @@ function PasswordCard(props: { api: Api }) {
     <Section id="set-password" title="Ganti password" hint="Untuk akun yang sedang masuk.">
       <form className="flex flex-col gap-2.5" onSubmit={e => void submit(e)}>
         <label className={label}>Password saat ini
-          <input className={field} type="password" autoComplete="current-password" value={current} onChange={e => setCurrent(e.target.value)} />
+          <input className={field} type="password" autoComplete="current-password" placeholder="Password yang dipakai sekarang" value={current} onChange={e => setCurrent(e.target.value)} />
         </label>
         <div className="grid gap-2.5 sm:grid-cols-2">
           <label className={label}>Password baru
-            <input className={field} type="password" autoComplete="new-password" value={next} onChange={e => setNext(e.target.value)} />
+            <input className={field} type="password" autoComplete="new-password" placeholder="Minimal 8 karakter" value={next} onChange={e => setNext(e.target.value)} />
           </label>
           <label className={label}>Ulangi password baru
-            <input className={field} type="password" autoComplete="new-password" value={confirm} onChange={e => setConfirm(e.target.value)} />
+            <input className={field} type="password" autoComplete="new-password" placeholder="Ketik ulang password baru" value={confirm} onChange={e => setConfirm(e.target.value)} />
           </label>
         </div>
         {error && <Notice>{error}</Notice>}
@@ -626,9 +626,9 @@ function FlowCard(props: { api: Api }) {
       )}
       <form className="flex flex-col gap-2" onSubmit={e => void add(e)}>
         <div className="grid gap-2 sm:grid-cols-3">
-          <label className={label}>Label<input className={field} value={labelText} onChange={e => setLabel(e.target.value)} /></label>
-          <label className={label}>Email Google<input className={field} type="email" value={email} onChange={e => setEmail(e.target.value)} /></label>
-          <label className={label}>Profil Chrome (opsional)<input className={field} value={profileDir} onChange={e => setProfileDir(e.target.value)} /></label>
+          <label className={label}>Label<input className={field} placeholder="mis. Flow 02" value={labelText} onChange={e => setLabel(e.target.value)} /></label>
+          <label className={label}>Email Google<input className={field} type="email" placeholder="akun@gmail.com" value={email} onChange={e => setEmail(e.target.value)} /></label>
+          <label className={label}>Profil Chrome (opsional)<input className={field} placeholder="mis. flow-02" value={profileDir} onChange={e => setProfileDir(e.target.value)} /></label>
         </div>
         {error && <Notice>{error}</Notice>}
         <div><Button type="submit" size="sm" disabled={busy || !labelText.trim()}>{busy ? 'Menambah…' : 'Tambah akun'}</Button></div>

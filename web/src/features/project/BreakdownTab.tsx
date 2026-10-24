@@ -61,8 +61,8 @@ function Entry(props: {
       <div className="flex min-w-0 flex-1 flex-col gap-1">
         {editing ? (
           <>
-            <input aria-label={`Nama ${props.name}`} className={inputClass} value={name} onChange={e => setName(e.target.value)} />
-            <textarea aria-label="Deskripsi visual (English)" className={`${textareaClass} min-h-16`} value={look} onChange={e => setLook(e.target.value)} />
+            <input aria-label={`Nama ${props.name}`} placeholder="Nama yang tampil di naskah" className={inputClass} value={name} onChange={e => setName(e.target.value)} />
+            <textarea aria-label="Deskripsi visual (English)" placeholder="Visual look in English: age, face, outfit / place, time of day" className={`${textareaClass} min-h-16`} value={look} onChange={e => setLook(e.target.value)} />
             <div className="flex gap-1.5">
               <Button size="sm" onClick={() => void save()} disabled={!name.trim() || !look.trim() || (name.trim() === props.name && look.trim() === props.look)}>Simpan</Button>
               <Button size="sm" variant="ghost" onClick={() => setEditing(false)}>Batal</Button>

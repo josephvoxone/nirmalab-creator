@@ -76,7 +76,7 @@ function Title(props: { p: Project }) {
     if (text.trim() && text.trim() !== board.title) await props.p.save({ ...board, title: text.trim() });
   };
   return editing ? (
-    <input autoFocus aria-label="Judul proyek" value={text} onChange={e => setText(e.target.value)} onBlur={() => void commit()}
+    <input autoFocus aria-label="Judul proyek" placeholder="Judul proyek" value={text} onChange={e => setText(e.target.value)} onBlur={() => void commit()}
       onKeyDown={e => { if (e.key === 'Enter') void commit(); if (e.key === 'Escape') setEditing(false); }}
       className="h-8 min-w-0 flex-1 rounded-md border border-input bg-(--field) px-2 text-[17px] font-medium outline-none focus-visible:border-ring" />
   ) : (

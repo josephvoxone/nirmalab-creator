@@ -55,7 +55,7 @@ function Header(props: { board: Board; scene: Scene; index: number; locked: bool
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
         <div className="flex min-w-0 items-center gap-1.5">
           <span className="shrink-0 text-[11.5px] text-muted-foreground tabular-nums">Scene {props.index + 1}</span>
-          <input aria-label="Judul scene" value={title} maxLength={80} disabled={props.locked} onChange={e => setTitle(e.target.value)} onBlur={commitTitle}
+          <input aria-label="Judul scene" placeholder="Judul scene, mis. Badai datang" value={title} maxLength={80} disabled={props.locked} onChange={e => setTitle(e.target.value)} onBlur={commitTitle}
             onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); if (e.key === 'Escape') { setTitle(scene.title); } }}
             className="h-7 min-w-0 flex-1 rounded-md border border-transparent bg-transparent px-1.5 text-[14px] font-medium outline-none hover:border-input focus-visible:border-ring focus-visible:bg-(--field) disabled:hover:border-transparent" />
         </div>

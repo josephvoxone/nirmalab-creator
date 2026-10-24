@@ -43,11 +43,11 @@ export function JoinPage(props: { token: string; fetchImpl: FetchLike; onSignedI
             <p className="muted">Buat akun Nirmalab Creator dari undangan ini.</p>
             <label className="field">
               <span>Email</span>
-              <input type="email" autoComplete="email" value={email} onChange={e => setEmail(e.target.value)} required />
+              <input type="email" autoComplete="email" placeholder="nama@email.com" value={email} onChange={e => setEmail(e.target.value)} required />
             </label>
             <label className="field">
               <span>Password</span>
-              <input type="password" autoComplete="new-password" minLength={8} value={password} onChange={e => setPassword(e.target.value)} required />
+              <input type="password" autoComplete="new-password" minLength={8} placeholder="Minimal 8 karakter" value={password} onChange={e => setPassword(e.target.value)} required />
             </label>
             {error && <p className="form-error" role="alert">{error}</p>}
             <button className="btn btn-primary" type="submit" disabled={busy || valid === undefined}>{busy ? 'Membuat…' : 'Buat akun'}</button>

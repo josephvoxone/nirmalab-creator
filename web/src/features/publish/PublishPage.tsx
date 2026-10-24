@@ -187,7 +187,7 @@ export default function PublishPage(props: { now?: Date }) {
           <Panel className="flex flex-col gap-3.5">
             <div className="flex flex-col gap-1">
               <Field label="Judul">
-                <input className={inputClass} value={title} maxLength={100} aria-describedby="pub-title-hint" onChange={e => { setTitle(e.target.value); resetRun(); }} />
+                <input className={inputClass} placeholder="Judul video, mis. Selendang Merah — dongeng 1 menit" value={title} maxLength={100} aria-describedby="pub-title-hint" onChange={e => { setTitle(e.target.value); resetRun(); }} />
               </Field>
               <span id="pub-title-hint" className="text-[11.5px] text-muted-foreground/80">Maks. 100 karakter. YouTube memakai ini sebagai judul; TikTok dan Meta sebagai baris pertama caption.</span>
             </div>

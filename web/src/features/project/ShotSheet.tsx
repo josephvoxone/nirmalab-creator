@@ -150,7 +150,7 @@ function ShotEditor(props: { shotId: string; catalog?: Catalog; onClose: () => v
 
         <div className="flex flex-col gap-1">
           <span id={`prompt-${shot.id}`} className="text-[12px] text-muted-foreground">Prompt (English)</span>
-          <textarea aria-labelledby={`prompt-${shot.id}`} rows={5} value={prompt} disabled={locked} onChange={e => setPrompt(e.target.value)}
+          <textarea aria-labelledby={`prompt-${shot.id}`} rows={5} placeholder="Medium shot, the camera stays still. TOKEN does something in one clear action." value={prompt} disabled={locked} onChange={e => setPrompt(e.target.value)}
             className={cn(textareaClass, 'font-mono text-[12px]')} />
           {!prompt.trim() && <span className="text-[11.5px] text-destructive">Prompt tidak boleh kosong.</span>}
         </div>

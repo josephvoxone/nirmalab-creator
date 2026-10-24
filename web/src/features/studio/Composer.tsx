@@ -58,7 +58,7 @@ export function Composer(props: {
               <input value={value.style} maxLength={300} className={inputClass} placeholder="mis. soft film grain, muted teal" onChange={e => onChange({ style: e.target.value })} />
             </Field>
             <Field label="Negative prompt (pisah koma)">
-              <input value={value.negative} maxLength={400} className={inputClass} onChange={e => onChange({ negative: e.target.value })} />
+              <input value={value.negative} maxLength={400} className={inputClass} placeholder="mis. text, watermark, blurry" onChange={e => onChange({ negative: e.target.value })} />
             </Field>
           </div>
           <div className="flex flex-wrap items-end gap-3">

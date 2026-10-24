@@ -21,7 +21,7 @@ export function Choice<T extends string>(props: {
   const trigger = (
     <Select value={props.value === '' ? null : props.value} items={items} onValueChange={v => { if (v != null) props.onChange(v as T); }} disabled={props.disabled}>
       <SelectTrigger aria-label={props.label} size={props.size ?? 'default'} className={cn('min-w-32 bg-(--field)', props.className)}>
-        <SelectValue placeholder={props.placeholder} />
+        <SelectValue placeholder={props.placeholder ?? 'Pilih…'} />
       </SelectTrigger>
       <SelectContent alignItemWithTrigger={false} align="start">
         {props.options.map(o => (
