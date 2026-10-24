@@ -3,7 +3,7 @@
  * renderer enforces. Invalid drafts are sent back with the exact errors (max 3 tries).
  */
 import { CATALOG, composeStyle, resolveLook, shotCountFor, type Look } from './looks.js';
-import { MAX_NARRATION_WORDS, validateStoryboard, type Shot, type Storyboard } from './storyboard.js';
+import { LOCATION_KEY, MAX_LOCATIONS, MAX_NARRATION_WORDS, MAX_SCENES, SCENE_ID, normalizeScenes, validateStoryboard, type Location, type Scene, type Shot, type Storyboard } from './storyboard.js';
 
 export type TextGenerator = (system: string, prompt: string) => Promise<string>;
 
@@ -33,8 +33,11 @@ export const DEFAULTS = {
 
 const SYSTEM = `You are a film director writing a short AI-video story for Google Veo.
 Return ONLY one JSON object, no commentary:
-{"title": "...", "titleCard": {"lines": ["UP TO 2 SHORT", "UPPERCASE LINES"], "kicker": "short Indonesian tagline"},
+{"title": "...", "logline": "one Indonesian sentence: who wants what, and what stands in the way",
+ "titleCard": {"lines": ["UP TO 2 SHORT", "UPPERCASE LINES"], "kicker": "short Indonesian tagline"},
  "characters": {"TOKEN": "full visual descriptor in English (age, look, clothing, one signature prop)"},
+ "locations": {"PLACE_TOKEN": "visual descriptor of the place in English (setting, era, light, textures)"},
+ "scenes": [{"id": "kebab-id", "title": "short Indonesian chapter title", "summary": "Indonesian: what happens", "location": "PLACE_TOKEN", "shots": ["shot ids in play order"]}],
  "shots": [{"id": "kebab-id", "silent": true|omitted, "prompt": "...", "narration": "..."}]}
 Rules (they are checked by code; violations are sent back to you):
 - "title", "titleCard.lines" and "kicker" are in Bahasa Indonesia (no English words), short and evocative.
@@ -48,6 +51,9 @@ Rules (they are checked by code; violations are sent back to you):
 - Character TOKENs are the character's short Indonesian name in UPPERCASE (e.g. "LARAS", "KAPAS"), never generic words like "GIRL".
 - Refer to characters ONLY by their UPPERCASE TOKEN inside prompts; the token is replaced by its descriptor, keeping them consistent.
 - Real emotional arc: setup, loss or conflict, struggle, turning point, reunion or resolution, quiet ending.
+- "logline" is ONE Bahasa Indonesia sentence.
+- "locations": 1-4 places; key is an UPPERCASE Indonesian token (e.g. "PASAR_IKAN", "RUMAH_NENEK"); value is an English visual descriptor. Do not repeat the place descriptor inside shot prompts.
+- "scenes" are the chapters of the film: 2-4 scenes for 6+ shots (1-2 for fewer), following setup, conflict, turning point, resolution. Each has an Indonesian "title" (max 6 words) and "summary" (one sentence), one "location" token from "locations", and "shots": the ids of its shots. Every shot belongs to exactly one scene; scenes list the shots in the same order as "shots".
 - No dialogue on screen, no text in frame.`;
 
 export function parseJsonBlock(text: string): unknown {
@@ -71,11 +77,60 @@ export function parseJsonBlock(text: string): unknown {
 
 const slug = (s: string) => s.toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 30) || 'shot';
 
+const tokenName = (token: string) => token.toLowerCase().split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+const isObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
+
+/** Lenient: bad keys/empty looks are dropped, never sent back as errors. */
+function draftLocations(raw: unknown): Record<string, Location> {
+  if (!isObject(raw)) return {};
+  const out: Record<string, Location> = {};
+  for (const [key, value] of Object.entries(raw)) {
+    if (Object.keys(out).length >= MAX_LOCATIONS || !LOCATION_KEY.test(key)) continue;
+    const look = (typeof value === 'string' ? value : isObject(value) && typeof value.look === 'string' ? value.look : '').trim();
+    const name = isObject(value) && typeof value.name === 'string' && value.name.trim() ? value.name.trim() : tokenName(key);
+    if (look) out[key] = { name: name.slice(0, 80), look: look.slice(0, 400) };
+  }
+  return out;
+}
+
+/** Lenient: the writer's shot ids are mapped through the same rewriting the shots get; anything unusable is dropped. */
+function draftScenes(raw: unknown, ids: Map<string, string>, locations: Record<string, Location>): Scene[] {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set<string>();
+  const scenes: Scene[] = [];
+  for (const item of raw) {
+    if (scenes.length >= MAX_SCENES) break;
+    if (!isObject(item)) continue;
+    const n = scenes.length + 1;
+    const rawId = typeof item.id === 'string' ? item.id.trim() : '';
+    let id = rawId ? slug(rawId) : `scene-${n}`;
+    if (!SCENE_ID.test(id)) id = `scene-${n}`;
+    for (let k = 2; seen.has(id); k++) id = `${id.replace(/-\d+$/, '')}-${k}`;
+    seen.add(id);
+    const title = (typeof item.title === 'string' ? item.title.trim() : '').slice(0, 80).trim() || `Scene ${n}`;
+    const summary = typeof item.summary === 'string' ? item.summary.trim().slice(0, 300) : '';
+    const location = typeof item.location === 'string' && Object.prototype.hasOwnProperty.call(locations, item.location) ? item.location : undefined;
+    const shots = (Array.isArray(item.shots) ? item.shots : []).map(v => ids.get(String(v)) ?? ids.get(slug(String(v)))).filter((v): v is string => !!v);
+    scenes.push({ id, title, ...(summary ? { summary } : {}), ...(location ? { location } : {}), shots });
+  }
+  return scenes;
+}
+
 function normalise(raw: unknown, style: string): Storyboard {
   const r = (raw ?? {}) as Record<string, unknown>;
-  const shots = (Array.isArray(r.shots) ? r.shots : []) as Array<Record<string, unknown>>;
+  const shotsIn = (Array.isArray(r.shots) ? r.shots : []) as Array<Record<string, unknown>>;
   const titleCard = r.titleCard as { lines?: unknown; kicker?: unknown } | undefined;
-  return {
+  const ids = new Map<string, string>();
+  const shots = shotsIn.map((s, i): Shot => {
+    const rawId = String(s.id ?? `shot-${i}`);
+    const id = `${String(i).padStart(2, '0')}-${slug(rawId).replace(/^\d+-/, '')}`;
+    for (const key of [rawId, slug(rawId), id]) if (!ids.has(key)) ids.set(key, id);
+    return { id, prompt: String(s.prompt ?? ''), ...(s.silent === true ? { silent: true } : { narration: String(s.narration ?? '').trim() }) };
+  });
+  const locations = draftLocations(r.locations);
+  const scenes = draftScenes(r.scenes, ids, locations);
+  const logline = typeof r.logline === 'string' ? r.logline.trim().slice(0, 300) : '';
+  return normalizeScenes({
     title: String(r.title ?? '').trim(),
     ...DEFAULTS,
     style,
@@ -87,12 +142,11 @@ function normalise(raw: unknown, style: string): Storyboard {
     ...(Array.isArray(titleCard?.lines)
       ? { titleCard: { lines: titleCard!.lines.map(String).slice(0, 2), ...(titleCard!.kicker ? { kicker: String(titleCard!.kicker) } : {}) } }
       : {}),
-    shots: shots.map((s, i): Shot => ({
-      id: `${String(i).padStart(2, '0')}-${slug(String(s.id ?? `shot-${i}`)).replace(/^\d+-/, '')}`,
-      prompt: String(s.prompt ?? ''),
-      ...(s.silent === true ? { silent: true } : { narration: String(s.narration ?? '').trim() })
-    }))
-  };
+    ...(logline ? { logline } : {}),
+    ...(Object.keys(locations).length ? { locations } : {}),
+    ...(scenes.length ? { scenes } : {}),
+    shots
+  });
 }
 
 const SMALL = new Set(['di', 'ke', 'dan', 'yang', 'dari', 'untuk', 'pada', 'dengan', 'si', 'sang']);
@@ -107,7 +161,13 @@ function proseFix(board: Storyboard): Storyboard {
   });
   const speak = (text: string) => names.reduce((t, [token, name]) => t.replace(new RegExp(`\\b${token}\\b`, 'g'), name), text);
   const title = /[a-z]/.test(board.title) ? board.title : titleCase(board.title);
-  return { ...board, title, shots: board.shots.map(s => (s.narration ? { ...s, narration: speak(s.narration) } : s)) };
+  return {
+    ...board,
+    title,
+    ...(board.logline ? { logline: speak(board.logline) } : {}),
+    ...(board.scenes ? { scenes: board.scenes.map(sc => ({ ...sc, title: speak(sc.title).slice(0, 80), ...(sc.summary ? { summary: speak(sc.summary).slice(0, 300) } : {}) })) } : {}),
+    shots: board.shots.map(s => (s.narration ? { ...s, narration: speak(s.narration) } : s))
+  };
 }
 
 export async function draftStoryboard(input: DraftInput, generate: TextGenerator): Promise<Storyboard> {

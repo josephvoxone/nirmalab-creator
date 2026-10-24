@@ -9,12 +9,12 @@ import { HistoryProvider } from './shell/history.js';
 import { applyDensity } from './lib/prefs.js';
 import { LoadingState, Skel } from './ui/states.js';
 import { StoriesPage } from './features/stories/StoriesPage.js';
-import { StoryDetailPage } from './features/stories/StoryDetailPage.js';
 
 const StudioScreen = lazy(() => import('./features/studio/StudioScreen.js'));
 const GeneratePage = lazy(() => import('./features/generate/GeneratePage.js'));
 const PublishPage = lazy(() => import('./features/publish/PublishPage.js'));
 const SettingsDialog = lazy(() => import('./features/settings/SettingsDialog.js'));
+const ProjectPage = lazy(() => import('./features/project/ProjectPage.js').then(m => ({ default: m.ProjectPage })));
 const HomePage = lazy(() => import('./features/home/HomePage.js'));
 const TemplatesPage = lazy(() => import('./features/templates/TemplatesPage.js'));
 
@@ -46,7 +46,7 @@ function Shell(props: { fetchImpl: FetchLike }) {
             <Route path="/" element={<HomePage />} />
             <Route path="/template" element={<TemplatesPage />} />
             <Route path="/cerita" element={<StoriesPage />} />
-            <Route path="/cerita/:id" element={<StoryDetailPage />} />
+            <Route path="/cerita/:id" element={<ProjectPage />} />
             <Route path="/studio" element={<StudioScreen baseUrl="" fetchImpl={props.fetchImpl} />} />
             <Route path="/generate" element={<GeneratePage />} />
             <Route path="/publish" element={<PublishPage />} />

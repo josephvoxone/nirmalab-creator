@@ -13,7 +13,7 @@ import { copyFile, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type { FlowStore } from '../flow/store.js';
-import { CREDITS_PER_SHOT, buildShotPrompt, castOf, characterSheetPrompt, framePrompt, shotCast, validateStoryboard, type Storyboard } from './storyboard.js';
+import { CREDITS_PER_SHOT, buildShotPrompt, castOf, characterSheetPrompt, framePrompt, normalizeScenes, shotCast, validateStoryboard, type Storyboard } from './storyboard.js';
 
 import { composeStyle, resolveLook } from './looks.js';
 
@@ -67,6 +67,10 @@ export type StoryRecord = {
   shots: ShotState[];
   error?: string;
   video?: { bytes: number; finishedAtMs: number };
+  /** A final video exists but the storyboard changed after it (order or content). */
+  videoStale?: boolean;
+  /** Shots of the current/last prepare or render run (partial runs per scene or shot). */
+  run?: { shots: string[] };
   events: Array<{ atMs: number; message: string }>;
   /** User id that created the story; every Flow job it queues is attributed to them. */
   createdBy?: string;
@@ -89,6 +93,25 @@ export class StoryError extends Error {
 }
 
 const hash = (s: string) => createHash('sha256').update(s).digest('hex').slice(0, 16);
+const BUSY_STATUSES: StoryStatus[] = ['casting', 'framing', 'rendering', 'assembling'];
+
+/** Key-order independent JSON (detects real storyboard changes, not re-serialisation). */
+function canonical(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value).filter(k => (value as Record<string, unknown>)[k] !== undefined).sort()
+      .map(k => `${JSON.stringify(k)}:${canonical((value as Record<string, unknown>)[k])}`).join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+/** Where a story rests after an edit or a partial run. */
+export function idleStatus(record: StoryRecord): StoryStatus {
+  // Every clip done: finished, or (no/stale cut) ready to review and assemble.
+  if (record.shots.every(s => s.status === 'done')) return record.video && !record.videoStale ? 'done' : 'review';
+  if (record.mode === 'konsisten' && record.shots.every(s => !s.frame || s.frame.status === 'done')) return 'review';
+  return 'draft';
+}
 
 export class StoryService {
   private locks = new Map<string, Promise<unknown>>();
@@ -150,7 +173,7 @@ export class StoryService {
   }
 
   async readStoryboard(id: string): Promise<Storyboard> {
-    return JSON.parse(await readFile(join(this.storyDir(id), 'storyboard.json'), 'utf8')) as Storyboard;
+    return normalizeScenes(JSON.parse(await readFile(join(this.storyDir(id), 'storyboard.json'), 'utf8')) as Storyboard);
   }
 
   private assertValid(board: Storyboard): void {
@@ -158,8 +181,9 @@ export class StoryService {
     if (errors.length) throw new StoryError('INVALID', errors.join('; '));
   }
 
-  async create(board: Storyboard, options: { createdBy?: string } = {}): Promise<StoryRecord> {
-    this.assertValid(board);
+  async create(input: Storyboard, options: { createdBy?: string } = {}): Promise<StoryRecord> {
+    this.assertValid(input);
+    const board = normalizeScenes(input);
     const id = `story_${randomBytes(8).toString('hex')}`;
     await mkdir(this.storyDir(id), { recursive: true, mode: 0o700 });
     const now = Date.now();
@@ -200,36 +224,54 @@ export class StoryService {
     return (await this.list()).filter(r => ['casting', 'framing', 'rendering', 'assembling'].includes(r.status)).map(r => r.id);
   }
 
-  async updateStoryboard(id: string, board: Storyboard): Promise<StoryRecord> {
-    this.assertValid(board);
+  async updateStoryboard(id: string, input: Storyboard): Promise<StoryRecord> {
+    this.assertValid(input);
+    const board = normalizeScenes(input);
     return this.withLock(id, async () => {
       const record = await this.require(id);
-      if (['casting', 'framing', 'rendering', 'assembling'].includes(record.status)) {
+      if (BUSY_STATUSES.includes(record.status)) {
         throw new StoryError('BUSY', 'Story sedang diproses; tunggu selesai atau gagal dulu');
       }
+      const before = await this.readStoryboard(id).catch(() => undefined);
+      const changed = !before || canonical({ ...before, slug: id }) !== canonical({ ...board, slug: id });
       const previous = new Map(record.shots.map(s => [s.id, s]));
       const konsisten = board.mode === 'konsisten';
       record.mode = konsisten ? 'konsisten' : 'cepat';
       const oldCast = new Map((record.cast ?? []).map(c => [c.token, c]));
+      // A take is kept when its prompt is unchanged. "Unchanged" also means: the same prompt the previous
+      // storyboard builds today — legacy/imported records have no promptHash, and a builder upgrade
+      // must not throw away paid clips because the stored hash came from an older builder.
+      const beforeShots = new Map((before?.shots ?? []).map(s => [s.id, s]));
+      const beforeCast = new Map(before ? castOf(before).map(c => [c.token, c]) : []);
+      const clipHash = (b: Storyboard, shot: Storyboard['shots'][number]) => (shot.reuse ? hash(JSON.stringify(shot.reuse)) : hash(buildShotPrompt(b, shot)));
+      const same = (stored: string | undefined, now: string, was: () => string | undefined) => stored === now || was() === now;
       record.cast = konsisten ? castOf(board).map(c => {
         const old = oldCast.get(c.token);
         const h = hash(characterSheetPrompt(c, board));
-        return old && old.status === 'done' && old.promptHash === h ? old : { token: c.token, name: c.name, status: 'pending' as const, attempts: 0 };
+        const was = () => { const bc = beforeCast.get(c.token); return bc && before ? hash(characterSheetPrompt(bc, before)) : undefined; };
+        return old && old.status === 'done' && same(old.promptHash, h, was) ? { ...old, promptHash: h } : { token: c.token, name: c.name, status: 'pending' as const, attempts: 0 };
       }) : undefined;
       const castChanged = new Set((record.cast ?? []).filter(c => c.status !== 'done').map(c => c.token));
       record.title = board.title.trim();
       record.shots = board.shots.map(shot => {
         const old = previous.get(shot.id);
-        const promptHash = shot.reuse ? hash(JSON.stringify(shot.reuse)) : hash(buildShotPrompt(board, shot));
+        const prev = beforeShots.get(shot.id);
+        const promptHash = clipHash(board, shot);
         const frameHash = konsisten && !shot.reuse ? hash(framePrompt(board, shot)) : undefined;
-        const keepFrame = konsisten && old?.frame?.status === 'done' && old.frame.promptHash === frameHash
+        const keepFrame = konsisten && old?.frame?.status === 'done' && frameHash !== undefined
+          && same(old.frame.promptHash, frameHash, () => (prev && before && !prev.reuse ? hash(framePrompt(before, prev)) : undefined))
           && !shotCast(board, shot).some(c => castChanged.has(c.token));
-        const frame = konsisten && !shot.reuse ? (keepFrame ? old!.frame : { status: 'pending' as const, attempts: 0 }) : undefined;
-        if (old && old.status === 'done' && old.promptHash === promptHash && (!konsisten || keepFrame || shot.reuse)) return { ...old, ...(frame ? { frame } : {}) };
+        const frame = konsisten && !shot.reuse ? (keepFrame ? { ...old!.frame!, promptHash: frameHash } : { status: 'pending' as const, attempts: 0 }) : undefined;
+        const keepClip = old?.status === 'done' && same(old.promptHash, promptHash, () => (prev && before ? clipHash(before, prev) : undefined));
+        if (old && keepClip && (!konsisten || keepFrame || shot.reuse)) return { ...old, promptHash, ...(frame ? { frame } : {}) };
         return { id: shot.id, status: 'pending', attempts: 0, ...(frame ? { frame } : {}) };
       });
       record.error = undefined;
-      record.status = 'draft';
+      record.run = undefined;
+      // The cut is stale only when what plays changes (order or a take), not scene titles/splits.
+      const cut = (shots: ShotState[]) => shots.map(s => `${s.id}:${s.status}:${s.jobId ?? ''}`).join('|');
+      if (record.video && changed && cut(record.shots) !== cut([...previous.values()])) record.videoStale = true;
+      record.status = idleStatus(record);
       await this.writeJson(join(this.storyDir(id), 'storyboard.json'), { ...board, slug: id });
       await this.save(record, 'Storyboard diubah');
       return record;
@@ -275,22 +317,53 @@ export class StoryService {
     state.error = undefined;
   }
 
-  async render(id: string, options: { force?: boolean } = {}): Promise<StoryRecord> {
+  /** Shot ids of a run: one shot, one scene, or (neither) the whole story. */
+  private subset(board: Storyboard, target: { scene?: string; shot?: string; shots?: string[] }): string[] {
+    if (target.shots) return board.shots.map(s => s.id).filter(id => target.shots!.includes(id));
+    if (target.shot !== undefined) {
+      if (!board.shots.some(s => s.id === target.shot)) throw new StoryError('NOT_FOUND', 'Shot tidak ditemukan');
+      return [target.shot];
+    }
+    if (target.scene !== undefined) {
+      const scene = board.scenes?.find(sc => sc.id === target.scene);
+      if (!scene) throw new StoryError('NOT_FOUND', 'Scene tidak ditemukan');
+      return [...scene.shots];
+    }
+    return board.shots.map(s => s.id);
+  }
+
+  /** Shots of the active run (records from before partial runs: the whole story). */
+  private runIds(record: StoryRecord): Set<string> {
+    return new Set(record.run?.shots ?? record.shots.map(s => s.id));
+  }
+
+  /** Queue clips for one shot / one scene / everything not done. Budget counts only the run. */
+  async render(id: string, options: { force?: boolean; scene?: string; shot?: string } = {}): Promise<StoryRecord> {
+    return this.startRender(id, options);
+  }
+
+  private async startRender(id: string, options: { force?: boolean; scene?: string; shot?: string; shots?: string[] }): Promise<StoryRecord> {
     return this.withLock(id, async () => {
       const record = await this.require(id);
       if (record.status === 'assembling') throw new StoryError('BUSY', 'Story sedang dirakit');
+      if (record.status === 'casting' || record.status === 'framing') throw new StoryError('BUSY', 'Keyframe sedang dibuat; tunggu selesai dulu');
       const board = await this.readStoryboard(id);
-      if (record.mode === 'konsisten' && record.shots.some(s => s.frame && s.frame.status !== 'done')) {
+      const ids = new Set(this.subset(board, options));
+      const run = record.shots.filter(s => ids.has(s.id));
+      if (record.mode === 'konsisten' && run.some(s => s.frame && s.frame.status !== 'done')) {
         throw new StoryError('INVALID', 'Buat dan review keyframe dulu sebelum render video');
       }
       const reuseIds = new Set(board.shots.filter(s => s.reuse).map(s => s.id));
-      const todo = record.shots.filter(s => !reuseIds.has(s.id) && (s.status === 'pending' || s.status === 'failed'));
+      const todo = run.filter(s => !reuseIds.has(s.id) && (s.status === 'pending' || s.status === 'failed'));
       const credits = await this.knownCredits();
       const needed = todo.length * CREDITS_PER_SHOT;
       if (!options.force && credits !== undefined && needed > credits) {
         throw new StoryError('BUDGET', `Butuh ±${needed} credits untuk ${todo.length} shot, tersisa ${credits} credits di akun Flow`);
       }
       for (const state of todo) await this.queueShot(record, board, state.id);
+      // A second render while rendering widens the run instead of replacing it.
+      const previous = record.status === 'rendering' ? [...this.runIds(record)] : [];
+      record.run = { shots: record.shots.map(s => s.id).filter(sid => ids.has(sid) || previous.includes(sid)) };
       record.status = 'rendering';
       record.error = undefined;
       await this.save(record, todo.length ? `${todo.length} shot masuk antrean Flow` : undefined);
@@ -299,8 +372,12 @@ export class StoryService {
   }
 
   async retry(id: string): Promise<StoryRecord> {
+    let ids: string[] = [];
     const record = await this.withLock(id, async () => {
       const r = await this.require(id);
+      // Retry the last run plus anything that failed; never spends on scenes the user did not run.
+      const run = this.runIds(r);
+      ids = r.shots.filter(s => run.has(s.id) || s.status === 'failed' || s.frame?.status === 'failed').map(s => s.id);
       for (const s of r.shots) if (s.status === 'failed') { s.status = 'pending'; s.attempts = 0; s.error = undefined; }
       const prepFailed = (r.cast ?? []).some(c => c.status === 'failed') || r.shots.some(s => s.frame?.status === 'failed');
       for (const c of r.cast ?? []) if (c.status === 'failed') Object.assign(c, { status: 'pending', attempts: 0, error: undefined });
@@ -317,8 +394,8 @@ export class StoryService {
       return r;
     });
     if (record.status === 'assembling') return record;
-    if (record.mode === 'konsisten' && record.shots.some(s => s.frame && s.frame.status !== 'done')) return this.prepare(id);
-    return this.render(id, { force: true });
+    if (record.mode === 'konsisten' && record.shots.some(s => ids.includes(s.id) && s.frame && s.frame.status !== 'done')) return this.startPrep(id, { shots: ids });
+    return this.startRender(id, { force: true, shots: ids });
   }
 
   private async rejectTake(state: TakeState | ShotState, reason: string): Promise<'requeue' | 'failed'> {
@@ -334,10 +411,12 @@ export class StoryService {
 
   private async collect(record: StoryRecord, board: Storyboard): Promise<boolean> {
     let changed = false;
+    const run = this.runIds(record);
     for (const state of record.shots) {
       const shot = board.shots.find(s => s.id === state.id);
       if (!shot || state.status === 'done' || state.status === 'failed') continue;
       if (shot.reuse) {
+        if (!run.has(state.id)) continue;
         const job = await this.deps.flow.getJob(shot.reuse.jobId);
         if (job?.status === 'done' && job.resultPath && existsSync(job.resultPath)) {
           await copyFile(job.resultPath, this.shotPath(record.id, shot.id));
@@ -407,42 +486,73 @@ export class StoryService {
   async reconcile(id: string): Promise<StoryRecord | undefined> {
     return this.withLock(id, async () => {
       const record = await this.get(id);
-      if (!record || !['casting', 'framing', 'rendering', 'assembling'].includes(record.status)) return record;
+      if (!record || !BUSY_STATUSES.includes(record.status)) return record;
       const board = await this.readStoryboard(id);
       if (record.status === 'casting' || record.status === 'framing') return this.advancePrep(record, board);
       if (record.status === 'rendering') {
         const changed = await this.collect(record, board);
-        const failed = record.shots.filter(s => s.status === 'failed');
-        const open = record.shots.filter(s => s.status === 'queued' || s.status === 'pending');
-        if (failed.length && !open.length) {
+        const run = this.runIds(record);
+        // Only queued clips keep the run open: pending shots of other scenes never block it.
+        if (record.shots.some(s => s.status === 'queued')) {
+          if (changed) await this.save(record, `${record.shots.filter(s => s.status === 'done').length}/${record.shots.length} shot siap`);
+          return record;
+        }
+        const failed = record.shots.filter(s => run.has(s.id) && s.status === 'failed');
+        if (failed.length) {
           record.status = 'failed';
           record.error = failed.map(s => `${s.id}: ${s.error ?? 'gagal'}`).join('; ');
           await this.save(record, 'Gagal: ' + record.error);
           return record;
         }
         if (!record.shots.every(s => s.status === 'done')) {
-          if (changed) await this.save(record, `${record.shots.filter(s => s.status === 'done').length}/${record.shots.length} shot siap`);
+          record.status = idleStatus(record);
+          await this.save(record, `${record.shots.filter(s => s.status === 'done').length}/${record.shots.length} shot siap`);
           return record;
         }
         record.status = 'assembling';
         await this.save(record, 'Semua shot siap, merakit video');
       }
-      try {
-        await this.writeAssemblyPlan(record, board);
-        await rm(this.videoPath(id), { force: true });
-        await this.deps.assemble(this.storyDir(id));
-        const info = await stat(this.videoPath(id));
-        record.status = 'done';
-        record.video = { bytes: info.size, finishedAtMs: Date.now() };
-        record.error = undefined;
-        await this.save(record, 'Video selesai');
-      } catch (error) {
-        record.status = 'failed';
-        record.error = `Perakitan gagal: ${error instanceof Error ? error.message : String(error)}`.slice(0, 600);
-        await this.save(record, record.error);
-      }
-      return record;
+      return this.runAssembly(record, board);
     });
+  }
+
+  /** Rebuild final.mp4 from the current order. Needs every shot done; free (no Flow). */
+  async assemble(id: string): Promise<StoryRecord> {
+    return this.withLock(id, async () => {
+      const record = await this.require(id);
+      if (BUSY_STATUSES.includes(record.status)) throw new StoryError('BUSY', 'Story sedang diproses');
+      if (!record.shots.every(s => s.status === 'done')) throw new StoryError('INVALID', 'Semua shot harus selesai sebelum video dirakit');
+      const board = await this.readStoryboard(id);
+      record.status = 'assembling';
+      record.error = undefined;
+      await this.save(record, 'Merakit ulang video');
+      return this.runAssembly(record, board);
+    });
+  }
+
+  private async runAssembly(record: StoryRecord, board: Storyboard): Promise<StoryRecord> {
+    const id = record.id;
+    const backup = `${this.videoPath(id)}.prev`;
+    try {
+      await this.writeAssemblyPlan(record, board);
+      // Keep the previous cut until the new one exists: a failed re-assembly must not lose it.
+      if (existsSync(this.videoPath(id))) await rename(this.videoPath(id), backup);
+      await this.deps.assemble(this.storyDir(id));
+      const info = await stat(this.videoPath(id));
+      record.status = 'done';
+      record.video = { bytes: info.size, finishedAtMs: Date.now() };
+      record.videoStale = undefined;
+      record.error = undefined;
+      await rm(backup, { force: true });
+      await this.save(record, 'Video selesai');
+    } catch (error) {
+      if (existsSync(backup)) await rename(backup, this.videoPath(id)).catch(() => undefined);
+      else { await rm(this.videoPath(id), { force: true }); record.video = undefined; }
+      record.status = 'failed';
+      record.error = `Perakitan gagal: ${error instanceof Error ? error.message : String(error)}`.slice(0, 600);
+      await this.save(record, record.error);
+    }
+    return record;
   }
 
   /** Studio pickers changed: recompose the Style line (invalidates sheets/frames/clips whose prompt changed). */
@@ -454,17 +564,30 @@ export class StoryService {
 
   // ------------------------------------------------------------------ konsisten: cast + keyframes
 
-  /** Character sheets, then keyframes. Free in Flow; ends in 'review' for the user to approve. */
-  async prepare(id: string): Promise<StoryRecord> {
+  /** Character sheets the run needs, then the run's keyframes. Free in Flow; ends idle (review) for the user to approve. */
+  async prepare(id: string, options: { scene?: string } = {}): Promise<StoryRecord> {
+    return this.startPrep(id, options);
+  }
+
+  /** Cast tokens needed by the run's shots. */
+  private runCast(record: StoryRecord, board: Storyboard): CastState[] {
+    const run = this.runIds(record);
+    const tokens = new Set(board.shots.filter(s => run.has(s.id) && !s.reuse).flatMap(s => shotCast(board, s).map(c => c.token)));
+    return (record.cast ?? []).filter(c => tokens.has(c.token));
+  }
+
+  private async startPrep(id: string, options: { scene?: string; shots?: string[] }): Promise<StoryRecord> {
     return this.withLock(id, async () => {
       const record = await this.require(id);
       if (record.mode !== 'konsisten') throw new StoryError('INVALID', 'Keyframe hanya untuk mode konsisten');
-      if (['casting', 'framing', 'rendering', 'assembling'].includes(record.status)) throw new StoryError('BUSY', 'Story sedang diproses');
+      if (BUSY_STATUSES.includes(record.status)) throw new StoryError('BUSY', 'Story sedang diproses');
       const board = await this.readStoryboard(id);
+      record.run = { shots: this.subset(board, options) };
       record.error = undefined;
-      const todo = (record.cast ?? []).filter(c => c.status === 'pending' || c.status === 'failed');
+      const needed = this.runCast(record, board);
+      const todo = needed.filter(c => c.status === 'pending' || c.status === 'failed');
       for (const c of todo) await this.queueCast(record, board, c);
-      if ((record.cast ?? []).every(c => c.status === 'done')) {
+      if (needed.every(c => c.status === 'done')) {
         await this.queueFrames(record, board);
         record.status = 'framing';
         await this.save(record, 'Membuat keyframe');
@@ -492,8 +615,10 @@ export class StoryService {
         Object.assign(state, { status: 'pending', attempts: 0, error: undefined });
       }
       state.frame = { status: 'pending', attempts: 0 };
-      if ((record.cast ?? []).some(c => c.status !== 'done')) throw new StoryError('INVALID', 'Lembar karakter belum siap');
+      const needed = new Set(shotCast(board, shot).map(c => c.token));
+      if ((record.cast ?? []).some(c => needed.has(c.token) && c.status !== 'done')) throw new StoryError('INVALID', 'Lembar karakter belum siap');
       await this.queueFrame(record, board, shotId);
+      record.run = { shots: [shotId] };
       record.status = 'framing';
       record.error = undefined;
       await this.save(record, `Gambar ulang keyframe ${shotId}`);
@@ -525,7 +650,8 @@ export class StoryService {
   }
 
   private async queueFrames(record: StoryRecord, board: Storyboard): Promise<void> {
-    for (const s of record.shots) if (s.frame && (s.frame.status === 'pending' || s.frame.status === 'failed')) await this.queueFrame(record, board, s.id);
+    const run = this.runIds(record);
+    for (const s of record.shots) if (run.has(s.id) && s.frame && (s.frame.status === 'pending' || s.frame.status === 'failed')) await this.queueFrame(record, board, s.id);
   }
 
   /** Collect one take; returns true when state changed. */
@@ -570,7 +696,7 @@ export class StoryService {
           async f => ((await stat(f)).size < MIN_IMAGE_BYTES ? 'Lembar karakter kosong/rusak' : undefined),
           () => this.queueCast(record, board, c))) || changed;
       }
-      const cast = record.cast ?? [];
+      const cast = this.runCast(record, board);
       const failed = cast.filter(c => c.status === 'failed');
       if (failed.length && !cast.some(c => c.status === 'queued')) {
         record.status = 'failed';
@@ -579,6 +705,7 @@ export class StoryService {
         return record;
       }
       if (!cast.every(c => c.status === 'done')) {
+        for (const c of cast) if (c.status === 'pending') { await this.queueCast(record, board, c); changed = true; }
         if (changed) await this.save(record, `${cast.filter(c => c.status === 'done').length}/${cast.length} karakter siap`);
         return record;
       }
@@ -592,16 +719,24 @@ export class StoryService {
       changed = (await this.collectTake(s.frame, this.framePath(record.id, s.id), f => this.imageQc(f, board),
         () => this.queueFrame(record, board, s.id))) || changed;
     }
+    const run = this.runIds(record);
     const frames = record.shots.filter(s => s.frame).map(s => s.frame!);
-    const failed = record.shots.filter(s => s.frame?.status === 'failed');
-    if (failed.length && !frames.some(f => f.status === 'queued')) {
+    const runFrames = record.shots.filter(s => s.frame && run.has(s.id)).map(s => s.frame!);
+    const open = frames.some(f => f.status === 'queued');
+    const failed = record.shots.filter(s => run.has(s.id) && s.frame?.status === 'failed');
+    if (failed.length && !open) {
       record.status = 'failed';
       record.error = failed.map(s => `${s.id}: ${s.frame!.error ?? 'gagal'}`).join('; ');
       await this.save(record, 'Gagal: ' + record.error);
       return record;
     }
-    if (frames.every(f => f.status === 'done')) {
-      record.status = 'review';
+    if (!open) {
+      // Run frames never queued (e.g. a record from before partial runs): queue them now.
+      for (const s of record.shots) if (run.has(s.id) && s.frame?.status === 'pending') { await this.queueFrame(record, board, s.id); changed = true; }
+    }
+    // Only queued frames keep the run open: pending frames of other scenes never block it.
+    if (!frames.some(f => f.status === 'queued') && runFrames.every(f => f.status === 'done')) {
+      record.status = idleStatus(record);
       await this.save(record, 'Keyframe siap untuk direview');
     } else if (changed) {
       await this.save(record, `${frames.filter(f => f.status === 'done').length}/${frames.length} keyframe siap`);

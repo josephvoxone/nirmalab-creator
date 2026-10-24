@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { draftStoryboard, parseJsonBlock } from '../src/stories/draft.js';
-import { validateStoryboard } from '../src/stories/storyboard.js';
+import { buildShotPrompt, validateStoryboard } from '../src/stories/storyboard.js';
 
 const goodShots = [
   { id: 'intro', silent: true, prompt: 'Extreme wide shot, the camera pushes in slowly. A misty valley at sunrise, open sky above.' },
@@ -102,5 +102,63 @@ describe('draftStoryboard', () => {
     const board = await draftStoryboard({ premise: 'x', template: 'drama-hewan', shots: 2 }, async () => reply);
     expect(board.shots[1]!.narration).toBe('Setiap sore, Jingga menunggu di depan pagar.');
     expect(board.title).toBe('Jingga di Pagar');
+  });
+
+  it('asks the writer for a logline, locations and scenes following the story arc', async () => {
+    let system = '';
+    await draftStoryboard({ premise: 'x' }, async sys => { system = sys; return good; });
+    expect(system).toMatch(/"logline"/);
+    expect(system).toMatch(/"locations"/);
+    expect(system).toMatch(/"scenes"/);
+    expect(system).toMatch(/2-4 scenes/);
+    expect(system).toMatch(/setup.*conflict.*turning point.*resolution/i);
+  });
+
+  it('parses logline, locations and scenes; scene shot ids follow the shot id rewriting; bad references dropped', async () => {
+    const reply = JSON.stringify({
+      ...JSON.parse(good),
+      logline: 'Seekor kucing hilang dan ditemukan kembali.',
+      locations: { DESA: 'a quiet village with wooden houses at dawn', 'laut kecil': 'bad key', HUTAN: { name: 'Hutan Pinus', look: 'a misty pine forest' }, KOSONG: '' },
+      scenes: [
+        { id: 'Awal Cerita', title: 'Awal', summary: 'Sari dan Mimi.', location: 'DESA', shots: ['intro', 'Satu Hadiah', 'ghost'] },
+        { id: 'pulang', title: 'Pulang', location: 'LAUT', shots: ['02-pulang'] }
+      ]
+    });
+    const calls: string[] = [];
+    const board = await draftStoryboard({ premise: 'kucing', shots: 3 }, async (_s, p) => { calls.push(p); return reply; });
+    expect(calls).toHaveLength(1);
+    expect(validateStoryboard(board)).toEqual([]);
+    expect(board.logline).toBe('Seekor kucing hilang dan ditemukan kembali.');
+    expect(board.locations).toEqual({ DESA: { name: 'Desa', look: 'a quiet village with wooden houses at dawn' }, HUTAN: { name: 'Hutan Pinus', look: 'a misty pine forest' } });
+    expect(board.scenes).toEqual([
+      { id: 'awal-cerita', title: 'Awal', summary: 'Sari dan Mimi.', location: 'DESA', shots: ['00-intro', '01-satu-hadiah'] },
+      { id: 'pulang', title: 'Pulang', shots: ['02-pulang'] }
+    ]);
+    expect(buildShotPrompt(board, board.shots[1]!)).toContain('Setting: a quiet village with wooden houses at dawn.');
+  });
+
+  it('missing scenes fall back to one scene with every shot', async () => {
+    const board = await draftStoryboard({ premise: 'kucing', shots: 3 }, async () => good);
+    expect(board.scenes).toEqual([{ id: 'scene-1', title: 'Scene 1', shots: ['00-intro', '01-satu-hadiah', '02-pulang'] }]);
+    expect(board.locations ?? {}).toEqual({});
+  });
+
+  it('never fails a draft only because of broken scenes or locations', async () => {
+    const scenes = [
+      { title: '', shots: 'intro' }, { id: 'dup', title: 'x'.repeat(200), summary: 'y'.repeat(900), shots: ['pulang'] }, { id: 'dup', title: 'Lagi', shots: [] },
+      ...Array.from({ length: 30 }, (_, i) => ({ id: `s${i}`, title: `S${i}`, shots: [] })), 'nonsense'
+    ];
+    const locations = Object.fromEntries(Array.from({ length: 30 }, (_, i) => [`LOC_${i}`, `place ${i}`]));
+    const calls: string[] = [];
+    const board = await draftStoryboard({ premise: 'kucing', shots: 3 }, async (_s, p) => { calls.push(p); return JSON.stringify({ ...JSON.parse(good), scenes, locations, logline: 42 }); });
+    expect(calls).toHaveLength(1);
+    expect(validateStoryboard(board)).toEqual([]);
+    expect(board.scenes!.length).toBeLessThanOrEqual(20);
+    expect(new Set(board.scenes!.map(s => s.id)).size).toBe(board.scenes!.length);
+    expect(board.scenes!.flatMap(s => s.shots).sort()).toEqual(['00-intro', '01-satu-hadiah', '02-pulang']);
+    expect(Object.keys(board.locations!).length).toBeLessThanOrEqual(20);
+    expect(board.logline).toBeUndefined();
+    const garbage = await draftStoryboard({ premise: 'kucing', shots: 3 }, async () => JSON.stringify({ ...JSON.parse(good), scenes: 'x', locations: ['y'] }));
+    expect(garbage.scenes).toHaveLength(1);
   });
 });

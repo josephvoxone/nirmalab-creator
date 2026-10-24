@@ -41,6 +41,20 @@ function sendPng(reply: FastifyReply, file: string) {
 const TOKEN = /^[A-Z][A-Z0-9_]{1,20}$/;
 const notFound = (reply: FastifyReply, what = 'Shot') => reply.code(404).send({ error: { code: 'NOT_FOUND', message: `${what} not found` } });
 
+const badRequest = (reply: FastifyReply, message: string) => reply.code(400).send({ error: { code: 'INVALID', message } });
+
+/** Optional `scene`/`shot` id of a partial run: absent, or a well-formed id (existence is checked by the service → 404). */
+function runTarget(body: { scene?: unknown; shot?: unknown } | undefined): { scene?: string; shot?: string } | string {
+  const out: { scene?: string; shot?: string } = {};
+  for (const key of ['scene', 'shot'] as const) {
+    const value = body?.[key];
+    if (value === undefined || value === null) continue;
+    if (typeof value !== 'string' || !SHOT_ID.test(value)) return `${key} must be a ${key} id`;
+    out[key] = value;
+  }
+  return out;
+}
+
 const asBoard = (value: unknown): Storyboard => {
   if (!value || typeof value !== 'object') throw new StoryError('INVALID', 'storyboard is required');
   return value as Storyboard;
@@ -129,18 +143,35 @@ export async function registerStoryRoutes(
     } catch (error) { return fail(reply, error); }
   });
 
-  server.post<{ Params: { id: string }; Body: { force?: unknown } }>('/api/stories/:id/render', async (request, reply) => {
+  server.post<{ Params: { id: string }; Body: { force?: unknown; scene?: unknown; shot?: unknown } }>('/api/stories/:id/render', async (request, reply) => {
     if (!requireAdmin(auth, request, reply)) return undefined;
+    const target = runTarget(request.body);
+    if (typeof target === 'string') return badRequest(reply, target);
+    // A shot is the narrower target: it wins when both are sent.
+    const subset = target.shot ? { shot: target.shot } : target.scene ? { scene: target.scene } : {};
     try {
-      return { story: await stories.render(request.params.id, { force: request.body?.force === true }) };
+      return { story: await stories.render(request.params.id, { force: request.body?.force === true, ...subset }) };
     } catch (error) { return fail(reply, error); }
   });
 
-  server.post<{ Params: { id: string } }>('/api/stories/:id/prepare', async (request, reply) => {
+  server.post<{ Params: { id: string }; Body: { scene?: unknown } }>('/api/stories/:id/prepare', async (request, reply) => {
+    if (!requireAdmin(auth, request, reply)) return undefined;
+    const target = runTarget({ scene: request.body?.scene });
+    if (typeof target === 'string') return badRequest(reply, target);
+    try {
+      return { story: await stories.prepare(request.params.id, target.scene ? { scene: target.scene } : {}) };
+    } catch (error) { return fail(reply, error); }
+  });
+
+  server.post<{ Params: { id: string } }>('/api/stories/:id/assemble', async (request, reply) => {
     if (!requireAdmin(auth, request, reply)) return undefined;
     try {
-      return { story: await stories.prepare(request.params.id) };
-    } catch (error) { return fail(reply, error); }
+      return { story: await stories.assemble(request.params.id) };
+    } catch (error) {
+      // Contract: 409 INVALID while some shot is not done yet (a state conflict, not a bad body).
+      if (error instanceof StoryError && error.code === 'INVALID') return reply.code(409).send({ error: { code: 'INVALID', message: error.message } });
+      return fail(reply, error);
+    }
   });
 
   server.post<{ Params: { id: string }; Body: { look?: unknown } }>('/api/stories/:id/look', async (request, reply) => {
@@ -199,7 +230,9 @@ export async function registerStoryRoutes(
     if (!member(request, reply)) return undefined;
     try {
       const story = await stories.get(request.params.id);
-      if (story?.status !== 'done') return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Video belum selesai' } });
+      // A stale video (storyboard edited after assembly) stays watchable until it is rebuilt.
+      const watchable = story?.status === 'done' || (!!story?.video && story.status !== 'assembling');
+      if (!story || !watchable) return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Video belum selesai' } });
       return sendVideo(reply, stories.videoPath(story.id), request.headers.range);
     } catch (error) { return fail(reply, error); }
   });
