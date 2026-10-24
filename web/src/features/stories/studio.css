@@ -90,6 +90,11 @@
 .section-head h2 { margin: 0; font-size: 16px; font-weight: 600; }
 .section-head .muted { font-size: 12px; color: var(--subtle); }
 .template-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px; }
+.template-item { position: relative; display: flex; }
+.template-item .template-card { flex: 1; min-width: 0; }
+.template-regen { position: absolute; right: 8px; top: 8px; z-index: 2; background: rgba(0, 0, 0, 0.55); color: #fff; }
+.template-regen:hover { background: rgba(0, 0, 0, 0.75); color: #fff; }
+.template-cover-busy { position: absolute; inset: auto 8px 8px 8px; z-index: 1; display: inline-flex; align-items: center; gap: 6px; padding: 4px 8px; font-size: 11px; background: rgba(0, 0, 0, 0.65); color: #fff; }
 .template-card {
   display: flex; flex-direction: column; gap: 4px; padding: 0 0 12px; text-align: left; overflow: hidden;
   background: var(--surface); border: 1px solid var(--border-hairline); color: var(--text); font: inherit; cursor: pointer;

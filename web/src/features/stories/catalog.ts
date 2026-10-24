@@ -13,6 +13,9 @@ export type Catalog = {
   framings: Option[]; moves: Option[];
 };
 
+export type CoverState = { pending: boolean; error?: string; updatedAtMs?: number };
+export type Covers = Record<string, CoverState>;
+
 export const DEFAULT_LOOK: Look = { style: 'storybook', genre: 'auto', era: 'auto', camera: 'auto', lens: 'auto', aperture: 'auto', palette: 'auto', lighting: 'auto', tempo: 'mengalir' };
 
 export const LIST_OF: Record<LookKey, keyof Catalog> = {
@@ -23,15 +26,23 @@ export function optionOf(catalog: Catalog, key: LookKey, id: string | undefined)
   return (catalog[LIST_OF[key]] as Option[]).find(o => o.id === id);
 }
 
-export function useCatalog(load: () => Promise<{ catalog: Catalog }>) {
+export function useCatalog(load: () => Promise<{ catalog: Catalog; covers?: Covers }>, pollMs = 8000) {
   const [catalog, setCatalog] = useState<Catalog>();
+  const [covers, setCovers] = useState<Covers>({});
   const [error, setError] = useState('');
+  const [tick, setTick] = useState(0);
   useEffect(() => {
     let alive = true;
-    load().then(r => alive && setCatalog(r.catalog), e => alive && setError(e instanceof Error ? e.message : 'Gagal memuat katalog'));
+    load().then(r => { if (alive) { setCatalog(r.catalog); setCovers(r.covers ?? {}); } }, e => alive && setError(e instanceof Error ? e.message : 'Gagal memuat katalog'));
     return () => { alive = false; };
-  }, [load]);
-  return { catalog, error };
+  }, [load, tick]);
+  const pending = Object.values(covers).some(c => c.pending);
+  useEffect(() => {
+    if (!pending) return;
+    const timer = setInterval(() => setTick(t => t + 1), pollMs);
+    return () => clearInterval(timer);
+  }, [pending, pollMs]);
+  return { catalog, covers, error, reload: () => setTick(t => t + 1) };
 }
 
 const SETUP = /^\s*[^.]*\bthe camera\b[^.]*\.\s*/i;

@@ -12,6 +12,7 @@ import { pollinationsText } from './generate/pollinations.js';
 import type { TextGenerator } from './stories/draft.js';
 import { assembleStory, imageSize, probeClip } from './stories/media.js';
 import { registerStoryRoutes } from './stories/routes.js';
+import { CoverService } from './stories/covers.js';
 import { StoryService, type StoryDeps } from './stories/service.js';
 
 export type AppOptions = {
@@ -77,7 +78,8 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
     options.dataDir,
     { timeoutMs: 120_000 }
   )).text);
-  await registerStoryRoutes(server, { userAuthStore, stories, generateText });
+  const covers = new CoverService({ dataDir: options.dataDir, flow: flowStore, webDist: options.webDist });
+  await registerStoryRoutes(server, { userAuthStore, stories, generateText, covers });
   const reconcileMs = options.stories?.reconcileMs ?? 5000;
   if (reconcileMs > 0) {
     let running = false;

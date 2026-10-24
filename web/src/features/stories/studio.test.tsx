@@ -28,7 +28,7 @@ function mount(path: string, fetchImpl: ReturnType<typeof harness>['fetchImpl'])
     <SessionContext.Provider value={session}>
       <MemoryRouter initialEntries={[path]}>
         <Routes>
-          <Route path="/cerita" element={<StoriesPage />} />
+          <Route path="/cerita" element={<StoriesPage pollMs={50} />} />
           <Route path="/cerita/:id" element={<StoryDetailPage pollMs={20} />} />
         </Routes>
       </MemoryRouter>
@@ -49,7 +49,7 @@ describe('Studio cerita (composer)', () => {
   it('template card fills the look chips, mode and example premise', async () => {
     const { fetchImpl } = harness(c => (c.url === '/api/stories' ? { body: { stories: [] } } : undefined));
     mount('/cerita', fetchImpl);
-    const card = await screen.findByRole('button', { name: /Dongeng Tidur/ });
+    const card = await screen.findByRole('button', { name: /Dongeng Tidur/, pressed: false });
     await userEvent.click(card);
     expect(screen.getByRole('button', { name: /Palet warna.*Pastel Kapas/ })).toBeTruthy();
     expect(screen.getByRole('button', { name: /Film setup.*Dongeng/ })).toBeTruthy();
@@ -61,12 +61,33 @@ describe('Studio cerita (composer)', () => {
   it('template cards show their cover still, and fall back to the palette when it is missing', async () => {
     const { fetchImpl } = harness(c => (c.url === '/api/stories' ? { body: { stories: [] } } : undefined));
     mount('/cerita', fetchImpl);
-    const card = await screen.findByRole('button', { name: /Drama Hewan/ });
+    const card = await screen.findByRole('button', { name: /Drama Hewan/, pressed: false });
     const img = card.querySelector('img')!;
-    expect(img.getAttribute('src')).toBe('/templates/drama-hewan.jpg');
+    expect(img.getAttribute('src')).toBe('/api/stories/templates/drama-hewan/cover?v=0');
     expect(img.getAttribute('alt')).toBe('');
     img.dispatchEvent(new Event('error'));
     await waitFor(() => expect(card.querySelector('img')).toBeNull());
+  });
+
+  it('admin regenerates a template cover through the app; card shows progress', async () => {
+    let covers: Record<string, unknown> = {};
+    const calls: Call[] = [];
+    const fetchImpl = vi.fn(async (url: string, init?: RequestInit) => {
+      calls.push({ url, method: init?.method ?? 'GET' });
+      const body = url === '/api/stories/catalog' ? { catalog: CATALOG, covers }
+        : url === '/api/stories' ? { stories: [] }
+        : url === '/api/stories/templates/fakta-faceless/cover' && init?.method === 'POST' ? (covers = { 'fakta-faceless': { pending: true } }, { cover: { pending: true } })
+        : undefined;
+      return new Response(JSON.stringify(body ?? {}), { status: body ? 200 : 404 });
+    });
+    mount('/cerita', fetchImpl);
+    await userEvent.click(await screen.findByRole('button', { name: 'Buat ulang cover Fakta Unik' }));
+    expect(calls.some(c => c.url === '/api/stories/templates/fakta-faceless/cover' && c.method === 'POST')).toBe(true);
+    expect(await screen.findByText(/Membuat cover/)).toBeTruthy();
+    const before = calls.filter(c => c.url === '/api/stories/catalog').length;
+    covers = { 'fakta-faceless': { pending: false, updatedAtMs: 42 } };
+    await waitFor(() => expect(calls.filter(c => c.url === '/api/stories/catalog').length).toBeGreaterThan(before), { timeout: 3000 });
+    await waitFor(() => expect(screen.getByRole('button', { name: /Fakta Unik/, pressed: false }).querySelector('img')!.getAttribute('src')).toBe('/api/stories/templates/fakta-faceless/cover?v=42'));
   });
 
   it('palette dialog: pick, chip updates, Esc closes', async () => {
@@ -101,7 +122,7 @@ describe('Studio cerita (composer)', () => {
       return undefined;
     });
     mount('/cerita', fetchImpl);
-    await userEvent.click(await screen.findByRole('button', { name: /Drama Hewan/ }));
+    await userEvent.click(await screen.findByRole('button', { name: /Drama Hewan/, pressed: false }));
     await userEvent.click(screen.getByRole('button', { name: /Coba contoh/ }));
     await userEvent.click(screen.getByRole('button', { name: /Tulis storyboard/ }));
     await waitFor(() => expect(calls.some(c => c.url === '/api/stories/draft')).toBe(true));

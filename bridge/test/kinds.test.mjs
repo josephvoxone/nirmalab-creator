@@ -174,3 +174,14 @@ test('character job: portrait appears on the character a little later (polled)',
   assert.equal(r.status, 'done', JSON.stringify(state.failed));
   assert.equal(state.completed[0].meta.mediaId, 'p-late');
 });
+
+test('studio image job (no story group) runs in the shared studio project, free only', async () => {
+  const { state, deps } = fakeFlow();
+  deps.projectTitle = 'OpenCreator jobs';
+  const r = await processJob({ job: { id: 'j', kind: 'image', aspect: '16:9', prompt: 'a lighthouse at dusk' }, account }, deps);
+  assert.equal(r.status, 'done', JSON.stringify(state.failed));
+  assert.equal(state.projects[0].title, 'OpenCreator jobs');
+  const chat = state.calls.find(c => c[0] === 'flow_agent_chat')[1];
+  assert.equal(chat.max_credits, 0);
+  assert.match(chat.message, /16:9/);
+});

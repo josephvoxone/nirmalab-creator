@@ -217,7 +217,7 @@ export function storyMessage(job, duration) {
 }
 
 async function storyJob(job, account, deps) {
-  const projectId = await ensureProject(account, deps.callTool, projectTitleFor(job));
+  const projectId = await ensureProject(account, deps.callTool, projectTitleFor(job, deps.projectTitle ?? 'Nirmalab studio'));
   if (job.kind === 'character') {
     const ref = job.characters?.[0];
     if (!ref) throw new Error('character job without a character');

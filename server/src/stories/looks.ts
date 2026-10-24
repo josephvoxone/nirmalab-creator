@@ -15,6 +15,8 @@ export type Look = {
 export type Template = {
   id: string; name: string; tagline: string; mode: 'konsisten' | 'cepat';
   aspect: '9:16' | '16:9'; narrator: string; example: string; look: Look;
+  /** Scene for the template's cover still (generated through the app queue). */
+  cover: string;
 };
 
 const AUTO: Option = { id: 'auto', label: 'Auto', prompt: '' };
@@ -184,37 +186,37 @@ const NARRATOR = {
 };
 
 const templates: Template[] = [
-  { id: 'drama-hewan', name: 'Drama Hewan', tagline: 'Kisah sedih hewan peliharaan yang menyentuh', mode: 'konsisten', aspect: '9:16', narrator: NARRATOR.hangat,
+  { id: 'drama-hewan', cover: 'An orange cat sits alone in front of a wooden gate at dusk, waiting, a moving truck driving away down the village road.', name: 'Drama Hewan', tagline: 'Kisah sedih hewan peliharaan yang menyentuh', mode: 'konsisten', aspect: '9:16', narrator: NARRATOR.hangat,
     look: look({ style: 'storybook', genre: 'drama', palette: 'aksen-merah', lighting: 'golden-hour', lens: 'halation', aperture: 'f14', tempo: 'mengalir' }),
     example: 'Seekor kucing oranye bernama Jingga ditinggal pemiliknya pindah rumah. Ia menunggu di depan pagar setiap sore sampai suatu hari pemiliknya kembali menjemput.' },
-  { id: 'dongeng-anak', name: 'Dongeng Tidur', tagline: 'Cerita lembut pengantar tidur anak', mode: 'konsisten', aspect: '9:16', narrator: NARRATOR.anak,
+  { id: 'dongeng-anak', cover: 'A tiny shy star with a soft sleepy face floats beside a gentle smiling crescent moon above quiet sleeping rooftops.', name: 'Dongeng Tidur', tagline: 'Cerita lembut pengantar tidur anak', mode: 'konsisten', aspect: '9:16', narrator: NARRATOR.anak,
     look: look({ style: 'storybook', genre: 'dongeng', palette: 'pastel-kapas', lighting: 'soft-window', aperture: 'f14', tempo: 'tenang' }),
     example: 'Bintang kecil bernama Kerlip takut gelap. Bulan mengajaknya berkeliling langit malam sampai Kerlip sadar bahwa cahayanya justru membuat malam indah.' },
-  { id: 'fabel-3d', name: 'Fabel 3D', tagline: 'Animasi 3D lucu dengan pesan moral', mode: 'konsisten', aspect: '9:16', narrator: NARRATOR.anak,
+  { id: 'fabel-3d', cover: 'A smug mouse-deer and a determined little snail at the start line of a race beside a river, forest animals cheering.', name: 'Fabel 3D', tagline: 'Animasi 3D lucu dengan pesan moral', mode: 'konsisten', aspect: '9:16', narrator: NARRATOR.anak,
     look: look({ style: 'pixar-3d', genre: 'komedi', palette: 'riviera', lighting: 'golden-hour', lens: 'clean', aperture: 'f4', tempo: 'mengalir' }),
     example: 'Kancil yang sombong menantang siput balapan menyeberangi sungai. Karena terlalu percaya diri ia tertidur, dan siput yang sabar sampai lebih dulu.' },
-  { id: 'legenda-nusantara', name: 'Legenda Nusantara', tagline: 'Cerita rakyat dengan nuansa wayang & batik', mode: 'konsisten', aspect: '9:16', narrator: NARRATOR.hangat,
+  { id: 'legenda-nusantara', cover: 'A princess in Javanese royal attire stands before rows of unfinished stone temples on a moonlit night, torches burning.', name: 'Legenda Nusantara', tagline: 'Cerita rakyat dengan nuansa wayang & batik', mode: 'konsisten', aspect: '9:16', narrator: NARRATOR.hangat,
     look: look({ style: 'wayang', genre: 'epik', era: 'kerajaan', palette: 'batik-tanah', lighting: 'contre-jour', tempo: 'mengalir' }),
     example: 'Seorang putri dari kerajaan di lereng gunung menolak dinikahkan dengan raja yang kejam, lalu meminta dibuatkan seribu candi dalam satu malam sebagai syarat.' },
-  { id: 'anime-petualangan', name: 'Petualangan Anime', tagline: 'Perjalanan epik bergaya anime 2D', mode: 'konsisten', aspect: '9:16', narrator: NARRATOR.hangat,
+  { id: 'anime-petualangan', cover: 'A boy and his small dog sail a little wooden boat across a misty sea, an old lighthouse glowing behind them.', name: 'Petualangan Anime', tagline: 'Perjalanan epik bergaya anime 2D', mode: 'konsisten', aspect: '9:16', narrator: NARRATOR.hangat,
     look: look({ style: 'anime-2d', genre: 'petualangan', palette: 'hutan-zamrud', lighting: 'golden-hour', tempo: 'dinamis' }),
     example: 'Anak penjaga mercusuar menemukan peta tua di dalam botol dan berlayar dengan perahu kecil bersama anjingnya untuk mencari pulau yang hilang di balik kabut.' },
-  { id: 'misteri-malam', name: 'Misteri Malam', tagline: 'Cerita seram ringan yang bikin penasaran', mode: 'konsisten', aspect: '9:16', narrator: NARRATOR.misteri,
+  { id: 'misteri-malam', cover: 'A teenager peeks through the window of an abandoned house at midnight, a single warm lamp glowing inside, light rain.', name: 'Misteri Malam', tagline: 'Cerita seram ringan yang bikin penasaran', mode: 'konsisten', aspect: '9:16', narrator: NARRATOR.misteri,
     look: look({ style: 'live-action', genre: 'horor', palette: 'hujan-biru', lighting: 'moonlight', camera: 'film35', aperture: 'f14', tempo: 'mengalir' }),
     example: 'Setiap malam jam dua belas, lampu di rumah kosong ujung gang menyala sendiri. Seorang remaja memberanikan diri mengintip dan menemukan rahasia yang mengharukan.' },
-  { id: 'claymation-lucu', name: 'Claymation Lucu', tagline: 'Sketsa komedi stop-motion', mode: 'konsisten', aspect: '9:16', narrator: NARRATOR.anak,
+  { id: 'claymation-lucu', cover: 'A chicken wearing a tiny helmet, tied to colorful balloons, tries to take off from a farmyard fence.', name: 'Claymation Lucu', tagline: 'Sketsa komedi stop-motion', mode: 'konsisten', aspect: '9:16', narrator: NARRATOR.anak,
     look: look({ style: 'claymation', genre: 'komedi', palette: 'pastel-kapas', lighting: 'soft-cross', aperture: 'f4', tempo: 'dinamis' }),
     example: 'Seekor ayam yang ingin terbang mencoba segala cara: payung, balon, sampai ketapel. Semua gagal, sampai seekor burung pipit mengajaknya naik ke punggungnya.' },
-  { id: 'fakta-faceless', name: 'Fakta Unik', tagline: 'Faceless edukasi, tanpa tokoh tetap', mode: 'cepat', aspect: '9:16', narrator: NARRATOR.dokumenter,
+  { id: 'fakta-faceless', cover: 'Close macro view of an octopus changing colour on a coral reef, sunbeams through clear water.', name: 'Fakta Unik', tagline: 'Faceless edukasi, tanpa tokoh tetap', mode: 'cepat', aspect: '9:16', narrator: NARRATOR.dokumenter,
     look: look({ style: 'documentary', genre: 'dokumenter', palette: 'teal-oranye', lighting: 'overcast', camera: 'modern', lens: 'clean', tempo: 'dinamis' }),
     example: 'Lima fakta mengejutkan tentang gurita: punya tiga jantung, darah biru, bisa berubah warna dalam sekejap, sangat cerdas, dan mampu kabur lewat celah sekecil koin.' },
-  { id: 'motivasi', name: 'Motivasi Pagi', tagline: 'Video motivasi sinematik', mode: 'cepat', aspect: '9:16', narrator: NARRATOR.motivasi,
+  { id: 'motivasi', cover: 'A runner ties her shoes on an empty stadium track just before sunrise, breath visible in the cold air.', name: 'Motivasi Pagi', tagline: 'Video motivasi sinematik', mode: 'cepat', aspect: '9:16', narrator: NARRATOR.motivasi,
     look: look({ style: 'live-action', genre: 'drama', palette: 'pagi-keemasan', lighting: 'golden-hour', camera: 'film35', lens: 'vintage-anamorphic', aperture: 'f14', tempo: 'mengalir' }),
     example: 'Kegagalan bukan akhir. Seorang pelari yang jatuh di lintasan bangkit lagi setiap pagi sebelum matahari terbit, sampai akhirnya ia melewati garis finis.' },
-  { id: 'promo-produk', name: 'Promo Produk', tagline: 'Iklan pendek produk lokal', mode: 'cepat', aspect: '9:16', narrator: NARRATOR.motivasi,
+  { id: 'promo-produk', cover: 'A glass of iced palm sugar coffee with milk swirling into it, on a wooden table beside a rainy window.', name: 'Promo Produk', tagline: 'Iklan pendek produk lokal', mode: 'cepat', aspect: '9:16', narrator: NARRATOR.motivasi,
     look: look({ style: 'live-action', genre: 'auto', palette: 'riviera', lighting: 'soft-window', camera: 'modern', lens: 'clean', aperture: 'f14', tempo: 'tenang' }),
     example: 'Kopi susu gula aren dari kedai kecil di Yogyakarta: biji kopi disangrai, susu dituang perlahan, lalu dinikmati di beranda saat hujan sore.' },
-  { id: 'romansa-kota', name: 'Romansa Kota', tagline: 'Cerita cinta hangat di kota hujan', mode: 'konsisten', aspect: '9:16', narrator: NARRATOR.hangat,
+  { id: 'romansa-kota', cover: 'Two strangers wait at a rainy city bus stop at dusk, one of them holding two umbrellas.', name: 'Romansa Kota', tagline: 'Cerita cinta hangat di kota hujan', mode: 'konsisten', aspect: '9:16', narrator: NARRATOR.hangat,
     look: look({ style: 'anime-2d', genre: 'romansa', palette: 'malam-hangat', lighting: 'practicals', aperture: 'f14', tempo: 'mengalir' }),
     example: 'Dua orang asing selalu berteduh di halte yang sama setiap hujan. Mereka tidak pernah bicara, sampai suatu sore salah satunya membawa dua payung.' }
 ];

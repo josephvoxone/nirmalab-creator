@@ -1,3 +1,4 @@
+import { sniffMediaType } from '../lib/media-type.js';
 import { timingSafeEqual } from 'node:crypto';
 import { createReadStream, readFileSync } from 'node:fs';
 import { mkdir, stat, writeFile } from 'node:fs/promises';
@@ -98,7 +99,7 @@ export async function registerFlowRoutes(server: FastifyInstance, options: FlowR
     return { jobs: await store.listJobs() };
   });
 
-  server.post<{ Body: { prompt?: unknown; technique?: unknown; aspect?: unknown; durationSec?: unknown } }>(
+  server.post<{ Body: { prompt?: unknown; technique?: unknown; aspect?: unknown; durationSec?: unknown; kind?: unknown } }>(
     '/api/flow/jobs',
     async (request, reply) => {
       if (!requireAdmin(auth, request, reply)) return undefined;
@@ -106,6 +107,8 @@ export async function registerFlowRoutes(server: FastifyInstance, options: FlowR
       if (!prompt.trim()) return bad(reply, 400, 'INVALID_INPUT', 'prompt is required');
       const job = await store.createJob({
         prompt,
+        // Studio queues stills or clips; character/keyframe jobs belong to stories only.
+        kind: request.body?.kind === 'image' ? 'image' : 'video',
         aspect: request.body?.aspect === '16:9' ? '16:9' : '9:16',
         ...(typeof request.body?.durationSec === 'number' ? { durationSec: request.body.durationSec } : {}),
         ...(typeof request.body?.technique === 'string' && request.body.technique.trim()
@@ -120,10 +123,10 @@ export async function registerFlowRoutes(server: FastifyInstance, options: FlowR
     if (!JOB_ID.test(request.params.id)) return bad(reply, 404, 'NOT_FOUND', 'Job not found');
     const job = await store.getJob(request.params.id);
     if (!job || job.status !== 'done') return bad(reply, 404, 'NOT_FOUND', 'Clip not ready');
-    const path = join(clipsDir, `${job.id}.mp4`);
+    const path = join(clipsDir, `${job.id}.${job.kind === 'video' ? 'mp4' : 'png'}`);
     try {
       const info = await stat(path);
-      reply.header('Content-Type', 'video/mp4');
+      reply.header('Content-Type', sniffMediaType(path));
       reply.header('Content-Length', String(info.size));
       reply.header('Cache-Control', 'private, max-age=3600');
       return reply.send(createReadStream(path));

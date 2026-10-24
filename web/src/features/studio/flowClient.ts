@@ -16,6 +16,7 @@ export type FlowJob = {
   id: string;
   prompt: string;
   technique?: string;
+  kind?: 'video' | 'image' | 'character';
   aspect: '9:16' | '16:9';
   durationSec: number;
   status: 'queued' | 'running' | 'done' | 'failed' | string;
@@ -55,7 +56,7 @@ export function flowClient(baseUrl: string, fetchImpl: FlowFetch) {
     removeAccount: (id: string) =>
       request<{ ok: boolean }>(fetchImpl, `${baseUrl}/api/flow/accounts/${encodeURIComponent(id)}`, { method: 'DELETE' }),
     jobs: () => request<{ jobs: FlowJob[] }>(fetchImpl, `${baseUrl}/api/flow/jobs`),
-    createJob: (input: { prompt: string; technique?: string; aspect: '9:16' | '16:9'; durationSec: number }) =>
+    createJob: (input: { prompt: string; technique?: string; aspect: '9:16' | '16:9'; durationSec: number; kind?: 'video' | 'image' }) =>
       request<{ job: FlowJob }>(fetchImpl, `${baseUrl}/api/flow/jobs`, { method: 'POST', body: JSON.stringify(input) }),
     fileUrl: (jobId: string) => `${baseUrl}/api/flow/jobs/${jobId}/file`
   };

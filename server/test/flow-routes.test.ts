@@ -176,4 +176,24 @@ describe('flow bridge routes', () => {
     expect(done.json().job.resultPath).toMatch(/clips\/job_[a-f0-9]{16}\.png$/);
     expect(done.json().job.result).toEqual({ mediaId: 'm-123', caption: 'Girl on porch' });
   });
+
+  it('app can queue a still image job; its file is served as an image, not mp4', async () => {
+    const { FlowStore } = await import('../src/flow/store.js');
+    const dataDir = mkdtempSync(join(tmpdir(), 'flow-routes-'));
+    const store = new FlowStore(join(dataDir, 'flow'));
+    const { adminCookie } = await setup(store, dataDir);
+    await server!.inject({ method: 'POST', url: '/api/flow/accounts', headers: { cookie: adminCookie }, payload: { label: 'K', email: 'k@x.io' } });
+    const created = await server!.inject({ method: 'POST', url: '/api/flow/jobs', headers: { cookie: adminCookie }, payload: { prompt: 'a lighthouse at dusk', kind: 'image', aspect: '16:9' } });
+    expect(created.statusCode).toBe(200);
+    expect(created.json().job).toMatchObject({ kind: 'image', aspect: '16:9' });
+    const id = created.json().job.id;
+    await server!.inject({ method: 'POST', url: '/api/flow/bridge/claim', headers: { 'x-flow-bridge-token': BRIDGE_TOKEN }, payload: { bridgeId: 'mac' } });
+    const jpg = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(4000, 1)]);
+    await server!.inject({ method: 'POST', url: `/api/flow/bridge/jobs/${id}/complete`, payload: jpg, headers: { 'x-flow-bridge-token': BRIDGE_TOKEN, 'content-type': 'application/octet-stream' } });
+    const file = await server!.inject({ url: `/api/flow/jobs/${id}/file`, headers: { cookie: adminCookie } });
+    expect(file.statusCode).toBe(200);
+    expect(file.headers['content-type']).toBe('image/jpeg');
+    const vid = await server!.inject({ method: 'POST', url: '/api/flow/jobs', headers: { cookie: adminCookie }, payload: { prompt: 'x', kind: 'character' } });
+    expect(vid.json().job.kind).toBe('video');
+  });
 });

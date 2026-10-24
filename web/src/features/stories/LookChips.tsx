@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
-import { Aperture, Clapperboard, Palette as PaletteIcon, Sparkles, SunMedium, X } from 'lucide-react';
-import { DEFAULT_LOOK, LIST_OF, optionOf, type Catalog, type Look, type LookKey, type Option, type Palette, type Template } from './catalog.js';
+import { Aperture, Clapperboard, Loader2, Palette as PaletteIcon, RefreshCw, Sparkles, SunMedium, X } from 'lucide-react';
+import { DEFAULT_LOOK, LIST_OF, optionOf, type Catalog, type CoverState, type Look, type LookKey, type Option, type Palette, type Template } from './catalog.js';
 
 type Tab = { key: LookKey; label: string; hint: string };
 type ChipDef = { id: string; label: string; icon: ReactNode; tabs: Tab[] };
@@ -123,20 +123,34 @@ export function LookChips({ catalog, look, onChange, disabled }: { catalog: Cata
   );
 }
 
-export function TemplateCard({ template, catalog, selected, onPick }: { template: Template; catalog: Catalog; selected: boolean; onPick: () => void }) {
+export function TemplateCard({ template, catalog, selected, onPick, coverUrl, cover: coverState, onRegenerate }: {
+  template: Template; catalog: Catalog; selected: boolean; onPick: () => void;
+  coverUrl: string; cover?: CoverState; onRegenerate?: () => void;
+}) {
   const palette = optionOf(catalog, 'palette', template.look.palette) as Palette | undefined;
   const style = optionOf(catalog, 'style', template.look.style)?.label;
   const shots = catalog.tempos.find(t => t.id === template.look.tempo)?.shots;
-  const [cover, setCover] = useState(true);
+  const [failed, setFailed] = useState<string>();
+  const cover = failed !== coverUrl;
   return (
+    <div className="template-item">
     <button type="button" className={`template-card${selected ? ' selected' : ''}`} aria-pressed={selected} onClick={onPick}>
       <span className="template-cover" style={{ background: palette?.swatches.length ? `linear-gradient(135deg, ${palette.swatches.join(', ')})` : undefined }}>
-        {cover && <img src={`/templates/${template.id}.jpg`} alt="" loading="lazy" onError={() => setCover(false)} />}
+        {cover && <img src={coverUrl} alt="" loading="lazy" onError={() => setFailed(coverUrl)} />}
+        {coverState?.pending && <span className="template-cover-busy"><Loader2 size={14} className="spin" /> Membuat cover…</span>}
         <em>{template.mode === 'konsisten' ? 'Konsisten' : 'Cepat'}</em>
       </span>
       <b>{template.name}</b>
       <span>{template.tagline}</span>
       <small>{[style, palette?.id !== 'auto' ? palette?.label : undefined, shots ? `${shots} shot` : undefined].filter(Boolean).join(' · ')}</small>
     </button>
+    {onRegenerate && (
+      <button type="button" className="template-regen icon-btn" disabled={coverState?.pending}
+        aria-label={`Buat ulang cover ${template.name}`} title={coverState?.error ? `Gagal: ${coverState.error}` : 'Buat ulang cover lewat antrean Flow (gratis)'}
+        onClick={onRegenerate}>
+        <RefreshCw size={14} />
+      </button>
+    )}
+    </div>
   );
 }

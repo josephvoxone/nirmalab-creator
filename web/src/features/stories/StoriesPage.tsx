@@ -14,11 +14,12 @@ const MODES: Array<{ id: Mode; label: string; hint: string }> = [
   { id: 'cepat', label: 'Cepat', hint: 'Langsung text-to-video per shot. Cocok untuk faceless, fakta, montase.' }
 ];
 
-export function StoriesPage() {
+export function StoriesPage(props: { pollMs?: number }) {
   const { fetchImpl, user } = useSession();
   const api = useMemo(() => storiesApi(fetchImpl), [fetchImpl]);
   const loadCatalog = useCallback(() => api.catalog(), [api]);
-  const { catalog, error: catalogError } = useCatalog(loadCatalog);
+  const { catalog, covers, error: catalogError, reload } = useCatalog(loadCatalog, props.pollMs);
+  const [coverError, setCoverError] = useState('');
   const navigate = useNavigate();
   const [stories, setStories] = useState<Story[] | undefined>(undefined);
   const [premise, setPremise] = useState('');
@@ -133,9 +134,12 @@ export function StoriesPage() {
             <h2 id="tpl-title">Template</h2>
             <span className="muted">{catalog.templates.length} format siap pakai. Gaya, mode dan jumlah shot langsung terisi.</span>
           </div>
+          {coverError && <p className="form-error" role="alert">{coverError}</p>}
           <div className="template-grid">
             {catalog.templates.map(t => (
-              <TemplateCard key={t.id} template={t} catalog={catalog} selected={t.id === template} onPick={() => pickTemplate(t.id)} />
+              <TemplateCard key={t.id} template={t} catalog={catalog} selected={t.id === template} onPick={() => pickTemplate(t.id)}
+                coverUrl={api.coverUrl(t.id, covers[t.id]?.updatedAtMs ?? 0)} cover={covers[t.id]}
+                onRegenerate={user.isAdmin ? () => { setCoverError(''); api.regenerateCover(t.id).then(reload, e => setCoverError(e instanceof Error ? e.message : 'Gagal')); } : undefined} />
             ))}
           </div>
         </section>

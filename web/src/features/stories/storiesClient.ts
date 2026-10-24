@@ -41,7 +41,9 @@ export function storiesApi(fetchImpl: FetchLike) {
   return {
     list: () => requestJson<{ stories: Story[] }>(fetchImpl, '/api/stories'),
     get: (id: string) => requestJson<{ story: Story; storyboard: Storyboard }>(fetchImpl, `/api/stories/${id}`),
-    catalog: () => requestJson<{ catalog: import('./catalog.js').Catalog }>(fetchImpl, '/api/stories/catalog'),
+    catalog: () => requestJson<{ catalog: import('./catalog.js').Catalog; covers?: import('./catalog.js').Covers }>(fetchImpl, '/api/stories/catalog'),
+    regenerateCover: (templateId: string) => requestJson<{ cover: unknown }>(fetchImpl, `/api/stories/templates/${templateId}/cover`, post({})),
+    coverUrl: (templateId: string, v = 0) => `/api/stories/templates/${templateId}/cover?v=${v}`,
     prepare: (id: string) => requestJson<{ story: Story }>(fetchImpl, `/api/stories/${id}/prepare`, post({})),
     setLook: (id: string, look: Record<string, string>) => requestJson<{ story: Story }>(fetchImpl, `/api/stories/${id}/look`, post({ look })),
     redraw: (id: string, shotId: string, prompt?: string) => requestJson<{ story: Story }>(fetchImpl, `/api/stories/${id}/shots/${shotId}/frame`, post(prompt ? { prompt } : {})),

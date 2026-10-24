@@ -54,6 +54,27 @@ describe('StudioPage', () => {
     expect(posted).toMatchObject({ prompt: expect.stringContaining('dollies toward perahu kertas'), technique: 'camera-movement/dolly-in', aspect: '9:16' });
   });
 
+  it('mode Gambar mengantrekan still gratis ke Flow lewat aplikasi, dan hasil gambar tampil sebagai <img>', async () => {
+    const user = userEvent.setup();
+    let posted: Record<string, unknown> | undefined;
+    const imageJob = { ...doneJob, id: 'job_bbbbbbbbbbbbbbbb', kind: 'image', prompt: 'mercusuar' };
+    const fetchImpl = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.endsWith('/api/flow/jobs') && init?.method === 'POST') { posted = JSON.parse(String(init.body)); return json({ job: { ...imageJob, status: 'queued' } }); }
+      if (url.endsWith('/api/flow/accounts')) return json({ accounts: [account], bridge: { online: true } });
+      if (url.endsWith('/api/flow/jobs')) return json({ jobs: [imageJob] });
+      return json({}, 404);
+    });
+    renderPage(fetchImpl as unknown as ReturnType<typeof makeFetch>);
+    const still = await screen.findByRole('img', { name: /mercusuar/ });
+    expect(still.getAttribute('src')).toBe(`${BASE}/api/flow/jobs/${imageJob.id}/file`);
+    await user.click(screen.getByRole('radio', { name: 'Gambar' }));
+    await user.type(screen.getByLabelText(/subjek/i), 'perahu kertas');
+    expect(screen.getByRole('button', { name: /antrekan gambar/i }).textContent).toMatch(/gratis/i);
+    await user.click(screen.getByRole('button', { name: /antrekan gambar/i }));
+    expect(posted).toMatchObject({ kind: 'image', aspect: '9:16' });
+    expect(String(posted?.prompt)).toMatch(/perahu kertas/i);
+  });
+
   it('menyaring teknik dengan pencarian', async () => {
     const user = userEvent.setup();
     renderPage(makeFetch());

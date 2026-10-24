@@ -49,6 +49,7 @@ export function StudioPage(props: { baseUrl: string; fetchImpl: FlowFetch; techn
   const [query, setQuery] = useState('');
   const [aspect, setAspect] = useState<'9:16' | '16:9'>('9:16');
   const [duration, setDuration] = useState(4);
+  const [kind, setKind] = useState<'video' | 'image'>('video');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [notice, setNotice] = useState<string>();
@@ -149,9 +150,10 @@ export function StudioPage(props: { baseUrl: string; fetchImpl: FlowFetch; techn
         prompt: composed,
         aspect,
         durationSec: duration,
+        ...(kind === 'image' ? { kind: 'image' as const } : {}),
         ...(presetId ? { technique: `preset:${presetId}` } : picked[0] ? { technique: techniqueKey(picked[0]) } : {})
       });
-      setNotice('Klip masuk antrean. Bridge akan mengambilnya dari akun Flow yang siap.');
+      setNotice(kind === 'image' ? 'Gambar masuk antrean (gratis di Flow). Bridge akan mengambilnya.' : 'Klip masuk antrean. Bridge akan mengambilnya dari akun Flow yang siap.');
       await refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Gagal mengantre');
@@ -297,6 +299,11 @@ export function StudioPage(props: { baseUrl: string; fetchImpl: FlowFetch; techn
           <section className="studio-card" aria-labelledby="studio-composer-title">
             <header className="studio-card-head">
               <h2 id="studio-composer-title">Composer sinematik</h2>
+              <div className="studio-segmented" role="radiogroup" aria-label="Jenis">
+                {([['video', 'Video'], ['image', 'Gambar']] as const).map(([value, label]) => (
+                  <button key={value} type="button" role="radio" aria-checked={kind === value} onClick={() => setKind(value)}>{label}</button>
+                ))}
+              </div>
               <div className="studio-segmented" role="radiogroup" aria-label="Aspek">
                 {(['9:16', '16:9'] as const).map(value => (
                   <button key={value} type="button" role="radio" aria-checked={aspect === value} onClick={() => setAspect(value)}>{value}</button>
@@ -336,7 +343,7 @@ export function StudioPage(props: { baseUrl: string; fetchImpl: FlowFetch; techn
                 </label>
               </div>
               <div className="studio-row">
-                <label className="studio-field">
+                <label className="studio-field" hidden={kind === 'image'}>
                   <span>Durasi</span>
                   <select value={duration} onChange={event => setDuration(Number(event.target.value))}>
                     {[4, 6, 8, 10].map(s => <option key={s} value={s}>{s} detik</option>)}
@@ -397,7 +404,7 @@ export function StudioPage(props: { baseUrl: string; fetchImpl: FlowFetch; techn
               </div>
               <div className="studio-actions">
                 <button type="button" className="studio-btn studio-btn-primary" disabled={busy || !composed.trim()} onClick={() => void enqueue()}>
-                  <Clapperboard aria-hidden="true" size={15} /> Antrekan ke Flow
+                  <Clapperboard aria-hidden="true" size={15} /> {kind === 'image' ? <>Antrekan gambar <small>Gratis</small></> : 'Antrekan ke Flow'}
                 </button>
               </div>
             </div>
@@ -417,10 +424,12 @@ export function StudioPage(props: { baseUrl: string; fetchImpl: FlowFetch; techn
                   </div>
                   <div className="studio-job-meta">
                     <span>{accountLabel(job.accountId)}</span>
-                    <span>{job.aspect} · {job.durationSec}s</span>
+                    <span>{job.aspect}{job.kind === 'image' ? ' · gambar' : ` · ${job.durationSec}s`}</span>
                     <span>{relative(job.finishedAtMs ?? job.createdAtMs)}</span>
                   </div>
-                  {job.status === 'done' ? (
+                  {job.status === 'done' && job.kind === 'image' ? (
+                    <img className="studio-clip" src={api.fileUrl(job.id)} alt={job.prompt} loading="lazy" />
+                  ) : job.status === 'done' ? (
                     <video data-testid={`clip-${job.id}`} className="studio-clip" src={api.fileUrl(job.id)} controls preload="metadata" />
                   ) : null}
                   {job.status === 'failed' && job.error ? <p className="studio-job-error">{job.error}</p> : null}

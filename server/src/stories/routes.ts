@@ -1,9 +1,11 @@
 import type { FastifyInstance, FastifyReply } from 'fastify';
-import { closeSync, createReadStream, existsSync, openSync, readSync, statSync } from 'node:fs';
+import { createReadStream, existsSync, statSync } from 'node:fs';
+import { sniffMediaType } from '../lib/media-type.js';
 import { requireAdmin, sessionUser } from '../auth/routes.js';
 import type { UserAuthStore } from '../auth/store.js';
 import { draftStoryboard, type TextGenerator } from './draft.js';
 import { CATALOG } from './looks.js';
+import type { CoverService } from './covers.js';
 import { StoryError, type StoryService } from './service.js';
 import { SHOT_ID, type Storyboard } from './storyboard.js';
 
@@ -32,13 +34,7 @@ function sendVideo(reply: FastifyReply, file: string, range: string | undefined)
 
 function sendPng(reply: FastifyReply, file: string) {
   if (!existsSync(file)) return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Gambar belum ada' } });
-  // Flow hands out JPEGs under .png names; send the real type.
-  const head = Buffer.alloc(12);
-  const fd = openSync(file, 'r');
-  try { readSync(fd, head, 0, 12, 0); } finally { closeSync(fd); }
-  const type = head[0] === 0xff && head[1] === 0xd8 ? 'image/jpeg'
-    : head.toString('ascii', 8, 12) === 'WEBP' ? 'image/webp' : 'image/png';
-  return reply.header('content-type', type).header('cache-control', 'private, no-cache')
+  return reply.header('content-type', sniffMediaType(file)).header('cache-control', 'private, no-cache')
     .header('content-length', statSync(file).size).send(createReadStream(file));
 }
 
@@ -52,7 +48,7 @@ const asBoard = (value: unknown): Storyboard => {
 
 export async function registerStoryRoutes(
   server: FastifyInstance,
-  options: { userAuthStore: UserAuthStore; stories: StoryService; generateText: TextGenerator }
+  options: { userAuthStore: UserAuthStore; stories: StoryService; generateText: TextGenerator; covers?: CoverService }
 ): Promise<void> {
   const { userAuthStore: auth, stories } = options;
   const member = (request: Parameters<typeof sessionUser>[1], reply: FastifyReply) => {
@@ -75,7 +71,25 @@ export async function registerStoryRoutes(
 
   server.get('/api/stories/catalog', async (request, reply) => {
     if (!member(request, reply)) return undefined;
-    return { catalog: CATALOG };
+    return { catalog: CATALOG, covers: options.covers ? await options.covers.status() : {} };
+  });
+
+  server.get<{ Params: { id: string } }>('/api/stories/templates/:id/cover', async (request, reply) => {
+    if (!member(request, reply)) return undefined;
+    try {
+      const file = await options.covers?.file(request.params.id);
+      if (!file) return notFound(reply, 'Cover');
+      return reply.header('content-type', sniffMediaType(file)).header('cache-control', 'private, max-age=300')
+        .header('content-length', statSync(file).size).send(createReadStream(file));
+    } catch (error) { return fail(reply, error); }
+  });
+
+  server.post<{ Params: { id: string } }>('/api/stories/templates/:id/cover', async (request, reply) => {
+    if (!requireAdmin(auth, request, reply)) return undefined;
+    if (!options.covers) return reply.code(503).send({ error: { code: 'UNAVAILABLE', message: 'Covers not configured' } });
+    try {
+      return { cover: await options.covers.queue(request.params.id) };
+    } catch (error) { return fail(reply, error); }
   });
 
   server.post<{ Body: { premise?: unknown; shots?: unknown; style?: unknown; template?: unknown; look?: unknown; mode?: unknown; aspect?: unknown; narrator?: unknown } }>('/api/stories/draft', async (request, reply) => {

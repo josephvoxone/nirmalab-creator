@@ -134,6 +134,7 @@ async function handle(claim) {
       return projects.get(key);
     },
     mode: FLOW_MODE,
+    projectTitle: PROJECT_TITLE,
     maxCredits: MAX_CREDITS,
     outDir: OUT_DIR,
     resolution: RESOLUTION,
