@@ -221,17 +221,25 @@ async function storyJob(job, account, deps) {
   if (job.kind === 'character') {
     const ref = job.characters?.[0];
     if (!ref) throw new Error('character job without a character');
-    const { characters } = await projectState(account, projectId, deps);
-    let c = characters.find(x => String(x?.name ?? '').toLowerCase() === ref.name.toLowerCase());
+    const find = async () => (await projectState(account, projectId, deps)).characters
+      .find(x => String(x?.name ?? '').toLowerCase() === ref.name.toLowerCase());
+    let c = await find();
+    let portrait = c?.portraitMediaId;
     if (!c) {
       const created = parseToolResult(await deps.callTool(account, 'flow_create_character', { project_id: projectId, name: ref.name, portrait_prompt: job.prompt }));
       c = created?.character ?? created;
+      // Flow hands the generated portrait back separately; the character links it a bit later.
+      portrait = c?.portraitMediaId ?? created?.portrait?.[0]?.mediaId;
     }
-    if (!c?.id || !c.portraitMediaId) throw new Error(`Flow character ${ref.name} has no portrait`);
-    const downloaded = parseToolResult(await deps.callTool(account, 'flow_download_media', { media_id: c.portraitMediaId, out_dir: deps.outDir }));
+    for (let i = 0; c?.id && !portrait && i < (deps.pollTries ?? 12); i++) {
+      await sleep(deps.pollMs ?? 15_000);
+      portrait = (await find())?.portraitMediaId;
+    }
+    if (!c?.id || !portrait) throw new Error(`Flow character ${ref.name} has no portrait`);
+    const downloaded = parseToolResult(await deps.callTool(account, 'flow_download_media', { media_id: portrait, out_dir: deps.outDir }));
     if (!downloaded?.path) throw new Error('Flow download returned no path');
-    await deps.complete(job.id, await deps.readFile(downloaded.path), { mediaId: c.portraitMediaId, flowCharacterId: c.id });
-    return { status: 'done', mediaId: c.portraitMediaId };
+    await deps.complete(job.id, await deps.readFile(downloaded.path), { mediaId: portrait, flowCharacterId: c.id });
+    return { status: 'done', mediaId: portrait };
   }
 
   const characterIds = await ensureCharacters(account, projectId, job.characters, deps);

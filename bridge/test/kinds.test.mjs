@@ -143,3 +143,34 @@ test('stream lost: a late image from an older, interrupted turn is not mistaken 
   assert.equal(r.status, 'done');
   assert.notEqual(state.completed[0].meta.mediaId, 'stale-1');
 });
+
+test('character job: Flow returns the portrait separately (character.portraitMediaId not set yet)', async () => {
+  const { state, deps } = fakeFlow();
+  const real = deps.callTool;
+  deps.callTool = async (acc, name, args) => {
+    if (name === 'flow_create_character') {
+      const c = { id: 'ch-new', name: args.name };
+      state.characters.push(c);
+      state.media.push({ mediaId: 'portrait-new', kind: 'image', caption: 'sheet' });
+      return ok({ character: c, portrait: [{ mediaId: 'portrait-new', caption: 'sheet' }] });
+    }
+    return real(acc, name, args);
+  };
+  const r = await processJob({ job: { id: 'j', kind: 'character', group: 'g', prompt: 'sheet', characters: [{ name: 'Jingga', look: 'cat' }] }, account }, deps);
+  assert.equal(r.status, 'done', JSON.stringify(state.failed));
+  assert.deepEqual(state.completed[0].meta, { mediaId: 'portrait-new', flowCharacterId: 'ch-new' });
+});
+
+test('character job: portrait appears on the character a little later (polled)', async () => {
+  const { state, deps } = fakeFlow();
+  const real = deps.callTool;
+  let gets = 0;
+  deps.callTool = async (acc, name, args) => {
+    if (name === 'flow_create_character') { const c = { id: 'ch-late', name: args.name }; state.characters.push(c); return ok({ character: c }); }
+    if (name === 'flow_get_project' && ++gets === 3) { state.characters.find(c => c.id === 'ch-late').portraitMediaId = 'p-late'; }
+    return real(acc, name, args);
+  };
+  const r = await processJob({ job: { id: 'j', kind: 'character', group: 'g', prompt: 'sheet', characters: [{ name: 'Jingga', look: 'cat' }] }, account }, deps);
+  assert.equal(r.status, 'done', JSON.stringify(state.failed));
+  assert.equal(state.completed[0].meta.mediaId, 'p-late');
+});
