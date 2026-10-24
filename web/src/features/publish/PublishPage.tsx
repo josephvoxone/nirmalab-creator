@@ -1,3 +1,5 @@
+import { EmptyState, LoadingState, Skel } from '../../ui/states.js';
+import { Link } from 'react-router-dom';
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
 import { ExternalLink } from 'lucide-react';
 import { useSession } from '../../lib/session.js';
@@ -41,7 +43,9 @@ function PlatformsCard(props: { api: Api; statuses: PublisherStatus[] | undefine
         </div>
       </div>
       {error && <p className="form-error" role="alert">{error}</p>}
-      {!props.statuses ? <p className="muted">Memuat…</p> : (
+      {!props.statuses ? (
+        <LoadingState label="Memuat platform">{[0, 1, 2].map(i => <div className="skel-row" key={i}><Skel w="35%" h={14} /><Skel w={90} h={22} /><Skel w={90} h={30} /></div>)}</LoadingState>
+      ) : (
         <ul className="list">
           {props.statuses.map(s => {
             const state = connectionState(s);
@@ -126,7 +130,10 @@ function PublishCard(props: { api: Api; statuses: PublisherStatus[] | undefined;
           <span className="muted">Kirim video cerita yang sudah selesai.</span>
         </div>
       </div>
-      {stories && stories.length === 0 && <p className="empty">Belum ada cerita yang selesai dirender.</p>}
+      {stories && stories.length === 0 && (
+        <EmptyState title="Belum ada video untuk dipublish" reason="Hanya cerita yang sudah selesai dirender yang bisa dipublish. Render cerita dulu di halaman Cerita."
+          action={<Link className="btn btn-sm" to="/cerita">Buka Cerita</Link>} />
+      )}
       {props.statuses && connected.length === 0 && <p className="notice">Hubungkan minimal satu platform di atas untuk mulai publish.</p>}
       <form className="stack" onSubmit={e => void submit(e)}>
         <div className="form-row">

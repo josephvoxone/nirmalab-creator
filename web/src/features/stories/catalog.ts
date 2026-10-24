@@ -29,11 +29,11 @@ export function optionOf(catalog: Catalog, key: LookKey, id: string | undefined)
 export function useCatalog(load: () => Promise<{ catalog: Catalog; covers?: Covers }>, pollMs = 8000) {
   const [catalog, setCatalog] = useState<Catalog>();
   const [covers, setCovers] = useState<Covers>({});
-  const [error, setError] = useState('');
+  const [error, setError] = useState<unknown>();
   const [tick, setTick] = useState(0);
   useEffect(() => {
     let alive = true;
-    load().then(r => { if (alive) { setCatalog(r.catalog); setCovers(r.covers ?? {}); } }, e => alive && setError(e instanceof Error ? e.message : 'Gagal memuat katalog'));
+    load().then(r => { if (alive) { setCatalog(r.catalog); setCovers(r.covers ?? {}); setError(undefined); } }, e => alive && setError(e));
     return () => { alive = false; };
   }, [load, tick]);
   const pending = Object.values(covers).some(c => c.pending);

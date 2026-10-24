@@ -1,3 +1,4 @@
+import { EmptyState, ErrorState, LoadingState, Skel } from '../../ui/states.js';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Clapperboard, Copy, Plus, RefreshCw, Trash2, X } from 'lucide-react';
 import {
@@ -50,6 +51,8 @@ export function StudioPage(props: { baseUrl: string; fetchImpl: FlowFetch; techn
   const [aspect, setAspect] = useState<'9:16' | '16:9'>('9:16');
   const [duration, setDuration] = useState(4);
   const [kind, setKind] = useState<'video' | 'image'>('video');
+  const [loaded, setLoaded] = useState(false);
+  const [loadError, setLoadError] = useState<unknown>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [notice, setNotice] = useState<string>();
@@ -61,8 +64,10 @@ export function StudioPage(props: { baseUrl: string; fetchImpl: FlowFetch; techn
       setAccounts(a.accounts);
       setBridge(a.bridge);
       setJobs(j.jobs);
+      setLoaded(true);
+      setLoadError(undefined);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Gagal memuat');
+      setLoadError(e);
     }
   }, [api]);
 
@@ -415,6 +420,12 @@ export function StudioPage(props: { baseUrl: string; fetchImpl: FlowFetch; techn
               <h2 id="studio-queue-title">Antrean klip</h2>
               <span className="studio-muted">{jobs.length} job</span>
             </header>
+            {!loaded && loadError !== undefined ? (
+              <ErrorState title="Gagal memuat antrean Flow" error={loadError} onRetry={() => void refresh()} />
+            ) : !loaded ? (
+              <LoadingState label="Memuat antrean">{[0, 1, 2].map(i => <div className="skel-row" key={i}><Skel w={70} h={22} /><Skel w="50%" h={14} /><Skel w={90} h={14} /></div>)}</LoadingState>
+            ) : (<>
+            {loadError !== undefined && <ErrorState compact title="Gagal memperbarui antrean" error={loadError} onRetry={() => void refresh()} />}
             <ul className="studio-list">
               {jobs.map(job => (
                 <li key={job.id} className="studio-job">
@@ -435,8 +446,11 @@ export function StudioPage(props: { baseUrl: string; fetchImpl: FlowFetch; techn
                   {job.status === 'failed' && job.error ? <p className="studio-job-error">{job.error}</p> : null}
                 </li>
               ))}
-              {jobs.length === 0 ? <li className="studio-empty">Belum ada klip. Susun prompt di atas lalu antrekan.</li> : null}
             </ul>
+            {jobs.length === 0 && (
+              <EmptyState title="Antrean kosong" reason="Klip dan gambar yang kamu antrekan dari composer muncul di sini. Bridge di Mac mengambilnya satu per satu dari akun Flow." />
+            )}
+            </>)}
           </section>
         </div>
 

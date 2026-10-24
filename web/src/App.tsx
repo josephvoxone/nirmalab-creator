@@ -5,6 +5,7 @@ import { SessionContext, type Session } from './lib/session.js';
 import { LoginPage } from './features/auth/LoginPage.js';
 import { JoinPage } from './features/auth/JoinPage.js';
 import { Layout } from './shell/Layout.js';
+import { LoadingState, Skel } from './ui/states.js';
 import { StoriesPage } from './features/stories/StoriesPage.js';
 import { StoryDetailPage } from './features/stories/StoryDetailPage.js';
 
@@ -14,7 +15,7 @@ const PublishPage = lazy(() => import('./features/publish/PublishPage.js'));
 const SettingsPage = lazy(() => import('./features/settings/SettingsPage.js'));
 
 function Loading() {
-  return <div className="loading" aria-busy="true">Memuat…</div>;
+  return <LoadingState label="Memuat halaman" className="page-skeleton"><Skel w="30%" h={24} /><Skel h={160} /><Skel h={160} /></LoadingState>;
 }
 
 function JoinRoute(props: { fetchImpl: FetchLike; onSignedIn: (u: User) => void }) {
@@ -63,7 +64,7 @@ function Routed(props: { fetchImpl: FetchLike }) {
               <Route path="/cerita" element={<Page title="Cerita"><StoriesPage /></Page>} />
               <Route path="/cerita/:id" element={<Page title="Cerita"><StoryDetailPage /></Page>} />
               <Route path="/studio" element={<Page title="Studio"><StudioScreen baseUrl="" fetchImpl={fetchImpl} /></Page>} />
-              <Route path="/generate" element={<Page title="Generate"><GeneratePage /></Page>} />
+              <Route path="/generate" element={<Page title="Alat cepat"><GeneratePage /></Page>} />
               <Route path="/publish" element={<Page title="Publish"><PublishPage /></Page>} />
               <Route path="/pengaturan" element={<Page title="Pengaturan"><SettingsPage /></Page>} />
               <Route path="*" element={<Navigate to="/cerita" replace />} />

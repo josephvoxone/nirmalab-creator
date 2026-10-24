@@ -1,3 +1,4 @@
+import { EmptyState, LoadingState, Skel } from '../../ui/states.js';
 import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react';
 import { Check, Copy } from 'lucide-react';
 import { useSession } from '../../lib/session.js';
@@ -210,7 +211,10 @@ function FlowCard(props: { api: Api }) {
           <div className="kpi"><b>{accounts.length}</b><span>Akun</span></div>
         </div>
       )}
-      {accounts && accounts.length === 0 && <p className="empty">Belum ada akun Flow.</p>}
+      {!accounts && !error && <LoadingState label="Memuat akun Flow">{[0, 1].map(i => <div className="skel-row" key={i}><Skel w="40%" h={14} /><Skel w={80} h={22} /></div>)}</LoadingState>}
+      {accounts && accounts.length === 0 && (
+        <EmptyState title="Belum ada akun Flow" reason="Bridge butuh minimal satu akun Google Flow untuk membuat gambar dan video. Tambahkan akun di bawah dengan profile Chrome khusus Flow di Mac (cdp:http://127.0.0.1:9333)." />
+      )}
       {accounts && accounts.length > 0 && (
         <ul className="list">
           {accounts.map(a => <AccountRow key={a.id} account={a} onRemove={remove} />)}

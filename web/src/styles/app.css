@@ -28,6 +28,19 @@ h2 { font-size: 15px; font-weight: 600; }
 .nav-item { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 8px; color: var(--muted); text-decoration: none; transition: background 160ms var(--ease), color 160ms var(--ease); }
 .nav-item:hover { background: var(--state-hover-bg); color: var(--text); }
 .nav-item.active { background: var(--surface-3); color: var(--text); box-shadow: inset 2px 0 0 var(--accent); }
+.sidebar nav { gap: 14px; }
+.nav-group { display: flex; flex-direction: column; gap: 2px; }
+.nav-group-label { padding: 0 10px 4px; font-size: 11px; color: var(--subtle); }
+.nav-item { align-items: flex-start; }
+.nav-item svg { margin-top: 2px; flex: none; }
+.nav-text { display: flex; flex-direction: column; min-width: 0; }
+.nav-text small { font-size: 11px; color: var(--subtle); line-height: 1.35; }
+.nav-item.active .nav-text small { color: var(--muted); }
+.bridge-status { margin-top: auto; display: flex; align-items: center; gap: 8px; padding: 8px 10px; font-size: 12px; color: var(--muted); text-decoration: none; border: 1px solid var(--border-hairline); border-radius: 8px; }
+.bridge-status i { width: 7px; height: 7px; border-radius: 50%; background: var(--subtle); flex: none; }
+.bridge-status.on i { background: var(--success); }
+.bridge-status.off i { background: var(--danger); }
+.bridge-status:hover { color: var(--text); border-color: var(--border); }
 .main { min-width: 0; display: flex; flex-direction: column; }
 .topbar { height: 56px; display: flex; align-items: center; justify-content: space-between; padding: 0 24px; border-bottom: 1px solid var(--border-hairline); position: sticky; top: 0; background: var(--bg); z-index: 5; }
 .topbar h1 { font-size: 16px; font-weight: 600; }
@@ -114,7 +127,10 @@ ul.list { margin: 0; padding: 0; list-style: none; }
   .shell { grid-template-columns: 1fr; }
   .sidebar { position: static; height: auto; flex-direction: row; align-items: center; overflow-x: auto; }
   .sidebar nav { flex-direction: row; }
-  .nav-item span { display: none; }
+  .nav-item .nav-text, .nav-group-label { display: none; }
+  .sidebar nav, .nav-group { flex-direction: row; }
+  .bridge-status span { display: none; }
+  .bridge-status { margin-top: 0; }
   .story-grid { grid-template-columns: 1fr; }
   .content { padding: 16px; }
 }

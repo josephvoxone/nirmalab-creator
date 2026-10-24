@@ -148,7 +148,7 @@ describe('PublishPage', () => {
     });
     renderPage(fetchImpl);
     const card = screen.getByRole('region', { name: /publish video cerita/i });
-    expect(await within(card).findByText(/belum ada cerita yang selesai/i)).toBeInTheDocument();
+    expect(await within(card).findByRole('heading', { name: 'Belum ada video untuk dipublish' })).toBeInTheDocument();
     expect(within(card).getByText(/hubungkan minimal satu platform/i)).toBeInTheDocument();
     expect(within(card).getByRole('button', { name: /^publish$/i })).toBeDisabled();
   });
