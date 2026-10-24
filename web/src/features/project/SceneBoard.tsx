@@ -90,6 +90,8 @@ export function SceneBoard(props: {
   useEffect(() => setPreview(false), [scene.id]);
   const konsisten = story.mode === 'konsisten';
   const cost = renderCost(story, board, scene.id);
+  // Keyframes still to make in this scene (sheets come with them); none left → no keyframe action.
+  const framesTodo = scene.shots.filter(id => { const f = story.shots.find(s => s.id === id)?.frame; return f && f.status !== 'done'; }).length;
   const cast = castIn(board, story, scene.shots);
   const count = board.scenes?.length ?? 1;
   const idle = !props.locked && !props.busy;
@@ -99,7 +101,7 @@ export function SceneBoard(props: {
       <div className="flex flex-wrap items-center gap-2">
         <SceneCastChips projectId={props.projectId} story={story} cast={cast} label="Pemeran di scene ini" className="min-w-40 flex-1" />
         <div className="flex flex-wrap items-center gap-1.5">
-          {konsisten && (
+          {konsisten && framesTodo > 0 && (
             <Button type="button" size="sm" variant="glass" disabled={!idle || !scene.shots.length} onClick={actions.prepare}>
               <Images /> Buat keyframe scene · gratis
             </Button>

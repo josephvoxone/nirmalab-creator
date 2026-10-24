@@ -115,7 +115,7 @@ describe('Scene tab — scene board header', () => {
   });
 
   it('keyframes just this scene (free)', async () => {
-    const api = fakeProjectApi();
+    const api = fakeProjectApi({ story: storyFor(BOARD, ['pending', 'pending', 'pending', 'pending']) });
     await open(api);
     await userEvent.click(within(board()).getByRole('button', { name: /buat keyframe scene · gratis/i }));
     await waitFor(() => expect(api.calls.find(c => c.url.endsWith('/prepare'))?.body).toEqual({ scene: 'menunggu' }));
@@ -181,6 +181,14 @@ describe('Scene tab — scene board header', () => {
     expect(within(board()).getByText(/semua klip scene ini siap/i)).toBeInTheDocument();
     // the cast list must not shrink below its chips (it overlapped the actions on 390 px)
     expect(within(board()).getByRole('list', { name: /pemeran di scene ini/i }).className).not.toMatch(/(^|\s)min-w-0(\s|$)/);
+  });
+
+  it('a scene whose keyframes are all done offers no keyframe action (only scenes that need it do)', async () => {
+    const api = fakeProjectApi({ story: storyFor(BOARD, ['done', 'done', 'pending', 'pending']) });
+    const list = await open(api);
+    expect(within(board()).queryByRole('button', { name: /buat keyframe scene/i })).toBeNull();
+    await userEvent.click(within(list).getByRole('button', { name: 'Pilih Pulang' }));
+    await waitFor(() => expect(within(board()).getByRole('button', { name: /buat keyframe scene/i })).toBeEnabled());
   });
 
   it('cannot delete the only scene', async () => {
@@ -273,7 +281,7 @@ describe('Scene tab — shot cards', () => {
   });
 
   it('is read-only while the story is working, with the reason', async () => {
-    const api = fakeProjectApi({ story: storyFor(BOARD, [], [], { status: 'rendering' }) });
+    const api = fakeProjectApi({ story: storyFor(BOARD, ['queued', 'pending', 'pending', 'pending'], [], { status: 'rendering' }) });
     const list = await open(api);
     expect(screen.getByText(/sedang dirender — scene dan shot dikunci sampai selesai/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /tambah scene/i })).toBeDisabled();
