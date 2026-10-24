@@ -1,12 +1,13 @@
 /**
  * Template cover stills, generated through the app's Flow queue (never by driving Flow
  * directly). Pending job ids live in <data>/covers/index.json; finished stills are copied
- * to <data>/covers/<template>.<ext> and win over the bundled web/public/templates/*.jpg.
+ * (hard-linked) to <data>/covers/<template>.img and win over the bundled web/public/templates/*.jpg.
  */
-import { copyFile, mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type { FlowStore } from '../flow/store.js';
+import { linkOrCopy } from '../media/link.js';
 import { CATALOG, composeStyle } from './looks.js';
 import { StoryError } from './service.js';
 
@@ -67,7 +68,7 @@ export class CoverService {
         changed = true;
       } else if (job.status === 'done' && job.resultPath) {
         await mkdir(this.dir, { recursive: true });
-        await copyFile(job.resultPath, join(this.dir, `${id}.img`));
+        await linkOrCopy(job.resultPath, join(this.dir, `${id}.img`));
         index[id] = { pending: false, updatedAtMs: Date.now() };
         changed = true;
       }

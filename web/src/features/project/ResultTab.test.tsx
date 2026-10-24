@@ -17,6 +17,8 @@ describe('Hasil tab', () => {
     expect(video.tagName).toBe('VIDEO');
     expect(video).toHaveAttribute('src', expect.stringContaining(`/api/stories/${ID}/video`));
     expect(video.style.maxHeight).toBe('320px');
+    // never a black box: the poster endpoint of the final video, versioned like the video
+    expect(video).toHaveAttribute('poster', `/api/stories/${ID}/video/poster?v=${finishedAtMs}&w=480`);
     expect(within(panel()).getByRole('button', { name: /layar penuh video akhir/i })).toBeInTheDocument();
     expect(panel()).toHaveTextContent('1,9 MB');
     expect(panel()).toHaveTextContent(/24 Okt 2026/);

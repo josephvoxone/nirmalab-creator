@@ -7,7 +7,8 @@ import { JoinPage } from './features/auth/JoinPage.js';
 import { Layout } from './shell/Layout.js';
 import { HistoryProvider } from './shell/history.js';
 import { applyDensity } from './lib/prefs.js';
-import { LoadingState, Skel } from './ui/states.js';
+import { Skeleton } from '@/components/ui/skeleton';
+import { LoadingState } from './ui/states.js';
 import { StoriesPage } from './features/stories/StoriesPage.js';
 
 const StudioScreen = lazy(() => import('./features/studio/StudioScreen.js'));
@@ -18,8 +19,17 @@ const ProjectPage = lazy(() => import('./features/project/ProjectPage.js').then(
 const HomePage = lazy(() => import('./features/home/HomePage.js'));
 const TemplatesPage = lazy(() => import('./features/templates/TemplatesPage.js'));
 
+/** Content skeleton for the main area (session check and lazy routes); the sidebar stays. */
 function Loading() {
-  return <LoadingState label="Memuat halaman" className="page-skeleton"><Skel w="30%" h={24} /><Skel h={160} /><Skel h={160} /></LoadingState>;
+  return (
+    <LoadingState label="Memuat halaman" className="mx-auto flex w-full max-w-[1100px] flex-col gap-3 px-4 pt-3 md:px-6">
+      <Skeleton className="h-4 w-2/5" />
+      <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-4">
+        {Array.from({ length: 4 }, (_, i) => <Skeleton key={i} className="h-40 rounded-lg" />)}
+      </div>
+      <Skeleton className="h-24 rounded-lg" />
+    </LoadingState>
+  );
 }
 
 function JoinRoute(props: { fetchImpl: FetchLike; onSignedIn: (u: User) => void }) {
@@ -31,17 +41,19 @@ const TITLES: Array<[RegExp, string]> = [
   [/^\/template/, 'Template'], [/^\/cerita\/./, 'Proyek'], [/^\/cerita/, 'Proyek'], [/^\/studio/, 'Studio'], [/^\/generate/, 'Naskah & suara'], [/^\/publish/, 'Publish']
 ];
 
+const titleFor = (path: string) => TITLES.find(([re]) => re.test(path))?.[1] ?? '';
+
 /** One shell for every signed-in page, so the sidebar keeps its state while you move around. */
-function Shell(props: { fetchImpl: FetchLike }) {
+function Shell(props: { fetchImpl: FetchLike; pending?: boolean }) {
   const location = useLocation();
   const background = (location.state as { background?: Location } | null)?.background;
   const settings = location.pathname.startsWith('/pengaturan');
   const main = background ?? location;
-  const title = TITLES.find(([re]) => re.test(main.pathname))?.[1] ?? '';
+  const title = titleFor(main.pathname);
   return (
     <HistoryProvider>
-      <Layout title={title} bare={!title}>
-        <Suspense fallback={<Loading />}>
+      <Layout title={title} bare={!title} pending={props.pending}>
+        {props.pending ? <Loading /> : <Suspense fallback={<Loading />}>
           <Routes location={main}>
             <Route path="/" element={<HomePage />} />
             <Route path="/template" element={<TemplatesPage />} />
@@ -53,9 +65,9 @@ function Shell(props: { fetchImpl: FetchLike }) {
             <Route path="/pengaturan/*" element={<HomePage />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
-        </Suspense>
+        </Suspense>}
       </Layout>
-      {settings && (
+      {settings && !props.pending && (
         <Suspense fallback={null}>
           <Routes>
             <Route path="/pengaturan" element={<SettingsDialog />} />
@@ -70,6 +82,7 @@ function Shell(props: { fetchImpl: FetchLike }) {
 function Routed(props: { fetchImpl: FetchLike }) {
   const { fetchImpl } = props;
   const navigate = useNavigate();
+  const location = useLocation();
   const [user, setUser] = useState<User | null | undefined>(undefined);
 
   useEffect(() => {
@@ -86,17 +99,20 @@ function Routed(props: { fetchImpl: FetchLike }) {
   } : null), [user, fetchImpl, navigate]);
 
   useEffect(() => applyDensity(), []);
-  if (user === undefined) return <Loading />;
+  // The invite page has no sidebar: a plain skeleton while the session check runs.
+  if (user === undefined && location.pathname.startsWith('/join/')) return <Loading />;
 
+  // Hard refresh: the real shell renders at once (sidebar, nav, skeletons) while /api/auth/me
+  // is pending, and stays mounted when the session arrives (same element, `pending` flips).
   return (
     <Routes>
       <Route path="/join/:token" element={<JoinRoute fetchImpl={fetchImpl} onSignedIn={signedIn} />} />
-      {!session ? (
+      {user === null ? (
         <Route path="*" element={<LoginPage fetchImpl={fetchImpl} onSignedIn={signedIn} />} />
       ) : (
         <Route path="*" element={
           <SessionContext.Provider value={session}>
-            <Shell fetchImpl={fetchImpl} />
+            <Shell fetchImpl={fetchImpl} pending={!session} />
           </SessionContext.Provider>
         } />
       )}

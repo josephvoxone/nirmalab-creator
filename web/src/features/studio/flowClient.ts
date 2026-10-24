@@ -1,3 +1,6 @@
+import { ApiError } from '../../lib/api.js';
+import type { ProviderId } from '../providers/providersClient.js';
+
 export type FlowFetch = (url: string, init?: RequestInit) => Promise<Response>;
 
 export type FlowAccount = {
@@ -17,6 +20,8 @@ export type FlowJob = {
   prompt: string;
   technique?: string;
   kind?: 'video' | 'image' | 'character';
+  provider?: ProviderId;
+  model?: string;
   aspect: '9:16' | '16:9';
   durationSec: number;
   status: 'queued' | 'running' | 'done' | 'failed' | string;
@@ -43,10 +48,22 @@ async function request<T>(fetchImpl: FlowFetch, url: string, init?: RequestInit)
     ...init,
     headers: { Accept: 'application/json', ...(init?.body ? { 'Content-Type': 'application/json' } : {}), ...(init?.headers ?? {}) }
   });
-  const payload = (await readJson(response)) as { error?: { message?: string } } | undefined;
-  if (!response.ok) throw new Error(payload?.error?.message ?? `Request failed (${response.status})`);
+  const payload = (await readJson(response)) as { error?: { message?: string; code?: string } | string } | undefined;
+  if (!response.ok) {
+    const err = payload?.error;
+    // ApiError keeps status + code so callers can tell a 402 BUDGET from other refusals.
+    throw new ApiError(response.status, (typeof err === 'string' ? err : err?.message) ?? `Request failed (${response.status})`, typeof err === 'string' ? undefined : err?.code);
+  }
   return payload as T;
 }
+
+export type JobInput = {
+  prompt: string; technique?: string; aspect: '9:16' | '16:9'; durationSec: number; kind?: 'video' | 'image';
+  /** Absent = Google Flow. */
+  provider?: 'openrouter'; model?: string;
+  /** Queue even when the OpenRouter balance looks too low (after a 402 BUDGET). */
+  force?: boolean;
+};
 
 export function flowClient(baseUrl: string, fetchImpl: FlowFetch) {
   return {
@@ -56,7 +73,7 @@ export function flowClient(baseUrl: string, fetchImpl: FlowFetch) {
     removeAccount: (id: string) =>
       request<{ ok: boolean }>(fetchImpl, `${baseUrl}/api/flow/accounts/${encodeURIComponent(id)}`, { method: 'DELETE' }),
     jobs: () => request<{ jobs: FlowJob[] }>(fetchImpl, `${baseUrl}/api/flow/jobs`),
-    createJob: (input: { prompt: string; technique?: string; aspect: '9:16' | '16:9'; durationSec: number; kind?: 'video' | 'image' }) =>
+    createJob: (input: JobInput) =>
       request<{ job: FlowJob }>(fetchImpl, `${baseUrl}/api/flow/jobs`, { method: 'POST', body: JSON.stringify(input) }),
     fileUrl: (jobId: string) => `${baseUrl}/api/flow/jobs/${jobId}/file`
   };

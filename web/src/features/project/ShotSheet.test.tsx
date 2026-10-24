@@ -32,7 +32,8 @@ describe('ShotSheet', () => {
     expect(sheet).toHaveAccessibleName('Shot 2 · 03-peluk');
     expect(sheet).toHaveTextContent('Pulang');
     const img = within(sheet).getByRole('img', { name: /keyframe 03-peluk/i });
-    expect(img).toHaveAttribute('src', `/api/stories/${ID}/shots/03-peluk/frame?v=m3`);
+    expect(img).toHaveAttribute('src', `/api/stories/${ID}/shots/03-peluk/frame?v=m3&w=480`);
+    expect(img).toHaveAttribute('decoding', 'async');
     expect(img).toHaveStyle({ maxHeight: '300px' });
     expect(within(sheet).getByRole('button', { name: /layar penuh/i })).toBeInTheDocument();
     expect(within(within(sheet).getByRole('list', { name: /pemeran/i })).getAllByRole('listitem').map(li => li.textContent)).toEqual(['Jingga', 'Bima']);
@@ -45,6 +46,7 @@ describe('ShotSheet', () => {
     const sheet = await open(api);
     const video = within(sheet).getByLabelText('Klip 01-pagar');
     expect(video).toHaveAttribute('src', `/api/stories/${ID}/shots/01-pagar/video?v=job1`);
+    expect(video).toHaveAttribute('poster', `/api/stories/${ID}/shots/01-pagar/poster?v=job1&w=480`);
     expect(video).toHaveStyle({ maxHeight: '300px' });
     expect(sheet).toHaveTextContent('Klip siap');
   });

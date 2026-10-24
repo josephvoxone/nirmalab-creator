@@ -27,6 +27,8 @@ export type Scene = {
   shots: string[];
 };
 export type CastMember = { token: string; name: string; look: string };
+/** Who renders: Flow (Mac bridge, default) or an OpenRouter model. */
+export type Engine = { provider: 'flow' } | { provider: 'openrouter'; model: string };
 
 export type Storyboard = {
   title: string;
@@ -51,6 +53,8 @@ export type Storyboard = {
   locations?: Record<string, Location>;
   scenes?: Scene[];
   shots: Shot[];
+  /** image = character sheets + keyframes, video = clips. Absent = Flow for both. */
+  engine?: { image?: Engine; video?: Engine };
 };
 
 export const CREDITS_PER_SHOT = 10;
@@ -193,6 +197,25 @@ export function validateStoryboard(board: Storyboard): string[] {
     if (buildShotPrompt(board, shot).length > 3800) errors.push(`${shot.id}: prompt too long`);
   }
   errors.push(...validateBreakdown(board));
+  errors.push(...validateEngine(board.engine));
+  return errors;
+}
+
+const MODEL_ID = /^[a-z0-9][\w.-]*\/[\w.:-]+$/i;
+
+/** `engine` of a storyboard (absent = Flow for both). Exported for the draft route. */
+export function validateEngine(engine: unknown): string[] {
+  if (engine === undefined) return [];
+  if (!engine || typeof engine !== 'object' || Array.isArray(engine)) return ['engine must be an object { image?, video? }'];
+  const errors: string[] = [];
+  for (const kind of ['image', 'video'] as const) {
+    const e = (engine as Record<string, unknown>)[kind] as { provider?: unknown; model?: unknown } | undefined;
+    if (e === undefined) continue;
+    if (!e || typeof e !== 'object') errors.push(`engine.${kind} must be { provider }`);
+    else if (e.provider === 'openrouter') {
+      if (!(typeof e.model === 'string' && e.model.length <= 120 && MODEL_ID.test(e.model))) errors.push(`engine.${kind}: model is required for openrouter (e.g. google/veo-3.1-fast)`);
+    } else if (e.provider !== 'flow') errors.push(`engine.${kind}: provider must be flow or openrouter`);
+  }
   return errors;
 }
 

@@ -20,6 +20,7 @@ import { ClipPreview } from './Player.js';
 import { SceneCastChips } from './SceneCast.js';
 import { CREDITS_PER_SHOT, TONE_TEXT, castInText, shotStatus, wordCount } from './SceneHelpers.js';
 import { media, useProject } from './useProject.js';
+import { playerPosterWidth, poster, sized } from '../../lib/media.js';
 
 const MAX_WORDS = 12;
 const PREVIEW_H = 300;
@@ -33,7 +34,7 @@ function KeyframePreview(props: { src: string; label: string }) {
   const ref = useRef<HTMLDivElement>(null);
   return (
     <div ref={ref} className="group relative inline-flex max-w-full overflow-hidden rounded-md bg-black">
-      <img src={props.src} alt={props.label} style={{ maxHeight: PREVIEW_H }} className="block h-auto max-w-full object-contain" />
+      <img src={props.src} alt={props.label} decoding="async" style={{ maxHeight: PREVIEW_H }} className="block h-auto max-w-full object-contain" />
       <Button type="button" size="icon-sm" variant="glass" aria-label={`Layar penuh ${props.label}`} onClick={() => void fullscreen(ref.current)}
         className="absolute top-1.5 right-1.5 opacity-80 group-hover:opacity-100"><Maximize2 /></Button>
     </div>
@@ -84,9 +85,9 @@ function ShotEditor(props: { shotId: string; catalog?: Catalog; onClose: () => v
 
   let preview;
   if (st?.status === 'done') {
-    preview = <ClipPreview src={media.clip(p.id, shot.id, st.jobId ?? '')} poster={frame?.status === 'done' ? media.frame(p.id, shot.id, frame.mediaId ?? '') : undefined} label={`Klip ${shot.id}`} maxH={PREVIEW_H} />;
+    preview = <ClipPreview src={media.clip(p.id, shot.id, st.jobId ?? '')} poster={poster.shot(p.id, shot.id, playerPosterWidth(PREVIEW_H, board.aspect), st.jobId)} label={`Klip ${shot.id}`} maxH={PREVIEW_H} />;
   } else if (frame?.status === 'done') {
-    preview = <KeyframePreview src={media.frame(p.id, shot.id, frame.mediaId ?? '')} label={`Keyframe ${shot.id}`} />;
+    preview = <KeyframePreview src={sized(media.frame(p.id, shot.id, frame.mediaId ?? ''), playerPosterWidth(PREVIEW_H, board.aspect))} label={`Keyframe ${shot.id}`} />;
   } else {
     const working = st?.status === 'queued' || frame?.status === 'queued';
     preview = (

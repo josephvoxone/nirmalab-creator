@@ -15,6 +15,9 @@ import '../stories/studio.css';
 import { errorText } from '../settings/settingsClient.js';
 import { readPrefs } from '../../lib/prefs.js';
 import { CATEGORIES, TemplateCover, type CatTemplate } from '../templates/shared.js';
+import { fmtUsd, type Engine, type EngineSet } from '../providers/providersClient.js';
+import { engineFor, estimateUsd, openRouterOption, useEngines } from '../providers/useEngines.js';
+import { EngineMenu } from '../providers/EnginePicker.js';
 
 type Mode = 'konsisten' | 'cepat';
 type Aspect = '9:16' | '16:9';
@@ -49,6 +52,13 @@ export default function HomePage() {
   const [lookOpen, setLookOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const engines = useEngines(fetchImpl);
+  const [provider, setProvider] = useState<Engine['provider']>('flow');
+  const videoOption = openRouterOption(engines, 'video');
+  const engine: Required<EngineSet> = {
+    image: engineFor(provider, openRouterOption(engines, 'image')),
+    video: engineFor(provider, videoOption)
+  };
 
   const shotsFor = useCallback((tempoId: string | undefined) => {
     const n = String(catalog?.tempos.find(x => x.id === tempoId)?.shots ?? '');
@@ -89,7 +99,9 @@ export default function HomePage() {
     setBusy(true);
     setError('');
     try {
-      const { story } = await api.draft({ premise: text.trim(), shots: Number(shots), mode, aspect, look, ...(template ? { template: template.id } : {}) });
+      // `engine` rides along untyped until storiesClient's draft input gains it (server accepts it).
+      const input = { premise: text.trim(), shots: Number(shots), mode, aspect, look, engine, ...(template ? { template: template.id } : {}) };
+      const { story } = await api.draft(input);
       history.reload();
       navigate(`/cerita/${story.id}`);
     } catch (e) {
@@ -99,6 +111,10 @@ export default function HomePage() {
   };
 
   const credits = Number(shots) * CREDITS_PER_SHOT;
+  const usd = engine.video.provider === 'openrouter' ? estimateUsd('video', videoOption.model, Number(shots)) : null;
+  const cost = engine.video.provider === 'openrouter'
+    ? (usd === null ? 'harga OpenRouter belum diketahui' : `±${fmtUsd(usd)} render`)
+    : `±${credits} kredit render`;
   const suggestions = useMemo(() => {
     const seen = new Set<string>();
     const firstPerCategory = templates.filter(t => { const c = t.category ?? t.id; if (seen.has(c)) return false; seen.add(c); return true; });
@@ -157,13 +173,14 @@ export default function HomePage() {
         <ComposerPick label="Mode" value={mode} options={MODES} onValueChange={setMode} align="start" />
         <ComposerPick label="Rasio" value={aspect} options={ASPECTS} onValueChange={setAspect} align="start" />
         <ComposerPick label="Durasi" value={shots} options={SHOTS.map(s => ({ value: s, label: `${s} shot · ±${Number(s) * 6} dtk` }))} onValueChange={setShots} align="start" />
+        <EngineMenu kind="video" catalog={engines} value={engine.video} onChange={e => setProvider(e.provider)} />
         <button type="button" aria-expanded={lookOpen} aria-controls="home-look" aria-label={`Atur gaya: ${catalog ? (optionOf(catalog, 'style', look.style)?.label ?? 'Gaya') : 'Gaya'}`} onClick={() => setLookOpen(v => !v)}
           className="glass-held flex h-6 items-center gap-1 rounded-sm px-1.5 text-[12px] text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:text-foreground aria-expanded:text-foreground">
           <Palette className="size-3 shrink-0" /> <span className="max-w-32 truncate whitespace-nowrap">{catalog ? (optionOf(catalog, 'style', look.style)?.label ?? 'Gaya') : 'Gaya'}</span>
         </button>
         <ComposerFooterEnd>
-          <span className="text-[12px] text-muted-foreground max-sm:hidden" title="Gambar & keyframe gratis; hanya animasi video yang memakai kredit Flow">
-            {mode === 'konsisten' ? 'Keyframe gratis · ' : ''}±{credits} kredit render
+          <span className="text-[12px] text-muted-foreground max-sm:hidden" title={engine.video.provider === 'openrouter' ? 'Perkiraan biaya klip OpenRouter: jumlah shot × harga per klip' : 'Gambar & keyframe gratis; hanya animasi video yang memakai kredit Flow'}>
+            {mode === 'konsisten' && engine.image.provider === 'flow' ? 'Keyframe gratis · ' : ''}{cost}
           </span>
         </ComposerFooterEnd>
       </ComposerFooter>

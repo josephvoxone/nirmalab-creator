@@ -15,6 +15,7 @@ import { isActive, STATUS_LABEL } from '../stories/storiesClient.js';
 import { sceneProgress, type Board } from './model.js';
 import { nextStep } from './nextStep.js';
 import { media, useProject, type Project } from './useProject.js';
+import { playerPosterWidth, poster } from '../../lib/media.js';
 import { ClipPreview, SequencePlayer } from './Player.js';
 import { formatSeconds, sequenceClips } from './TimelineModel.js';
 
@@ -95,7 +96,7 @@ export function ResultTab() {
     <div className="flex min-w-0 flex-col gap-3">
       {story.video ? (
         <div className="glass-panel flex flex-wrap items-start gap-4 rounded-lg p-3">
-          <ClipPreview src={media.final(id, String(story.video.finishedAtMs))} label="Video akhir" maxH={320} />
+          <ClipPreview src={media.final(id, String(story.video.finishedAtMs))} poster={poster.final(id, playerPosterWidth(320, board.aspect), String(story.video.finishedAtMs))} label="Video akhir" maxH={320} />
           <div className="flex min-w-48 flex-1 flex-col gap-2">
             <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[12.5px]">
               <dt className="text-muted-foreground">Ukuran</dt><dd className="tabular-nums">{megabytes(story.video.bytes)}</dd>

@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { writePrivateJsonFile } from '../lib/private-json-file.js';
+import { isModelId, type ProviderId } from '../providers/config.js';
 import { CREDITS_PER_SHOT } from '../stories/storyboard.js';
 
 export type FlowAccountStatus = 'ready' | 'cooldown' | 'error';
@@ -47,7 +48,7 @@ export type FlowJobStatus = 'queued' | 'running' | 'done' | 'failed';
 
 export type FlowJobKind = 'video' | 'image' | 'character';
 export type FlowCharacterRef = { name: string; look: string };
-export type FlowJobResult = { mediaId?: string; caption?: string; flowCharacterId?: string };
+export type FlowJobResult = { mediaId?: string; caption?: string; flowCharacterId?: string; costUsd?: number };
 
 export type FlowJob = {
   id: string;
@@ -74,7 +75,16 @@ export type FlowJob = {
   accountId?: string;
   resultPath?: string;
   bytes?: number;
-  provider?: string;
+  /** Engine that renders the job: absent = 'flow' (the Mac bridge). */
+  provider?: ProviderId;
+  /** OpenRouter model id (provider 'openrouter'). */
+  model?: string;
+  /** OpenRouter: absolute paths of reference images (cast sheets) sent as input_references. */
+  references?: string[];
+  /** OpenRouter video: absolute path of the keyframe sent as first_frame. */
+  startImage?: string;
+  /** OpenRouter generation id of a submitted video (resumed after a restart). */
+  remoteId?: string;
   error?: string;
   /** User id that queued the job (directly or through a story). */
   createdBy?: string;
@@ -361,7 +371,13 @@ export class FlowStore {
     characters?: FlowCharacterRef[];
     startFrame?: { mediaId: string; caption: string };
     createdBy?: string;
+    provider?: ProviderId;
+    model?: string;
+    references?: string[];
+    startImage?: string;
   }): Promise<FlowJob> {
+    const openrouter = input.provider === 'openrouter';
+    if (openrouter && !isModelId(input.model)) throw new FlowInputError('model is required for provider openrouter (e.g. google/veo-3.1-fast)');
     return this.serialize(async () => {
       const state = await this.read();
       const prompt = input.prompt.trim();
@@ -380,7 +396,13 @@ export class FlowStore {
         maxAttempts: Math.min(Math.max(input.maxAttempts ?? 3, 1), 5),
         createdAtMs: Date.now(),
         ...(input.technique === undefined ? {} : { technique: input.technique }),
-        ...(input.createdBy ? { createdBy: input.createdBy.slice(0, 80) } : {})
+        ...(input.createdBy ? { createdBy: input.createdBy.slice(0, 80) } : {}),
+        ...(openrouter ? {
+          provider: 'openrouter' as const,
+          model: input.model!,
+          ...(input.references?.length ? { references: input.references.slice(0, 8) } : {}),
+          ...(input.startImage ? { startImage: input.startImage } : {})
+        } : {})
       };
       state.jobs.push(job);
       await this.write(state);
@@ -397,7 +419,13 @@ export class FlowStore {
       .map(item => item.job);
   }
 
-  async claimJob(bridgeId: string): Promise<FlowJob | undefined> {
+  /**
+   * Claim the oldest queued job of one provider (default 'flow': the Mac bridge never sees
+   * OpenRouter jobs). Flow claims pick an account (pool rotation, daily caps); OpenRouter claims don't.
+   */
+  async claimJob(bridgeId: string, options: { provider?: ProviderId } = {}): Promise<FlowJob | undefined> {
+    const provider = options.provider ?? 'flow';
+    const ofProvider = (j: FlowJob) => (j.provider ?? 'flow') === provider;
     return this.serialize(async () => {
       const state = await this.read();
       const now = Date.now();
@@ -418,7 +446,7 @@ export class FlowStore {
       // Bridges work one job at a time: if this bridge claims again, its running job was
       // orphaned by a restart. Put it back (no attempt burnt) instead of waiting out the lease.
       for (const orphan of state.jobs) {
-        if (orphan.status === 'running' && orphan.bridgeId === bridgeId) {
+        if (provider === 'flow' && ofProvider(orphan) && orphan.status === 'running' && orphan.bridgeId === bridgeId) {
           orphan.status = 'queued';
           orphan.bridgeId = undefined;
           orphan.accountId = undefined;
@@ -426,13 +454,24 @@ export class FlowStore {
           changed = true;
         }
       }
+      if (provider !== 'flow') {
+        const next = state.jobs.filter(j => j.status === 'queued' && ofProvider(j)).sort((a, b) => a.createdAtMs - b.createdAtMs)[0];
+        if (!next) {
+          if (changed) await this.write(state);
+          return undefined;
+        }
+        Object.assign(next, { status: 'running', bridgeId, startedAtMs: now });
+        delete next.accountId;
+        await this.write(state);
+        return next;
+      }
       const ordered = orderAccounts(state.accounts.map(a => this.normaliseAccount(a)), loadPool(state.pool).rotation);
       const eligible = (a: FlowAccount, cost: number) =>
         a.status === 'ready' && a.enabled && (a.dailyCreditCap === undefined || a.creditsUsedToday + cost <= a.dailyCreditCap);
       const pins = state.groupAccounts ?? {};
       let account: FlowAccount | undefined;
       let job: FlowJob | undefined;
-      for (const candidate of state.jobs.filter(j => j.status === 'queued').sort((a, b) => a.createdAtMs - b.createdAtMs)) {
+      for (const candidate of state.jobs.filter(j => j.status === 'queued' && ofProvider(j)).sort((a, b) => a.createdAtMs - b.createdAtMs)) {
         const cost = jobCredits(candidate.kind);
         const pinnedId = candidate.group ? pins[candidate.group] : undefined;
         const pinned = pinnedId ? ordered.find(a => a.id === pinnedId) : undefined;
@@ -475,7 +514,7 @@ export class FlowStore {
     const zero = (): Counts => ({ jobs: 0, done: 0, failed: 0, credits: 0 });
     const add = (c: { jobs: number; done: number; credits: number; failed?: number }, j: FlowJob) => {
       c.jobs += 1;
-      if (j.status === 'done') { c.done += 1; c.credits += jobCredits(j.kind); }
+      if (j.status === 'done') { c.done += 1; c.credits += (j.provider ?? 'flow') === 'flow' ? jobCredits(j.kind) : 0; }
       if (j.status === 'failed' && c.failed !== undefined) c.failed += 1;
     };
 
@@ -533,9 +572,24 @@ export class FlowStore {
     };
   }
 
+  /** Running jobs of one provider (the OpenRouter worker adopts the ones it is not processing). */
+  async runningJobs(provider: ProviderId): Promise<FlowJob[]> {
+    return (await this.read()).jobs.filter(j => j.status === 'running' && (j.provider ?? 'flow') === provider);
+  }
+
+  async setRemoteId(id: string, remoteId: string): Promise<void> {
+    await this.serialize(async () => {
+      const state = await this.read();
+      const job = state.jobs.find(j => j.id === id);
+      if (!job) return;
+      job.remoteId = remoteId.slice(0, 200);
+      await this.write(state);
+    });
+  }
+
   async completeJob(
     id: string,
-    result: { filePath: string; bytes?: number; provider?: string; result?: FlowJobResult }
+    result: { filePath: string; bytes?: number; provider?: ProviderId; result?: FlowJobResult }
   ): Promise<FlowJob | undefined> {
     return this.serialize(async () => {
       const state = await this.read();
@@ -544,7 +598,7 @@ export class FlowStore {
       job.status = 'done';
       job.resultPath = result.filePath;
       job.bytes = result.bytes;
-      job.provider = result.provider ?? 'flow';
+      job.provider = result.provider ?? job.provider ?? 'flow';
       if (result.result) job.result = result.result;
       job.finishedAtMs = Date.now();
       await this.write(state);
@@ -552,7 +606,8 @@ export class FlowStore {
     });
   }
 
-  async failJob(id: string, error: string): Promise<FlowJob | undefined> {
+  /** `final`: retrying cannot help (bad key, no balance, generation refused): fail without re-queueing. */
+  async failJob(id: string, error: string, options: { final?: boolean } = {}): Promise<FlowJob | undefined> {
     return this.serialize(async () => {
       const state = await this.read();
       const job = state.jobs.find(j => j.id === id);
@@ -560,7 +615,8 @@ export class FlowStore {
       job.attempts += 1;
       job.error = error.slice(0, 500);
       job.finishedAtMs = Date.now();
-      job.status = job.attempts >= job.maxAttempts ? 'failed' : 'queued';
+      job.status = options.final || job.attempts >= job.maxAttempts ? 'failed' : 'queued';
+      job.remoteId = undefined;
       if (job.status === 'queued') {
         job.bridgeId = undefined;
         job.accountId = undefined;

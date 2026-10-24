@@ -11,6 +11,7 @@ import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Toggle } from '@/components/ui/toggle';
 import { useSession } from '../../lib/session.js';
+import { poster } from '../../lib/media.js';
 import { DateTimePicker, Field, formatWhen, inputClass, Segmented, Steps, textareaClass } from '../../ui/controls.js';
 import { describeError, LoadingState } from '../../ui/states.js';
 import {
@@ -28,7 +29,7 @@ const joinNames = (names: string[]) => names.length <= 1 ? names.join('') : `${n
 
 function Poster(props: { id: string; className?: string }) {
   return (
-    <video src={`/api/stories/${props.id}/video#t=1.5`} preload="metadata" muted playsInline aria-hidden="true" tabIndex={-1}
+    <img src={poster.final(props.id, 480)} alt="" aria-hidden="true" loading="lazy" decoding="async"
       className={cn('pointer-events-none w-full bg-black/40 object-cover', props.className)} />
   );
 }

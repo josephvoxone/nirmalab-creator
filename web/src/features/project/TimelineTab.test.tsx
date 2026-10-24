@@ -30,7 +30,8 @@ describe('Timeline tab', () => {
     expect(parseFloat(clips[0]!.style.width)).toBe(2 * parseFloat(clips[1]!.style.width));
     expect(clips[0]).toHaveAttribute('data-status', 'done');
     expect(clips[1]).toHaveAttribute('data-status', 'pending');
-    expect(within(clips[1]!).getByRole('img')).toHaveAttribute('src', expect.stringContaining(`/shots/01-pagar/frame`));
+    expect(within(clips[1]!).getByRole('img')).toHaveAttribute('src', expect.stringMatching(/\/shots\/01-pagar\/frame\?.*w=160$/));
+    expect(within(clips[1]!).getByRole('img')).toHaveAttribute('decoding', 'async');
 
     const narration = within(track(/track narasi a1/i)).getAllByRole('listitem').map(li => li.textContent);
     expect(narration).toEqual(['—', 'Jingga menunggu setiap sore.', 'Suatu hari Bima pulang.', 'Mereka bertemu lagi.']);

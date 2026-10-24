@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import { userEvent } from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
@@ -56,17 +56,18 @@ describe('navigation', () => {
     expect(within(nav).getByRole('link', { name: /Proyek/ }).getAttribute('aria-current')).toBe('page');
   });
 
-  it('shows the real bridge state and credits for admins', async () => {
-    const fetchImpl = vi.fn(async (url: string) => url.endsWith('/api/flow/accounts')
-      ? new Response(JSON.stringify({ accounts: [{ id: 'a', label: 'A', email: 'a', status: 'ready', creditsUsedToday: 0, credits: 3 }], bridge: { online: true, lastSeenMs: Date.now() } }), { status: 200 })
+  it('shows the real bridge state and credits (from /api/quota) above the account menu', async () => {
+    const fetchImpl = vi.fn(async (url: string) => url === '/api/quota'
+      ? new Response(JSON.stringify({ flow: { credits: 3, usedToday: 0, capToday: null, accounts: 1, online: true }, openrouter: { configured: false, remainingUsd: null, usedUsd: null }, storage: { usedBytes: 0, diskFreeBytes: null } }), { status: 200 })
       : new Response('{}', { status: 404 }));
     mountLayout(fetchImpl);
-    expect((await screen.findByRole('status', { name: /Bridge/ })).textContent).toMatch(/online.*3 kredit/i);
+    const quota = await screen.findByRole('region', { name: /kuota/i });
+    await waitFor(() => expect(quota.textContent).toMatch(/online.*3 kredit/i));
   });
 
-  it('bridge offline is stated, not hidden', async () => {
+  it('bridge offline is stated, not hidden (even from a reply missing fields)', async () => {
     const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ accounts: [], bridge: { online: false } }), { status: 200 }));
     mountLayout(fetchImpl);
-    expect((await screen.findByRole('status', { name: /Bridge/ })).textContent).toMatch(/offline/i);
+    expect(await screen.findByText(/flow offline/i)).toBeTruthy();
   });
 });

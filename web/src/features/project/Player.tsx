@@ -82,7 +82,7 @@ export function SequencePlayer(props: {
             onTimeUpdate={e => props.onTime?.(e.currentTarget.currentTime)}
             onEnded={() => (i + 1 < props.clips.length ? setI(i + 1) : setPlaying(false))} className="size-full object-contain" />
         ) : clip?.poster ? (
-          <img src={clip.poster} alt={clip.label} className="size-full object-contain opacity-80" />
+          <img src={clip.poster} alt={clip.label} decoding="async" className="size-full object-contain opacity-80" />
         ) : (
           <div className="flex size-full items-center justify-center text-[12px] text-white/60">{clip?.label} · belum dirender</div>
         )}

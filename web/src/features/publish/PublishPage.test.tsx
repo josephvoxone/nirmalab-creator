@@ -77,10 +77,9 @@ describe('PublishPage (3 steps: Video → Detail → Kirim)', () => {
     const grid = await screen.findByRole('list', { name: /video selesai/i });
     expect(within(grid).getAllByRole('listitem')).toHaveLength(2);
     expect(within(grid).queryByText(/masih render/i)).toBeNull();
-    const video = grid.querySelector('video');
-    expect(video).toHaveAttribute('src', '/api/stories/story_aaaaaaaaaaaaaaaa/video#t=1.5');
-    expect(video).toHaveAttribute('preload', 'metadata');
-    expect((video as HTMLVideoElement).muted).toBe(true);
+    // a real still (server poster, sized), not a black <video#t=1.5>
+    expect(grid.querySelector('video')).toBeNull();
+    expect(grid.querySelector('img')?.getAttribute('src')).toBe('/api/stories/story_aaaaaaaaaaaaaaaa/video/poster?w=480');
     expect(within(steps()).getByRole('button', { name: /detail/i })).toBeDisabled();
     expect(within(steps()).getByRole('button', { name: /kirim/i })).toBeDisabled();
     expect(document.querySelector('select, input[type="date"], input[type="datetime-local"], input[type="radio"], input[type="checkbox"]')).toBeNull();

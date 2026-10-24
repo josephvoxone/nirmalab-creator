@@ -9,13 +9,15 @@
  * - Assembly runs once per story at a time; a failure is recorded and retryable without re-rendering.
  */
 import { createHash, randomBytes } from 'node:crypto';
-import { copyFile, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type { FlowStore } from '../flow/store.js';
+import { linkOrCopy } from '../media/link.js';
 import { CREDITS_PER_SHOT, buildShotPrompt, castOf, characterSheetPrompt, framePrompt, normalizeScenes, shotCast, validateStoryboard, type Storyboard } from './storyboard.js';
 
 import { composeStyle, resolveLook } from './looks.js';
+import { usdLabel } from '../providers/catalog.js';
 
 const MIN_IMAGE_BYTES = 10_000;
 
@@ -84,6 +86,11 @@ export type StoryDeps = {
   assemble: (dir: string) => Promise<void>;
   /** Pixel size of a keyframe (QC: 9:16 stories need portrait frames). */
   imageSize?: (file: string) => Promise<{ width: number; height: number }>;
+  /** OpenRouter price + balance for the budget check of an OpenRouter video engine (unknown = no check). */
+  openRouter?: {
+    usdPerClip: (model: string) => Promise<number | null>;
+    balance: () => Promise<{ remainingUsd: number | null } | null>;
+  };
 };
 
 export class StoryError extends Error {
@@ -293,11 +300,28 @@ export class StoryService {
     return record.createdBy ? { createdBy: record.createdBy } : {};
   }
 
+  /** Job fields for the storyboard's engine of this kind ({} = Flow, today's behaviour). */
+  private engine(board: Storyboard, kind: 'image' | 'video'): { provider?: 'openrouter'; model?: string } {
+    const engine = board.engine?.[kind];
+    return engine?.provider === 'openrouter' ? { provider: 'openrouter', model: engine.model } : {};
+  }
+
+  /** OpenRouter video engine: clips × usdPerClip vs the known balance (unknown price or balance = no check). */
+  private async openRouterBudget(model: string, clips: number): Promise<void> {
+    if (!clips || !this.deps.openRouter) return;
+    const [usdPerClip, balance] = await Promise.all([this.deps.openRouter.usdPerClip(model), this.deps.openRouter.balance()]);
+    const remaining = balance?.remainingUsd;
+    if (usdPerClip === null || remaining === null || remaining === undefined) return;
+    const needed = clips * usdPerClip;
+    if (needed > remaining) throw new StoryError('BUDGET', `Butuh ±${usdLabel(needed)}, saldo OpenRouter ${usdLabel(remaining)}`);
+  }
+
   private async queueShot(record: StoryRecord, board: Storyboard, shotId: string): Promise<void> {
     const shot = board.shots.find(s => s.id === shotId)!;
     const state = record.shots.find(s => s.id === shotId)!;
     const prompt = buildShotPrompt(board, shot);
     const konsisten = record.mode === 'konsisten';
+    const engine = this.engine(board, 'video');
     const job = await this.deps.flow.createJob({
       prompt,
       technique: `story:${record.id}/${shot.id}`,
@@ -305,10 +329,14 @@ export class StoryService {
       durationSec: 6,
       kind: 'video',
       ...this.owner(record),
+      ...engine,
       ...(konsisten ? {
         group: record.id,
         characters: shotCast(board, shot).map(c => ({ name: c.name, look: c.look })),
-        ...(state.frame?.mediaId ? { startFrame: { mediaId: state.frame.mediaId, caption: state.frame.caption ?? '' } } : {})
+        // OpenRouter animates the approved keyframe file (first_frame); Flow animates its own media.
+        ...(engine.provider === 'openrouter'
+          ? (state.frame?.status === 'done' ? { startImage: this.framePath(record.id, shot.id) } : {})
+          : state.frame?.mediaId ? { startFrame: { mediaId: state.frame.mediaId, caption: state.frame.caption ?? '' } } : {})
       } : {})
     });
     state.jobId = job.id;
@@ -355,10 +383,15 @@ export class StoryService {
       }
       const reuseIds = new Set(board.shots.filter(s => s.reuse).map(s => s.id));
       const todo = run.filter(s => !reuseIds.has(s.id) && (s.status === 'pending' || s.status === 'failed'));
-      const credits = await this.knownCredits();
-      const needed = todo.length * CREDITS_PER_SHOT;
-      if (!options.force && credits !== undefined && needed > credits) {
-        throw new StoryError('BUDGET', `Butuh ±${needed} credits untuk ${todo.length} shot, tersisa ${credits} credits di akun Flow`);
+      const videoEngine = board.engine?.video;
+      if (videoEngine?.provider === 'openrouter') {
+        if (!options.force) await this.openRouterBudget(videoEngine.model, todo.length);
+      } else {
+        const credits = await this.knownCredits();
+        const needed = todo.length * CREDITS_PER_SHOT;
+        if (!options.force && credits !== undefined && needed > credits) {
+          throw new StoryError('BUDGET', `Butuh ±${needed} credits untuk ${todo.length} shot, tersisa ${credits} credits di akun Flow`);
+        }
       }
       for (const state of todo) await this.queueShot(record, board, state.id);
       // A second render while rendering widens the run instead of replacing it.
@@ -419,7 +452,7 @@ export class StoryService {
         if (!run.has(state.id)) continue;
         const job = await this.deps.flow.getJob(shot.reuse.jobId);
         if (job?.status === 'done' && job.resultPath && existsSync(job.resultPath)) {
-          await copyFile(job.resultPath, this.shotPath(record.id, shot.id));
+          await linkOrCopy(job.resultPath, this.shotPath(record.id, shot.id));
           state.status = 'done';
           state.promptHash = hash(JSON.stringify(shot.reuse));
         } else {
@@ -443,7 +476,7 @@ export class StoryService {
       }
       if (job.status !== 'done' || !job.resultPath) continue;
       const target = this.shotPath(record.id, state.id);
-      await copyFile(job.resultPath, target);
+      await linkOrCopy(job.resultPath, target);
       const reason = await this.qc(target, !!shot.silent);
       if (reason) {
         await rm(target, { force: true });
@@ -630,7 +663,7 @@ export class StoryService {
     const member = castOf(board).find(c => c.token === cast.token)!;
     const prompt = characterSheetPrompt(member, board);
     const job = await this.deps.flow.createJob({
-      prompt, kind: 'character', group: record.id, aspect: '16:9', durationSec: 6, ...this.owner(record),
+      prompt, kind: 'character', group: record.id, aspect: '16:9', durationSec: 6, ...this.owner(record), ...this.engine(board, 'image'),
       technique: `story:${record.id}/cast:${cast.token}`,
       characters: [{ name: member.name, look: member.look }]
     });
@@ -641,10 +674,13 @@ export class StoryService {
     const shot = board.shots.find(s => s.id === shotId)!;
     const state = record.shots.find(s => s.id === shotId)!;
     const prompt = framePrompt(board, shot);
+    const engine = this.engine(board, 'image');
     const job = await this.deps.flow.createJob({
-      prompt, kind: 'image', group: record.id, aspect: board.aspect ?? '9:16', durationSec: 6, ...this.owner(record),
+      prompt, kind: 'image', group: record.id, aspect: board.aspect ?? '9:16', durationSec: 6, ...this.owner(record), ...engine,
       technique: `story:${record.id}/frame:${shot.id}`,
-      characters: shotCast(board, shot).map(c => ({ name: c.name, look: c.look }))
+      characters: shotCast(board, shot).map(c => ({ name: c.name, look: c.look })),
+      // OpenRouter gets the approved cast sheets as input references.
+      ...(engine.provider === 'openrouter' ? { references: shotCast(board, shot).map(c => this.castPath(record.id, c.token)) } : {})
     });
     state.frame = { ...(state.frame ?? { attempts: 0 }), status: 'queued', jobId: job.id, promptHash: hash(prompt), error: undefined } as TakeState;
   }
@@ -663,7 +699,7 @@ export class StoryService {
       return true;
     }
     if (job.status !== 'done' || !job.resultPath) return false;
-    await copyFile(job.resultPath, target);
+    await linkOrCopy(job.resultPath, target);
     const reason = await qc(target);
     if (reason) {
       await rm(target, { force: true });

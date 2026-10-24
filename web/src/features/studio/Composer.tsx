@@ -3,6 +3,9 @@ import { Clapperboard, Plus, X } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Choice, Field, Segmented, inputClass, textareaClass } from '../../ui/controls.js';
+import { fmtUsd, isOpenRouter, type Engine } from '../providers/providersClient.js';
+import { openRouterOption, type EngineCatalog } from '../providers/useEngines.js';
+import { EngineChoice } from '../providers/EnginePicker.js';
 import { TECHNIQUE_CATEGORIES, filterTechniques, promptWarnings, techniqueKey, type Technique } from './compose.js';
 
 const LIST_LIMIT = 60;
@@ -29,6 +32,9 @@ export function Composer(props: {
   techniques: Technique[];
   composed: string;
   presetName: string | undefined;
+  engines: EngineCatalog;
+  engine: Engine;
+  onEngine: (engine: Engine) => void;
   busy: boolean;
   onQueue: () => void;
 }) {
@@ -40,6 +46,10 @@ export function Composer(props: {
   const warnings = useMemo(() => promptWarnings(value.picked), [value.picked]);
   const hasSubject = (value.subject.trim() || value.character.trim()).length > 0;
   const canQueue = !props.busy && hasSubject && props.composed.trim().length > 0;
+  const paid = isOpenRouter(props.engine);
+  const model = paid ? openRouterOption(props.engines, props.kind, props.engine).model : undefined;
+  const usd = props.kind === 'video' ? model?.usdPerClip : model?.usdPerImage;
+  const price = typeof usd === 'number' ? `±${fmtUsd(usd)} via OpenRouter` : 'harga OpenRouter belum diketahui';
 
   return (
     <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,22rem)]">
@@ -122,13 +132,16 @@ export function Composer(props: {
           {props.composed || 'Tulis subjek lalu pilih teknik.'}
         </p>
         {warnings.map(w => <p key={w} role="note" className="text-[12px] text-amber-400">{w}</p>)}
+        <EngineChoice kind={props.kind} catalog={props.engines} value={props.engine} onChange={props.onEngine} className="w-full" />
         <p className="text-[12px] text-muted-foreground">
-          {props.kind === 'image' ? `Gambar ${value.aspect} · gratis di Flow.` : `Video ${value.duration} detik ${value.aspect} · ±10 kredit Flow, dengan audio.`}
+          {paid
+            ? (props.kind === 'image' ? `Gambar ${value.aspect} · ${price}.` : `Video ${value.duration} detik ${value.aspect} · ${price}${model?.audio ? ', dengan audio' : ''}.`)
+            : props.kind === 'image' ? `Gambar ${value.aspect} · gratis di Flow.` : `Video ${value.duration} detik ${value.aspect} · ±10 kredit Flow, dengan audio.`}
         </p>
         {!hasSubject && <p className="text-[12px] text-muted-foreground">Isi subjek atau karakter dulu supaya Flow tahu apa yang dirender.</p>}
         <Button variant="glass" data-strong="" disabled={!canQueue} onClick={props.onQueue}>
-          <Clapperboard /> Antrekan ke Flow
-          {props.kind === 'image' && <Badge variant="secondary" className="h-4.5 px-1.5 text-[10.5px]">Gratis</Badge>}
+          <Clapperboard /> {paid ? 'Antrekan ke OpenRouter' : 'Antrekan ke Flow'}
+          {props.kind === 'image' && !paid && <Badge variant="secondary" className="h-4.5 px-1.5 text-[10.5px]">Gratis</Badge>}
         </Button>
       </aside>
     </div>

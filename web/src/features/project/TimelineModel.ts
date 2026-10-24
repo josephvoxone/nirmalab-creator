@@ -6,6 +6,7 @@
 import type { Story } from '../stories/storiesClient.js';
 import { moveScene, moveShot, normalizeScenes, sceneOf, SECONDS_PER_SHOT, type Board } from './model.js';
 import { media } from './useProject.js';
+import { playerPosterWidth, poster, sized } from '../../lib/media.js';
 import type { Clip } from './Player.js';
 
 export type ClipStatus = 'pending' | 'queued' | 'done' | 'failed';
@@ -132,6 +133,7 @@ export function nudgeScene(input: Board, sceneId: string, dir: -1 | 1): Board {
 /** Clips for SequencePlayer: rendered shots play their clip, the rest show their keyframe still. */
 export function sequenceClips(id: string, board: Board, story: Story, shotIds?: string[]): Clip[] {
   const l = timelineLayout(board, story);
+  const pw = playerPosterWidth(300, board.aspect);
   const titles = new Map(l.scenes.map(s => [s.id, s.title]));
   const want = shotIds ? new Set(shotIds) : undefined;
   return l.clips.filter(c => !want || want.has(c.shotId)).map(c => ({
@@ -139,6 +141,7 @@ export function sequenceClips(id: string, board: Board, story: Story, shotIds?: 
     label: `Shot ${c.index + 1} · ${titles.get(c.sceneId) ?? ''}`,
     seconds: c.seconds,
     src: c.status === 'done' ? media.clip(id, c.shotId, c.clipVersion) : undefined,
-    poster: c.frameDone ? media.frame(id, c.shotId, c.frame) : undefined
+    // rendered: the clip's own poster (never a black box); else its keyframe still
+    poster: c.status === 'done' ? poster.shot(id, c.shotId, pw, c.clipVersion) : c.frameDone ? sized(media.frame(id, c.shotId, c.frame), pw) : undefined
   }));
 }

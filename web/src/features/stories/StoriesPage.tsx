@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Clapperboard, LayoutGrid, RefreshCw, Search, SquarePen, Trash2 } from 'lucide-react';
+import { Clapperboard, LayoutGrid, Play, RefreshCw, Search, SquarePen, Trash2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -9,6 +9,7 @@ import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle
 } from '@/components/ui/alert-dialog';
 import { useSession } from '../../lib/session.js';
+import { poster, sizedImg } from '../../lib/media.js';
 import { useHistory } from '../../shell/history.js';
 import { describeError } from '../../ui/states.js';
 import { relativeTime } from '../settings/settingsClient.js';
@@ -25,21 +26,54 @@ const FILTERS: Array<{ id: string; label: string; test: (s: Story) => boolean }>
 
 const tone = (s: Story) => s.status === 'done' ? 'text-(--success)' : s.status === 'failed' ? 'text-destructive' : s.status === 'review' ? 'text-(--brand)' : isActive(s) ? 'text-foreground' : 'text-muted-foreground';
 
-/** A real picture of the project: the finished video, else its first keyframe, else a neutral tile. */
-function Thumb(props: { story: Story }) {
-  const s = props.story;
-  const [broken, setBroken] = useState(false);
-  const frame = s.shots.find(x => x.frame?.status === 'done');
+const finished = (s: Story) => s.status === 'done' || !!s.video;
+const finalUrl = (s: Story) => `/api/stories/${s.id}/video${s.video ? `?v=${s.video.finishedAtMs}` : ''}`;
+const CARD_W = 240;
+
+/** A real picture of the project: the final video's poster, else its first keyframe, else a neutral tile. */
+function Thumb(props: { src?: string; srcSet?: string; onBroken: () => void; broken: boolean }) {
   return (
     <span className="relative block aspect-[4/5] w-full overflow-hidden bg-muted">
-      {!broken && s.status === 'done' && (
-        <video src={`/api/stories/${s.id}/video#t=1.5`} preload="metadata" muted playsInline onError={() => setBroken(true)} className="absolute inset-0 size-full object-cover" />
+      {!props.broken && props.src && (
+        <img src={props.src} srcSet={props.srcSet} width={CARD_W} height={300} alt="" loading="lazy" decoding="async" onError={props.onBroken} className="absolute inset-0 size-full object-cover" />
       )}
-      {!broken && s.status !== 'done' && frame && (
-        <img src={`/api/stories/${s.id}/shots/${frame.id}/frame`} alt="" loading="lazy" onError={() => setBroken(true)} className="absolute inset-0 size-full object-cover" />
-      )}
-      {(broken || (s.status !== 'done' && !frame)) && <Clapperboard aria-hidden="true" className="absolute top-1/2 left-1/2 size-6 -translate-x-1/2 -translate-y-1/2 text-muted-foreground/50" />}
+      {(props.broken || !props.src) && <Clapperboard aria-hidden="true" className="absolute top-1/2 left-1/2 size-6 -translate-x-1/2 -translate-y-1/2 text-muted-foreground/50" />}
     </span>
+  );
+}
+
+/** Card picture: a link into the project, or — when the final video exists — a click-to-play preview. */
+function CardMedia(props: { story: Story }) {
+  const s = props.story;
+  const [broken, setBroken] = useState(false);
+  const [playing, setPlaying] = useState(false);
+  if (finished(s)) {
+    const v = s.video ? String(s.video.finishedAtMs) : undefined;
+    const still = sizedImg(poster.final(s.id, CARD_W, v), CARD_W);
+    if (playing) {
+      return (
+        <span className="relative block aspect-[4/5] w-full overflow-hidden bg-black">
+          <video src={finalUrl(s)} poster={poster.final(s.id, CARD_W * 2, v)} autoPlay controls playsInline aria-label={`Preview ${s.title}`}
+            onError={() => { setPlaying(false); setBroken(true); }} className="absolute inset-0 size-full object-contain" />
+        </span>
+      );
+    }
+    return (
+      <button type="button" aria-label={`Putar preview ${s.title}`} title="Putar video di sini" onClick={() => setPlaying(true)}
+        className="group/play relative block w-full outline-none focus-visible:ring-1 focus-visible:ring-ring/60">
+        <Thumb src={still.src} srcSet={still.srcSet} broken={broken} onBroken={() => setBroken(true)} />
+        <span aria-hidden="true" className="absolute top-1/2 left-1/2 flex size-10 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full bg-black/55 text-white transition-colors group-hover/play:bg-black/70 [&_svg]:size-4 [&_svg]:fill-current">
+          <Play className="ml-0.5" />
+        </span>
+      </button>
+    );
+  }
+  const frame = s.shots.find(x => x.frame?.status === 'done');
+  const still = frame ? sizedImg(`/api/stories/${s.id}/shots/${frame.id}/frame${frame.frame?.mediaId ? `?v=${frame.frame.mediaId}` : ''}`, CARD_W) : undefined;
+  return (
+    <Link to={`/cerita/${s.id}`} aria-label={`Buka ${s.title}`} className="outline-none focus-visible:ring-1 focus-visible:ring-ring/60">
+      <Thumb src={still?.src} srcSet={still?.srcSet} broken={broken} onBroken={() => setBroken(true)} />
+    </Link>
   );
 }
 
@@ -141,11 +175,9 @@ export function StoriesPage(props: { pollMs?: number }) {
         <ul aria-label="Daftar proyek" className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
           {shown.map(s => (
             <li key={s.id} aria-label={s.title} className="group glass-panel relative flex flex-col overflow-hidden rounded-lg">
-              <Link to={`/cerita/${s.id}`} aria-label={`Buka ${s.title}`} className="outline-none focus-visible:ring-1 focus-visible:ring-ring/60">
-                <Thumb story={s} />
-              </Link>
+              <CardMedia story={s} />
               <div className="flex flex-col gap-1 p-2.5">
-                <Link to={`/cerita/${s.id}`} tabIndex={-1} className="truncate text-[13px] font-medium hover:underline">{s.title}</Link>
+                <Link to={`/cerita/${s.id}`} tabIndex={finished(s) ? undefined : -1} className="truncate rounded-sm text-[13px] font-medium outline-none hover:underline focus-visible:ring-1 focus-visible:ring-ring/60">{s.title}</Link>
                 <div className="flex items-center gap-1.5 text-[11.5px] text-muted-foreground">
                   <Badge variant="secondary" className={cn('h-4.5 px-1.5 text-[10.5px]', tone(s))}>{STATUS_LABEL[s.status] ?? s.status}</Badge>
                   <span className="tabular-nums">{doneCount(s)}/{s.shots.length} shot</span>

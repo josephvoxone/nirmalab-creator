@@ -52,7 +52,7 @@ export function storiesApi(fetchImpl: FetchLike) {
     redraw: (id: string, shotId: string, prompt?: string) => requestJson<{ story: Story }>(fetchImpl, `/api/stories/${id}/shots/${shotId}/frame`, post(prompt ? { prompt } : {})),
     frameUrl: (id: string, shotId: string, v = '') => `/api/stories/${id}/shots/${shotId}/frame${v ? `?v=${v}` : ''}`,
     castUrl: (id: string, token: string) => `/api/stories/${id}/cast/${token}/image`,
-    draft: (input: { premise: string; shots: number; style?: string; template?: string; look?: Record<string, string>; mode?: string; aspect?: string }) => requestJson<{ story: Story }>(fetchImpl, '/api/stories/draft', post(input)),
+    draft: (input: { premise: string; shots: number; style?: string; template?: string; look?: Record<string, string>; mode?: string; aspect?: string; engine?: import('../providers/providersClient.js').EngineSet }) => requestJson<{ story: Story }>(fetchImpl, '/api/stories/draft', post(input)),
     create: (storyboard: Storyboard) => requestJson<{ story: Story }>(fetchImpl, '/api/stories', post({ storyboard })),
     update: (id: string, storyboard: Storyboard) => requestJson<{ story: Story }>(fetchImpl, `/api/stories/${id}`, put({ storyboard })),
     render: (id: string, force: boolean, scope: { scene?: string; shot?: string } = {}) => requestJson<{ story: Story }>(fetchImpl, `/api/stories/${id}/render`, post({ force, ...scope })),

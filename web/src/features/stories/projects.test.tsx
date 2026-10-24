@@ -42,6 +42,32 @@ describe('Proyek (your works, not recipes)', () => {
     expect(document.querySelector('select')).toBeNull();
   });
 
+  it('a finished project shows its poster and plays a preview on click (title still opens it)', async () => {
+    mount(url => (url === '/api/stories' ? { body: { stories: [story({ status: 'done', video: { bytes: 1, finishedAtMs: 77 }, shots: [{ id: 'a', status: 'done', attempts: 0, frame: { status: 'done', attempts: 0, mediaId: 'm1' } }] })] } } : undefined));
+    const item = within(await grid()).getByRole('listitem', { name: 'Selendang Merah' });
+    expect(item.querySelector('video')).toBeNull();
+    const img = item.querySelector('img')!;
+    expect(img).toHaveAttribute('src', `/api/stories/${ID}/video/poster?v=77&w=320`);
+    expect(img).toHaveAttribute('srcset', `/api/stories/${ID}/video/poster?v=77&w=320 1x, /api/stories/${ID}/video/poster?v=77&w=480 2x`);
+    expect(img).toHaveAttribute('loading', 'lazy');
+    expect(img).toHaveAttribute('decoding', 'async');
+    await userEvent.click(within(item).getByRole('button', { name: /putar preview selendang merah/i }));
+    const video = item.querySelector('video')!;
+    expect(video).toHaveAttribute('src', `/api/stories/${ID}/video?v=77`);
+    expect(video).toHaveAttribute('poster', `/api/stories/${ID}/video/poster?v=77&w=480`);
+    expect(video).toHaveAttribute('autoplay');
+    expect(video).toHaveAttribute('controls');
+    expect(screen.queryByText('home page')).toBeNull();
+    expect(within(item).getByRole('link', { name: 'Selendang Merah' })).toHaveAttribute('href', `/cerita/${ID}`);
+  });
+
+  it('an unfinished project shows its first keyframe, sized for the card', async () => {
+    mount(url => (url === '/api/stories' ? { body: { stories: [story({ status: 'review', shots: [{ id: 'a', status: 'pending', attempts: 0, frame: { status: 'done', attempts: 0, mediaId: 'm1' } }] })] } } : undefined));
+    const item = within(await grid()).getByRole('listitem', { name: 'Selendang Merah' });
+    expect(item.querySelector('img')).toHaveAttribute('src', `/api/stories/${ID}/shots/a/frame?v=m1&w=320`);
+    expect(within(item).queryByRole('button', { name: /putar preview/i })).toBeNull();
+  });
+
   it('filters by status with counts, and searches by title', async () => {
     mount(url => (url === '/api/stories' ? { body: { stories: [
       story({ id: 'story_a', title: 'Jingga', status: 'review' }),

@@ -6,9 +6,12 @@ import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Steps } from '../../ui/controls.js';
 import { describeError } from '../../ui/states.js';
+import { ApiError } from '../../lib/api.js';
+import { FLOW, isOpenRouter, type Engine } from '../providers/providersClient.js';
+import { useEngines } from '../providers/useEngines.js';
 import { techniqueKey, type Technique } from './compose.js';
 import { DEFAULT_NEGATIVE, allPresets, applyPreset, composeShot, type StylePreset } from './presets.js';
-import { flowClient, type FlowAccount, type FlowBridge, type FlowFetch, type FlowJob } from './flowClient.js';
+import { flowClient, type FlowAccount, type FlowBridge, type FlowFetch, type FlowJob, type JobInput } from './flowClient.js';
 import { Composer, type ComposerValue } from './Composer.js';
 import { JobList } from './JobList.js';
 import { StyleGallery } from './StyleGallery.js';
@@ -42,6 +45,11 @@ export function StudioPage(props: { baseUrl: string; fetchImpl: FlowFetch; techn
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [notice, setNotice] = useState<string>();
+  const engines = useEngines(props.fetchImpl);
+  const [engineByKind, setEngineByKind] = useState<Record<Kind, Engine>>({ video: FLOW, image: FLOW });
+  const engine = engineByKind[kind];
+  /** A paid render refused for budget: the server's text + "Render tetap" (re-send with force). */
+  const [budget, setBudget] = useState<{ message: string; input: JobInput; done: string; fallback: string; then?: () => void }>();
 
   const refresh = useCallback(async () => {
     try {
@@ -111,18 +119,21 @@ export function StudioPage(props: { baseUrl: string; fetchImpl: FlowFetch; techn
     go(PROMPT);
   }
 
-  async function submit(input: Parameters<typeof api.createJob>[0], done: string, fallback: string): Promise<boolean> {
+  async function submit(input: JobInput, done: string, fallback: string, then?: () => void): Promise<boolean> {
     if (busy) return false;
     setBusy(true);
     setError(undefined);
     setNotice(undefined);
+    setBudget(undefined);
     try {
       await api.createJob(input);
       setNotice(done);
+      then?.();
       await refresh();
       return true;
     } catch (e) {
-      setError(describeError(e) || fallback);
+      if (e instanceof ApiError && (e.code === 'BUDGET' || e.status === 402)) setBudget({ message: e.message, input, done, fallback, then });
+      else setError(describeError(e) || fallback);
       return false;
     } finally {
       setBusy(false);
@@ -141,14 +152,21 @@ export function StudioPage(props: { baseUrl: string; fetchImpl: FlowFetch; techn
 
   async function queue() {
     if (!composed.trim() || !(draft.subject.trim() || draft.character.trim())) return;
-    const ok = await submit({
+    const paid = isOpenRouter(engine);
+    await submit({
       prompt: composed,
       aspect: draft.aspect,
       durationSec: draft.duration,
       ...(kind === 'image' ? { kind: 'image' as const } : {}),
-      ...(presetId ? { technique: `preset:${presetId}` } : draft.picked[0] ? { technique: techniqueKey(draft.picked[0]) } : {})
-    }, kind === 'image' ? 'Gambar masuk antrean (gratis di Flow). Bridge akan mengambilnya.' : 'Klip masuk antrean. Bridge akan mengambilnya dari akun Flow yang siap.', 'Gagal mengantre');
-    if (ok) setStep(RESULTS);
+      ...(presetId ? { technique: `preset:${presetId}` } : draft.picked[0] ? { technique: techniqueKey(draft.picked[0]) } : {}),
+      ...(paid ? { provider: 'openrouter' as const, model: engine.model } : {})
+    }, paid ? `${kind === 'image' ? 'Gambar' : 'Klip'} masuk antrean OpenRouter. Server yang membuatnya, tanpa Mac.`
+      : kind === 'image' ? 'Gambar masuk antrean (gratis di Flow). Bridge akan mengambilnya.' : 'Klip masuk antrean. Bridge akan mengambilnya dari akun Flow yang siap.', 'Gagal mengantre', () => setStep(RESULTS));
+  }
+
+  async function forceBudget() {
+    if (!budget) return;
+    await submit({ ...budget.input, force: true }, budget.done, budget.fallback, budget.then);
   }
 
   async function retry(job: FlowJob) {
@@ -157,7 +175,8 @@ export function StudioPage(props: { baseUrl: string; fetchImpl: FlowFetch; techn
       aspect: job.aspect,
       durationSec: job.durationSec,
       ...(job.kind === 'image' ? { kind: 'image' as const } : {}),
-      ...(job.technique ? { technique: job.technique } : {})
+      ...(job.technique ? { technique: job.technique } : {}),
+      ...(job.provider === 'openrouter' && job.model ? { provider: 'openrouter' as const, model: job.model } : {})
     }, 'Job dikirim ulang ke antrean.', 'Gagal mengantre ulang');
   }
 
@@ -202,6 +221,13 @@ export function StudioPage(props: { baseUrl: string; fetchImpl: FlowFetch; techn
       <Steps label="Langkah studio" steps={STEPS} current={step} onStep={go} />
 
       {error !== undefined && <p role="alert" className="rounded-md bg-destructive/10 px-3 py-2 text-[12.5px] text-destructive">{error}</p>}
+      {budget && (
+        <div role="alert" className="flex flex-wrap items-center gap-2 rounded-md bg-destructive/10 px-3 py-2 text-[12.5px] text-destructive">
+          <span className="min-w-0 flex-1">{budget.message}</span>
+          <Button size="sm" variant="ghost" onClick={() => setBudget(undefined)}>Batal</Button>
+          <Button size="sm" variant="destructive" disabled={busy} onClick={() => void forceBudget()}>Render tetap</Button>
+        </div>
+      )}
       {notice !== undefined && <p role="status" aria-label="Pemberitahuan" className="rounded-md bg-muted/60 px-3 py-2 text-[12.5px] text-muted-foreground">{notice}</p>}
 
       {step === KIND && (
@@ -247,6 +273,7 @@ export function StudioPage(props: { baseUrl: string; fetchImpl: FlowFetch; techn
       {step === PROMPT && (
         <>
           <Composer kind={kind} value={draft} onChange={edit} techniques={props.techniques} composed={composed} presetName={preset?.name}
+            engines={engines} engine={engine} onEngine={e => setEngineByKind(m => ({ ...m, [kind]: e }))}
             busy={busy} onQueue={() => void queue()} />
           <div className="flex">
             <Button variant="ghost" size="sm" onClick={() => go(STYLE)}><ArrowLeft /> Kembali</Button>

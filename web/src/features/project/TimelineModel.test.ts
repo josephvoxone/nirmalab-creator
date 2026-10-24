@@ -91,8 +91,10 @@ describe('sequenceClips', () => {
     const clips = sequenceClips(ID, BOARD, story);
     expect(clips.map(c => c.id)).toEqual(['00-pembuka', '01-pagar', '02-jalan', '03-peluk']);
     expect(clips[0]!.src).toMatch(`/api/stories/${ID}/shots/00-pembuka/video`);
+    // a rendered clip's poster is its own frame (poster endpoint), sized for the player
+    expect(clips[0]!.poster).toMatch(new RegExp(`^/api/stories/${ID}/shots/00-pembuka/poster\\?.*w=\\d+`));
     expect(clips[1]!.src).toBeUndefined();
-    expect(clips[1]!.poster).toMatch(`/api/stories/${ID}/shots/01-pagar/frame`);
+    expect(clips[1]!.poster).toMatch(new RegExp(`^/api/stories/${ID}/shots/01-pagar/frame\\?.*w=\\d+`));
     expect(clips[2]!.poster).toBeUndefined();
     expect(clips[0]!.label).toBe('Shot 1 · Menunggu');
     expect(sequenceClips(ID, BOARD, story, ['02-jalan', '03-peluk']).map(c => c.label)).toEqual(['Shot 3 · Pulang', 'Shot 4 · Pulang']);

@@ -11,6 +11,7 @@ import { SceneCastChips } from './SceneCast.js';
 import { castIn, renderCost } from './SceneHelpers.js';
 import { SceneShots, type ShotActions } from './SceneShots.js';
 import { media } from './useProject.js';
+import { playerPosterWidth, poster, sized } from '../../lib/media.js';
 
 const NO_LOCATION = '__none__';
 
@@ -23,14 +24,15 @@ export type SceneActions = ShotActions & {
   removeScene: () => void;
 };
 
-function sceneClips(projectId: string, story: Story, scene: Scene): Clip[] {
+function sceneClips(projectId: string, story: Story, scene: Scene, aspect?: string): Clip[] {
+  const pw = playerPosterWidth(300, aspect);
   return scene.shots.map((id, i) => {
     const st = story.shots.find(s => s.id === id);
     return {
       id,
       label: `Shot ${i + 1} · ${id}`,
       src: st?.status === 'done' ? media.clip(projectId, id, st.jobId ?? '') : undefined,
-      poster: st?.frame?.status === 'done' ? media.frame(projectId, id, st.frame.mediaId ?? '') : undefined,
+      poster: st?.status === 'done' ? poster.shot(projectId, id, pw, st.jobId) : st?.frame?.status === 'done' ? sized(media.frame(projectId, id, st.frame.mediaId ?? ''), pw) : undefined,
       seconds: st?.durationSec ?? SECONDS_PER_SHOT
     };
   });
@@ -130,7 +132,7 @@ export function SceneBoard(props: {
       {preview && (
         <div className="relative flex flex-col items-center rounded-md border bg-black/20 p-2">
           <Button type="button" size="icon-xs" variant="ghost" aria-label="Tutup preview" onClick={() => setPreview(false)} className="absolute top-1.5 left-1.5"><X /></Button>
-          <SequencePlayer clips={sceneClips(props.projectId, story, scene)} label={`Preview scene ${scene.title}`} maxH={300} aspect={board.aspect} className="w-full" />
+          <SequencePlayer clips={sceneClips(props.projectId, story, scene, board.aspect)} label={`Preview scene ${scene.title}`} maxH={300} aspect={board.aspect} className="w-full" />
         </div>
       )}
       <div className="flex items-center justify-between text-[12px] text-muted-foreground">

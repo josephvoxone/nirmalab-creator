@@ -1,13 +1,13 @@
-import type { FastifyInstance, FastifyReply } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { createReadStream, existsSync, statSync } from 'node:fs';
-import { sniffMediaType } from '../lib/media-type.js';
+import { sendImage, sendPoster, type MediaCache } from '../media/images.js';
 import { requireAdmin, sessionUser } from '../auth/routes.js';
 import type { UserAuthStore } from '../auth/store.js';
 import { draftStoryboard, type TextGenerator } from './draft.js';
 import { CATALOG } from './looks.js';
 import type { CoverService } from './covers.js';
 import { StoryError, type StoryService } from './service.js';
-import { SHOT_ID, type Storyboard } from './storyboard.js';
+import { SHOT_ID, validateEngine, type Storyboard } from './storyboard.js';
 
 const STATUS: Record<StoryError['code'], number> = { INVALID: 400, NOT_FOUND: 404, BUSY: 409, BUDGET: 409 };
 
@@ -32,10 +32,9 @@ function sendVideo(reply: FastifyReply, file: string, range: string | undefined)
   return reply.header('content-length', size).send(createReadStream(file));
 }
 
-function sendPng(reply: FastifyReply, file: string) {
+function sendPng(request: FastifyRequest, reply: FastifyReply, file: string, media: MediaCache) {
   if (!existsSync(file)) return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Gambar belum ada' } });
-  return reply.header('content-type', sniffMediaType(file)).header('cache-control', 'private, no-cache')
-    .header('content-length', statSync(file).size).send(createReadStream(file));
+  return sendImage(request, reply, file, media);
 }
 
 const TOKEN = /^[A-Z][A-Z0-9_]{1,20}$/;
@@ -62,7 +61,7 @@ const asBoard = (value: unknown): Storyboard => {
 
 export async function registerStoryRoutes(
   server: FastifyInstance,
-  options: { userAuthStore: UserAuthStore; stories: StoryService; generateText: TextGenerator; covers?: CoverService }
+  options: { userAuthStore: UserAuthStore; stories: StoryService; generateText: TextGenerator; covers?: CoverService; media: MediaCache }
 ): Promise<void> {
   const { userAuthStore: auth, stories } = options;
   const member = (request: Parameters<typeof sessionUser>[1], reply: FastifyReply) => {
@@ -94,8 +93,7 @@ export async function registerStoryRoutes(
     try {
       const file = await options.covers?.file(request.params.id);
       if (!file) return notFound(reply, 'Cover');
-      return reply.header('content-type', sniffMediaType(file)).header('cache-control', 'private, max-age=300')
-        .header('content-length', statSync(file).size).send(createReadStream(file));
+      return await sendImage(request, reply, file, options.media);
     } catch (error) { return fail(reply, error); }
   });
 
@@ -107,11 +105,15 @@ export async function registerStoryRoutes(
     } catch (error) { return fail(reply, error); }
   });
 
-  server.post<{ Body: { premise?: unknown; shots?: unknown; style?: unknown; template?: unknown; look?: unknown; mode?: unknown; aspect?: unknown; narrator?: unknown } }>('/api/stories/draft', async (request, reply) => {
+  server.post<{ Body: { premise?: unknown; shots?: unknown; style?: unknown; template?: unknown; look?: unknown; mode?: unknown; aspect?: unknown; narrator?: unknown; engine?: unknown } }>('/api/stories/draft', async (request, reply) => {
     const user = requireAdmin(auth, request, reply);
     if (!user) return undefined;
     const premise = typeof request.body?.premise === 'string' ? request.body.premise.trim() : '';
     if (premise.length < 5) return reply.code(400).send({ error: { code: 'INVALID', message: 'Tulis premis cerita (min. 5 karakter)' } });
+    // Checked before drafting: a bad engine must not cost an LLM call.
+    const engine = request.body?.engine ?? undefined;
+    const engineErrors = validateEngine(engine);
+    if (engineErrors.length) return badRequest(reply, engineErrors.join('; '));
     try {
       const board = await draftStoryboard({
         premise: premise.slice(0, 2000),
@@ -123,7 +125,8 @@ export async function registerStoryRoutes(
         aspect: request.body?.aspect === '16:9' || request.body?.aspect === '9:16' ? request.body.aspect : undefined,
         narrator: typeof request.body?.narrator === 'string' ? request.body.narrator.slice(0, 200) : undefined
       }, options.generateText);
-      return reply.code(201).send({ story: await stories.create(board, { createdBy: user.id }) });
+      const drafted = engine === undefined ? board : { ...board, engine: engine as Storyboard['engine'] };
+      return reply.code(201).send({ story: await stories.create(drafted, { createdBy: user.id }) });
     } catch (error) { return fail(reply, error); }
   });
 
@@ -188,7 +191,7 @@ export async function registerStoryRoutes(
     if (!SHOT_ID.test(request.params.shotId)) return notFound(reply);
     try {
       if (!(await stories.get(request.params.id))) return notFound(reply, 'Story');
-      return sendPng(reply, stories.framePath(request.params.id, request.params.shotId));
+      return await sendPng(request, reply, stories.framePath(request.params.id, request.params.shotId), options.media);
     } catch (error) { return fail(reply, error); }
   });
 
@@ -206,7 +209,7 @@ export async function registerStoryRoutes(
     if (!TOKEN.test(request.params.token)) return notFound(reply, 'Character');
     try {
       if (!(await stories.get(request.params.id))) return notFound(reply, 'Story');
-      return sendPng(reply, stories.castPath(request.params.id, request.params.token));
+      return await sendPng(request, reply, stories.castPath(request.params.id, request.params.token), options.media);
     } catch (error) { return fail(reply, error); }
   });
 
@@ -234,6 +237,29 @@ export async function registerStoryRoutes(
       const watchable = story?.status === 'done' || (!!story?.video && story.status !== 'assembling');
       if (!story || !watchable) return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Video belum selesai' } });
       return sendVideo(reply, stories.videoPath(story.id), request.headers.range);
+    } catch (error) { return fail(reply, error); }
+  });
+
+  const noVideo = (reply: FastifyReply) => reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Video belum ada' } });
+
+  server.get<{ Params: { id: string } }>('/api/stories/:id/video/poster', async (request, reply) => {
+    if (!member(request, reply)) return undefined;
+    try {
+      if (!(await stories.get(request.params.id))) return notFound(reply, 'Story');
+      const file = stories.videoPath(request.params.id);
+      if (!existsSync(file)) return noVideo(reply);
+      return await sendPoster(request, reply, file, options.media);
+    } catch (error) { return fail(reply, error); }
+  });
+
+  server.get<{ Params: { id: string; shotId: string } }>('/api/stories/:id/shots/:shotId/poster', async (request, reply) => {
+    if (!member(request, reply)) return undefined;
+    if (!SHOT_ID.test(request.params.shotId)) return notFound(reply);
+    try {
+      if (!(await stories.get(request.params.id))) return notFound(reply, 'Story');
+      const file = stories.shotPath(request.params.id, request.params.shotId);
+      if (!existsSync(file)) return noVideo(reply);
+      return await sendPoster(request, reply, file, options.media);
     } catch (error) { return fail(reply, error); }
   });
 

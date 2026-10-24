@@ -22,6 +22,7 @@ import { SceneList } from './SceneList.js';
 import { thumbSize } from './SceneShots.js';
 import { ShotSheet } from './ShotSheet.js';
 import { media, useProject } from './useProject.js';
+import { sized } from '../../lib/media.js';
 
 /** Scenes are only compared with scenes; a dragged shot targets a scene row under the pointer first, else the nearest shot. */
 export const sceneCollision: CollisionDetection = args => {
@@ -131,7 +132,7 @@ export function SceneTab() {
         <DragOverlay dropAnimation={null}>
           {drag?.kind === 'shot' ? (
             <div className="overflow-hidden rounded-md border bg-(--field) shadow-lg" style={thumbSize(board.aspect)}>
-              {dragFrame?.status === 'done' && <img src={media.frame(p.id, drag.id, dragFrame.mediaId ?? '')} alt="" className="size-full object-cover" />}
+              {dragFrame?.status === 'done' && <img src={sized(media.frame(p.id, drag.id, dragFrame.mediaId ?? ''), thumbSize(board.aspect).width)} alt="" decoding="async" className="size-full object-cover" />}
             </div>
           ) : drag?.kind === 'scene' ? (
             <div className="rounded-md border bg-popover px-2 py-1 text-[13px] shadow-lg">{scenes.find(s => s.id === drag.id)?.title}</div>

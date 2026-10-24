@@ -5,7 +5,10 @@ import { mkdir, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { requireAdmin } from '../auth/routes.js';
+import { MediaCache, sendImage } from '../media/images.js';
 import type { UserAuthStore } from '../auth/store.js';
+import { usdLabel } from '../providers/catalog.js';
+import { isModelId } from '../providers/config.js';
 import { FLOW_ROTATIONS, FlowInputError, FlowStore, type FlowAccountPatch, type FlowRotation } from './store.js';
 
 export type FlowRouteOptions = {
@@ -19,6 +22,13 @@ export type FlowRouteOptions = {
    * without a redeploy. With neither, bridge routes always answer 401.
    */
   bridgeToken?: string;
+  /** Studio OpenRouter budget: price of one clip of a model and the key's balance (unknown → no check). */
+  openRouter?: {
+    usdPerClip: (model: string) => Promise<number | null>;
+    balance: () => Promise<{ remainingUsd: number | null } | null>;
+  };
+  /** Thumbnail cache for `GET /api/flow/jobs/:id/file?w=` (image jobs). */
+  media?: MediaCache;
 };
 
 const MIN_CLIP_BYTES = 1024;
@@ -39,6 +49,7 @@ export async function registerFlowRoutes(server: FastifyInstance, options: FlowR
   const clipsDir = join(flowDir, 'clips');
   // One shared instance per process: two instances on one file race (separate serialise queues).
   const store = options.store ?? new FlowStore(flowDir);
+  const media = options.media ?? new MediaCache({ dataDir: options.dataDir });
   const auth = options.userAuthStore;
 
   const tokenFile = join(flowDir, 'bridge-token');
@@ -163,14 +174,30 @@ export async function registerFlowRoutes(server: FastifyInstance, options: FlowR
     return { jobs: await store.listJobs() };
   });
 
-  server.post<{ Body: { prompt?: unknown; technique?: unknown; aspect?: unknown; durationSec?: unknown; kind?: unknown } }>(
+  server.post<{ Body: { prompt?: unknown; technique?: unknown; aspect?: unknown; durationSec?: unknown; kind?: unknown; provider?: unknown; model?: unknown; force?: unknown } }>(
     '/api/flow/jobs',
     async (request, reply) => {
       const user = requireAdmin(auth, request, reply);
       if (!user) return undefined;
       const prompt = typeof request.body?.prompt === 'string' ? request.body.prompt : '';
       if (!prompt.trim()) return bad(reply, 400, 'INVALID_INPUT', 'prompt is required');
+      const provider = request.body?.provider ?? 'flow';
+      if (provider !== 'flow' && provider !== 'openrouter') return bad(reply, 400, 'INVALID_INPUT', 'provider must be flow or openrouter');
+      if (provider === 'openrouter' && !isModelId(request.body?.model)) {
+        return bad(reply, 400, 'INVALID_INPUT', 'model is required for provider openrouter (e.g. google/veo-3.1-fast)');
+      }
+      if (provider === 'openrouter' && request.body?.kind !== 'image' && request.body?.force !== true && options.openRouter) {
+        const [price, balance] = await Promise.all([
+          options.openRouter.usdPerClip(request.body!.model as string).catch(() => null),
+          options.openRouter.balance().catch(() => null)
+        ]);
+        const remaining = balance?.remainingUsd;
+        if (typeof price === 'number' && typeof remaining === 'number' && price > remaining) {
+          return bad(reply, 402, 'BUDGET', `Butuh ±${usdLabel(price)}, saldo OpenRouter ${usdLabel(remaining)}`);
+        }
+      }
       const job = await store.createJob({
+        ...(provider === 'openrouter' ? { provider, model: request.body!.model as string } : {}),
         prompt,
         // Studio queues stills or clips; character/keyframe jobs belong to stories only.
         kind: request.body?.kind === 'image' ? 'image' : 'video',
@@ -190,7 +217,13 @@ export async function registerFlowRoutes(server: FastifyInstance, options: FlowR
     const job = await store.getJob(request.params.id);
     if (!job || job.status !== 'done') return bad(reply, 404, 'NOT_FOUND', 'Clip not ready');
     const path = join(clipsDir, `${job.id}.${job.kind === 'video' ? 'mp4' : 'png'}`);
+    const query = request.query as Record<string, unknown> | undefined;
+    if (job.kind === 'video' && query?.w !== undefined) return bad(reply, 400, 'INVALID_INPUT', 'w is for image jobs only');
     try {
+      if (job.kind !== 'video') {
+        await stat(path);
+        return await sendImage(request, reply, path, media);
+      }
       const info = await stat(path);
       reply.header('Content-Type', sniffMediaType(path));
       reply.header('Content-Length', String(info.size));

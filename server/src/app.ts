@@ -13,7 +13,14 @@ import type { TextGenerator } from './stories/draft.js';
 import { assembleStory, imageSize, probeClip } from './stories/media.js';
 import { registerStoryRoutes } from './stories/routes.js';
 import { CoverService } from './stories/covers.js';
+import { MediaCache, type FfmpegRunner } from './media/images.js';
+import { registerStorageRoutes, serialCleanup } from './media/storage.js';
 import { StoryService, type StoryDeps } from './stories/service.js';
+import { openRouterBalance } from './providers/balance.js';
+import { OpenRouterCatalog } from './providers/catalog.js';
+import { registerProviderRoutes } from './providers/routes.js';
+import { registerQuotaRoutes } from './quota.js';
+import { OpenRouterWorker } from './providers/worker.js';
 
 export type AppOptions = {
   dataDir: string;
@@ -26,6 +33,18 @@ export type AppOptions = {
     generateText?: TextGenerator;
     /** Background reconcile interval; 0 disables (tests). Default 5 s. */
     reconcileMs?: number;
+  };
+  providers?: {
+    /** fetch used for every OpenRouter call (tests inject a fake; never a real key in tests). */
+    fetch?: typeof fetch;
+    /** OpenRouter worker interval; 0 disables. Default 5 s. */
+    workerMs?: number;
+  };
+  media?: {
+    /** ffmpeg used for thumbnails/posters (tests inject a counting runner). */
+    ffmpeg?: FfmpegRunner;
+    /** Storage janitor interval; 0 disables. Default daily (first run 10 min after start). */
+    cleanupMs?: number;
   };
 };
 
@@ -51,12 +70,21 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   }, { prefix: '/api' });
 
   const flowStore = new FlowStore(join(options.dataDir, 'flow'));
+  const media = new MediaCache({ dataDir: options.dataDir, ffmpeg: options.media?.ffmpeg });
+  const providerFetch = options.providers?.fetch ?? fetch;
+  const catalog = new OpenRouterCatalog(options.dataDir, { fetch: providerFetch });
   const stories = new StoryService({
     dataDir: options.dataDir,
     flow: flowStore,
     probe: options.stories?.probe ?? probeClip,
     assemble: options.stories?.assemble ?? assembleStory,
-    imageSize: options.stories?.imageSize ?? imageSize
+    imageSize: options.stories?.imageSize ?? imageSize,
+    openRouter: {
+      usdPerClip: async model => {
+        try { return (await catalog.find('video', model))?.usdPerClip ?? null; } catch { return null; }
+      },
+      balance: () => openRouterBalance(options.dataDir, { fetch: providerFetch })
+    }
   });
   await registerPublisherRoutes(server, {
     service: new PublisherService({ dataDir: options.dataDir, env }),
@@ -69,8 +97,20 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
     userAuthStore,
     dataDir: options.dataDir,
     store: flowStore,
-    bridgeToken: env.OPENCREATOR_FLOW_BRIDGE_TOKEN?.trim() || undefined
+    media,
+    bridgeToken: env.OPENCREATOR_FLOW_BRIDGE_TOKEN?.trim() || undefined,
+    openRouter: {
+      usdPerClip: async model => { try { return (await catalog.find('video', model))?.usdPerClip ?? null; } catch { return null; } },
+      balance: () => openRouterBalance(options.dataDir, { fetch: providerFetch })
+    }
   });
+  await registerProviderRoutes(server, { userAuthStore, dataDir: options.dataDir, flow: flowStore, fetch: providerFetch, catalog });
+  await registerQuotaRoutes(server, { userAuthStore, dataDir: options.dataDir, flow: flowStore, balance: () => openRouterBalance(options.dataDir, { fetch: providerFetch }) });
+  const workerMs = options.providers?.workerMs ?? 5000;
+  if (workerMs > 0) {
+    const stopWorker = new OpenRouterWorker({ dataDir: options.dataDir, store: flowStore, fetch: providerFetch, catalog }).start(workerMs);
+    server.addHook('onClose', async () => stopWorker());
+  }
 
   const generateText: TextGenerator = options.stories?.generateText ?? (async (system, prompt) => (await pollinationsText(
     fetch,
@@ -79,7 +119,7 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
     { timeoutMs: 120_000 }
   )).text);
   const covers = new CoverService({ dataDir: options.dataDir, flow: flowStore, webDist: options.webDist });
-  await registerStoryRoutes(server, { userAuthStore, stories, generateText, covers });
+  await registerStoryRoutes(server, { userAuthStore, stories, generateText, covers, media });
   const reconcileMs = options.stories?.reconcileMs ?? 5000;
   if (reconcileMs > 0) {
     let running = false;
@@ -90,6 +130,22 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
     }, reconcileMs);
     timer.unref();
     server.addHook('onClose', async () => clearInterval(timer));
+  }
+
+  const cleanup = serialCleanup(options.dataDir, { jobs: () => flowStore.listJobs(Number.MAX_SAFE_INTEGER) });
+  await registerStorageRoutes(server, { userAuthStore, dataDir: options.dataDir, cleanup });
+  const cleanupMs = options.media?.cleanupMs ?? 24 * 3_600_000;
+  if (cleanupMs > 0) {
+    const sweep = () => void cleanup().then(
+      r => { if (r.removed || r.linked) server.log.info(r, 'storage cleanup'); },
+      error => server.log.warn({ err: error }, 'storage cleanup failed')
+    );
+    // Deploys restart the process more often than daily: also sweep shortly after start.
+    const first = setTimeout(sweep, Math.min(cleanupMs, 10 * 60_000));
+    const daily = setInterval(sweep, cleanupMs);
+    first.unref();
+    daily.unref();
+    server.addHook('onClose', async () => { clearTimeout(first); clearInterval(daily); });
   }
 
   const webDist = options.webDist;

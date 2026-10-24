@@ -20,6 +20,7 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/
 import { Segmented } from '../../ui/controls.js';
 import { fmtDuration, moveShot, type Board } from './model.js';
 import { media, useProject } from './useProject.js';
+import { sized } from '../../lib/media.js';
 import { SequencePlayer } from './Player.js';
 import {
   boardOrder, formatSeconds, nudgeScene, nudgeShot, rulerTicks, sceneKey, sequenceClips, shotKey, timelineDrop, timelineLayout,
@@ -86,7 +87,7 @@ function ClipItem(props: { clip: TimelineClip; pps: number; thumb?: string; sele
         style={{ width, transform: CSS.Translate.toString(transform), transition }}
         className={cn('relative flex h-12 shrink-0 overflow-hidden rounded-[4px] border border-border/70 bg-muted text-left outline-none focus-visible:ring-1 focus-visible:ring-ring',
           props.playing && 'border-(--brand)', props.selected && 'ring-1 ring-foreground', isDragging && 'z-30 opacity-80 shadow-lg')}>
-        {props.thumb && width >= 28 && <img src={props.thumb} alt={`Keyframe shot ${clip.index + 1}`} loading="lazy" className="h-full w-8 shrink-0 object-cover opacity-90" />}
+        {props.thumb && width >= 28 && <img src={sized(props.thumb, 32)} width={32} height={48} alt={`Keyframe shot ${clip.index + 1}`} loading="lazy" decoding="async" className="h-full w-8 shrink-0 object-cover opacity-90" />}
         <span className="flex min-w-0 flex-1 flex-col justify-center px-1 leading-tight">
           <span className="text-[11px] font-medium tabular-nums">{clip.index + 1}</span>
           {width >= 72 && <span className="truncate text-[10px] text-muted-foreground">{clip.shotId}</span>}

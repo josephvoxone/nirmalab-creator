@@ -252,7 +252,7 @@ describe('StudioPage — hasil', () => {
     const video = screen.getByTestId(`clip-${doneJob.id}`);
     expect(video.getAttribute('src')).toBe(`${BASE}/api/flow/jobs/${doneJob.id}/file`);
     const still = screen.getByRole('img', { name: /mercusuar/ });
-    expect(still.getAttribute('src')).toBe(`${BASE}/api/flow/jobs/${imageJob.id}/file`);
+    expect(still.getAttribute('src')).toBe(`${BASE}/api/flow/jobs/${imageJob.id}/file?w=480`);
     expect(screen.getAllByText('Selesai').length).toBe(2);
   });
 

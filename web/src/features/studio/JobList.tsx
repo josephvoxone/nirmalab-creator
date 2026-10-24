@@ -1,5 +1,6 @@
 import { Clapperboard, RotateCcw } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { sized } from '../../lib/media.js';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -62,7 +63,7 @@ export function JobList(props: {
       {props.jobs.map(job => (
         <li key={job.id} aria-label={job.prompt} className="glass-panel flex flex-col overflow-hidden rounded-lg">
           {job.status === 'done' && job.kind === 'image' ? (
-            <img src={props.fileUrl(job.id)} alt={job.prompt} loading="lazy" className={cn('w-full bg-muted object-cover', job.aspect === '9:16' ? 'aspect-[9/16] max-h-80' : 'aspect-video')} />
+            <img src={sized(props.fileUrl(job.id), 360)} alt={job.prompt} loading="lazy" decoding="async" className={cn('w-full bg-muted object-cover', job.aspect === '9:16' ? 'aspect-[9/16] max-h-80' : 'aspect-video')} />
           ) : job.status === 'done' ? (
             <video data-testid={`clip-${job.id}`} src={props.fileUrl(job.id)} controls preload="metadata"
               className={cn('w-full bg-black object-contain', job.aspect === '9:16' ? 'aspect-[9/16] max-h-80' : 'aspect-video')} />

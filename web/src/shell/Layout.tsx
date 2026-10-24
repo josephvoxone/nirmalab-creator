@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import {
-  BookOpenText, Clapperboard, Gauge, LayoutGrid, LogOut, PanelLeft, Search, Send, Server, Settings, SquarePen, Users, Wand2, type LucideIcon
+  BookOpenText, Clapperboard, Gauge, LayoutGrid, LogOut, PanelLeft, Search, Send, Cpu, Server, Settings, SquarePen, Users, Wand2, type LucideIcon
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
@@ -10,9 +10,9 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { Kbd } from '@/components/ui/kbd';
 import { Skeleton } from '@/components/ui/skeleton';
-import { requestJson } from '../lib/api.js';
 import { useSession } from '../lib/session.js';
 import { useHistory } from './history.js';
+import { SidebarQuota } from './Quota.js';
 import { STATUS_LABEL, isActive, type Story } from '../features/stories/storiesClient.js';
 
 type NavItem = { to: string; label: string; hint?: string; icon: LucideIcon };
@@ -94,43 +94,6 @@ function History(props: { onPick?: () => void }) {
   );
 }
 
-type BridgeInfo = { online: boolean; credits?: number; accounts: number } | 'error' | undefined;
-
-/** Real bridge/Flow state, so "why is nothing rendering?" has an answer on every page. */
-function BridgeStatus() {
-  const { user, fetchImpl } = useSession();
-  const navigate = useNavigate();
-  const location = useLocation();
-  const [info, setInfo] = useState<BridgeInfo>();
-  useEffect(() => {
-    if (!user.isAdmin) return;
-    let alive = true;
-    const load = () => requestJson<{ accounts: Array<{ credits?: number; enabled?: boolean }>; bridge: { online: boolean } }>(fetchImpl, '/api/flow/accounts')
-      .then(r => {
-        const accounts = Array.isArray(r?.accounts) ? r.accounts : [];
-        if (alive) setInfo({
-          online: !!r?.bridge?.online,
-          accounts: accounts.length,
-          ...(accounts.some(a => typeof a.credits === 'number') ? { credits: accounts.filter(a => a.enabled !== false).reduce((t, a) => t + (a.credits ?? 0), 0) } : {})
-        });
-      }, () => alive && setInfo('error'));
-    void load();
-    const timer = setInterval(load, 30_000);
-    return () => { alive = false; clearInterval(timer); };
-  }, [user.isAdmin, fetchImpl]);
-  if (!user.isAdmin || info === undefined) return null;
-  const text = info === 'error' ? 'Status bridge tidak terbaca'
-    : !info.online ? 'Bridge offline · render menunggu Mac'
-    : `Bridge online${info.credits !== undefined ? ` · ${info.credits} kredit` : ''}`;
-  const dot = info === 'error' ? 'bg-muted-foreground' : info.online ? 'bg-(--success)' : 'bg-destructive';
-  return (
-    <button type="button" role="status" aria-label={`Bridge: ${text}`} onClick={() => navigate('/pengaturan/flow', { state: { background: location } })}
-      className={cn(rowClass, 'h-7 text-xs text-muted-foreground')}>
-      <i aria-hidden="true" className={cn('ml-1 size-1.5 shrink-0 rounded-full', dot)} /> <span className="truncate">{text}</span>
-    </button>
-  );
-}
-
 function AccountMenu() {
   const { user, signOut } = useSession();
   const navigate = useNavigate();
@@ -159,6 +122,7 @@ function AccountMenu() {
               <DropdownMenuItem onClick={() => open('anggota')}><Users /> Anggota &amp; undangan</DropdownMenuItem>
               <DropdownMenuItem onClick={() => open('penggunaan')}><Gauge /> Penggunaan</DropdownMenuItem>
               <DropdownMenuItem onClick={() => open('flow')}><Server /> Akun Flow</DropdownMenuItem>
+              <DropdownMenuItem onClick={() => open('provider')}><Cpu /> Provider &amp; model</DropdownMenuItem>
             </DropdownMenuGroup>
           </>
         )}
@@ -187,7 +151,7 @@ function SearchDialog(props: { open: boolean; onOpenChange: (open: boolean) => v
         </label>
         <ul className="max-h-80 overflow-y-auto p-1.5">
           {found.length === 0 ? (
-            <li className="px-3 py-6 text-center text-sm text-muted-foreground">{stories ? 'Tidak ada cerita yang cocok.' : 'Memuat…'}</li>
+            <li className="px-3 py-6 text-center text-sm text-muted-foreground">{stories ? 'Tidak ada cerita yang cocok.' : 'Memuat daftar cerita…'}</li>
           ) : found.map(s => (
             <li key={s.id}>
               <NavLink to={`/cerita/${s.id}`} onClick={() => props.onOpenChange(false)} className={cn(rowClass, 'h-9')}>
@@ -205,7 +169,12 @@ function SearchDialog(props: { open: boolean; onOpenChange: (open: boolean) => v
 
 const wide = () => typeof window === 'undefined' || typeof window.matchMedia !== 'function' || window.matchMedia('(min-width: 48rem)').matches;
 
-export function Layout(props: { title: string; actions?: ReactNode; children: ReactNode; bare?: boolean }) {
+/**
+ * The app shell. `pending` = the session is still being checked (hard refresh): the sidebar
+ * renders right away with skeletons where the account and its data go, so the page never
+ * flashes a bare full-screen loader.
+ */
+export function Layout(props: { title: string; actions?: ReactNode; children: ReactNode; bare?: boolean; pending?: boolean }) {
   const [open, setOpen] = useState(wide);
   const [searching, setSearching] = useState(false);
   const location = useLocation();
@@ -244,8 +213,17 @@ export function Layout(props: { title: string; actions?: ReactNode; children: Re
             <History onPick={pick} />
           </nav>
           <div className="flex flex-col gap-0.5 border-t px-1.5 py-1.5">
-            <BridgeStatus />
-            <AccountMenu />
+            {props.pending ? (
+              <div role="status" aria-busy="true" aria-label="Memuat akun" className="flex h-11 items-center gap-2.5 px-2">
+                <Skeleton className="size-7 shrink-0 rounded-full" />
+                <span className="flex flex-1 flex-col gap-1.5"><Skeleton className="h-3 w-3/5" /><Skeleton className="h-2.5 w-2/5" /></span>
+              </div>
+            ) : (
+              <>
+                <SidebarQuota />
+                <AccountMenu />
+              </>
+            )}
           </div>
         </aside>
       )}

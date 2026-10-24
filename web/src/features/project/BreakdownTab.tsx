@@ -11,8 +11,12 @@ import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle
 } from '@/components/ui/alert-dialog';
 import { useSession } from '../../lib/session.js';
+import { sized } from '../../lib/media.js';
 import { inputClass, textareaClass } from '../../ui/controls.js';
-import { storiesApi } from '../stories/storiesClient.js';
+import { CREDITS_PER_SHOT, storiesApi } from '../stories/storiesClient.js';
+import { FLOW, fmtUsd, isOpenRouter, type Engine, type EngineSet, type MediaKind } from '../providers/providersClient.js';
+import { estimateUsd, openRouterOption, useEngines, type EngineCatalog } from '../providers/useEngines.js';
+import { EngineChoice } from '../providers/EnginePicker.js';
 import { DEFAULT_LOOK, useCatalog, type Look } from '../stories/catalog.js';
 import { LookChips } from '../stories/LookChips.js';
 import '../stories/studio.css';
@@ -105,6 +109,55 @@ function AddForm(props: { kind: 'karakter' | 'lokasi'; onAdd: (name: string, loo
   );
 }
 
+function engineOf(board: Board): EngineSet {
+  const e = board.engine as EngineSet | undefined;
+  return e && typeof e === 'object' ? e : {};
+}
+
+/** "4 klip × ±$0,30 = ±$1,20" (OpenRouter) or "4 klip × 10 kredit Flow = ±40 kredit". */
+function estimateLine(kind: MediaKind, engine: Engine, catalog: EngineCatalog, count: number): string {
+  const unit = kind === 'video' ? 'klip' : 'gambar';
+  if (!isOpenRouter(engine)) return kind === 'video' ? `${count} klip × ${CREDITS_PER_SHOT} kredit Flow = ±${count * CREDITS_PER_SHOT} kredit` : `${count} gambar · gratis di Flow`;
+  const model = openRouterOption(catalog, kind, engine).model;
+  if (!model && catalog.status === 'loading') return `${count} ${unit} · memuat harga OpenRouter…`;
+  const total = estimateUsd(kind, model, count);
+  const each = kind === 'video' ? model?.usdPerClip : model?.usdPerImage;
+  return total === null || typeof each !== 'number' ? `${count} ${unit} × harga OpenRouter belum diketahui` : `${count} ${unit} × ±${fmtUsd(each)} = ±${fmtUsd(total)}`;
+}
+
+function EngineSection(props: { board: Board; locked: boolean; catalog: EngineCatalog; onSave: (engine: EngineSet) => void }) {
+  const { board } = props;
+  const engine = engineOf(board);
+  const image = engine.image ?? FLOW;
+  const video = engine.video ?? FLOW;
+  const clips = board.shots.length;
+  const images = clips + Object.keys(board.characters ?? {}).length;
+  const set = (kind: MediaKind, e: Engine) => props.onSave({ ...engine, [kind]: e });
+  return (
+    <Section id="bd-engine" title="Mesin produksi" hint="Google Flow gratis lewat pool akun; OpenRouter dibayar per pemakaian. Berlaku untuk gambar dan klip yang dibuat berikutnya.">
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div className="flex min-w-0 flex-col gap-1">
+          {board.mode === 'cepat' ? (
+            <>
+              <span className="text-[12px] text-muted-foreground">Mesin gambar</span>
+              <p className="text-[12.5px] text-muted-foreground">Tidak dipakai di mode Cepat — shot langsung dibuat dari teks ke video.</p>
+            </>
+          ) : (
+            <>
+              <EngineChoice label="Mesin gambar" showLabel kind="image" catalog={props.catalog} value={image} disabled={props.locked} onChange={e => set('image', e)} className="w-full" />
+              <span className="text-[11.5px] text-muted-foreground tabular-nums">Lembar karakter + keyframe: {estimateLine('image', image, props.catalog, images)}</span>
+            </>
+          )}
+        </div>
+        <div className="flex min-w-0 flex-col gap-1">
+          <EngineChoice label="Mesin video" showLabel kind="video" catalog={props.catalog} value={video} disabled={props.locked} onChange={e => set('video', e)} className="w-full" />
+          <span className="text-[11.5px] text-muted-foreground tabular-nums">{estimateLine('video', video, props.catalog, clips)}</span>
+        </div>
+      </div>
+    </Section>
+  );
+}
+
 export function BreakdownTab() {
   const p = useProject();
   const { fetchImpl } = useSession();
@@ -113,6 +166,7 @@ export function BreakdownTab() {
   const { catalog } = useCatalog(load, 0);
   const [adding, setAdding] = useState<'karakter' | 'lokasi'>();
   const [doomed, setDoomed] = useState<string>();
+  const engines = useEngines(fetchImpl);
   const { board, story } = p;
   if (!board || !story) return null;
   const locked = ['casting', 'framing', 'rendering', 'assembling'].includes(story.status);
@@ -159,7 +213,7 @@ export function BreakdownTab() {
                 const st = castState.get(c.token);
                 return (
                   <Entry key={c.token} name={c.name} look={c.look} icon={<UserRound />} locked={locked}
-                    image={st?.status === 'done' ? <img src={media.cast(p.id, c.token, st.mediaId ?? '')} alt="" loading="lazy" className="size-full object-cover" /> : undefined}
+                    image={st?.status === 'done' ? <img src={sized(media.cast(p.id, c.token, st.mediaId ?? ''), 64 * 2)} width={64} height={64} alt="" loading="lazy" decoding="async" className="size-full object-cover" /> : undefined}
                     status={st ? <Badge variant="secondary" className="h-4.5 px-1.5 text-[10.5px]">{st.status === 'done' ? 'Lembar siap' : st.status === 'failed' ? 'Gagal' : st.status === 'queued' ? 'Dibuat…' : 'Belum dibuat'}</Badge> : undefined}
                     meta={c.shots.length ? `${c.shots.length} shot · ${c.scenes.map(s => s.title).join(', ')} · token ${c.token}` : `Belum muncul di shot mana pun · token ${c.token}`}
                     deleteBlocked={c.shots.length ? `Dipakai di ${c.shots.length} shot — hapus TOKEN dari prompt dulu` : undefined}
@@ -194,6 +248,8 @@ export function BreakdownTab() {
         ) : <p className="text-[12px] text-muted-foreground">Memuat pilihan gaya…</p>}
         {board.style && <p className="font-mono text-[11.5px] leading-relaxed text-muted-foreground">{board.style}</p>}
       </Section>
+
+      <EngineSection board={board} locked={locked} catalog={engines} onSave={engine => void p.save({ ...board, engine })} />
 
       <AlertDialog open={!!doomed} onOpenChange={o => { if (!o) setDoomed(undefined); }}>
         <AlertDialogContent>

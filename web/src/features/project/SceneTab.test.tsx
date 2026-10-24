@@ -145,9 +145,10 @@ describe('Scene tab — scene board header', () => {
     await userEvent.click(within(board()).getByRole('button', { name: /preview scene/i }));
     const player = await screen.findByRole('group', { name: 'Preview scene Menunggu' });
     expect(player.querySelector('video')).toHaveAttribute('src', `/api/stories/${ID}/shots/00-pembuka/video?v=job0`);
+    expect(player.querySelector('video')).toHaveAttribute('poster', `/api/stories/${ID}/shots/00-pembuka/poster?v=job0&w=480`);
     expect(player.querySelector('div[style]')).toHaveStyle({ height: '300px' });
     await userEvent.click(within(player).getByRole('button', { name: /shot berikutnya/i }));
-    expect(within(player).getByRole('img')).toHaveAttribute('src', `/api/stories/${ID}/shots/01-pagar/frame?v=m1`);
+    expect(within(player).getByRole('img')).toHaveAttribute('src', `/api/stories/${ID}/shots/01-pagar/frame?v=m1&w=480`);
   });
 
   it('splits a scene from a shot menu, and deletes a scene after confirming (shots join the previous scene)', async () => {
@@ -205,12 +206,52 @@ describe('Scene tab — shot cards', () => {
     await open(api);
     const first = card('00-pembuka');
     const img = within(first).getByRole('img');
-    expect(img).toHaveAttribute('src', `/api/stories/${ID}/shots/00-pembuka/frame?v=m0`);
+    // sized for the 96 px box: 160 px webp, 320 px on 2x screens; no layout shift, no eager load
+    expect(img).toHaveAttribute('src', `/api/stories/${ID}/shots/00-pembuka/frame?v=m0&w=160`);
+    expect(img).toHaveAttribute('srcset', `/api/stories/${ID}/shots/00-pembuka/frame?v=m0&w=160 1x, /api/stories/${ID}/shots/00-pembuka/frame?v=m0&w=320 2x`);
+    expect(img).toHaveAttribute('width', '96');
+    expect(img).toHaveAttribute('height', '170');
+    expect(img).toHaveAttribute('loading', 'lazy');
+    expect(img).toHaveAttribute('decoding', 'async');
     expect(img.parentElement).toHaveStyle({ width: '96px', height: '170px' });
+    const avatar = within(within(board()).getByRole('list', { name: /pemeran di scene ini/i })).getAllByRole('listitem')[0]!.querySelector('img')!;
+    expect(avatar.getAttribute('src')).toMatch(/\/cast\/JINGGA\/image\?(v=[^&]*&)?w=160$/);
+    expect(avatar).toHaveAttribute('width', '20');
+    expect(avatar).toHaveAttribute('decoding', 'async');
     expect(first).toHaveTextContent('Keyframe siap');
     expect(first).toHaveTextContent(/tanpa narasi/i);
     expect(card('01-pagar')).toHaveTextContent('Jingga menunggu setiap sore.');
     expect(card('01-pagar')).toHaveTextContent('02');
+  });
+
+  it('a shot with a done clip plays inline from its card (muted, sound toggle) without opening the editor', async () => {
+    const story = storyFor(BOARD, ['done', 'done', 'done', 'done'], ['done', 'pending', 'pending', 'pending']);
+    story.shots[0] = { ...story.shots[0]!, jobId: 'job0' };
+    const api = fakeProjectApi({ story });
+    await open(api);
+    expect(within(card('01-pagar')).queryByRole('button', { name: /putar shot/i })).toBeNull();
+    expect(card('00-pembuka').querySelector('video')).toBeNull();
+    await userEvent.click(within(card('00-pembuka')).getByRole('button', { name: 'Putar shot 1' }));
+    const video = card('00-pembuka').querySelector('video')!;
+    expect(video).toHaveAttribute('src', `/api/stories/${ID}/shots/00-pembuka/video?v=job0`);
+    expect(video).toHaveAttribute('autoplay');
+    expect(video.muted).toBe(true);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    await userEvent.click(within(card('00-pembuka')).getByRole('button', { name: 'Nyalakan suara shot 1' }));
+    expect(video.muted).toBe(false);
+    expect(within(card('00-pembuka')).getByRole('button', { name: 'Matikan suara shot 1' })).toBeInTheDocument();
+    await userEvent.click(within(card('00-pembuka')).getByRole('button', { name: 'Hentikan shot 1' }));
+    expect(card('00-pembuka').querySelector('video')).toBeNull();
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('a done clip without a keyframe (cepat) shows its poster, not a black video', async () => {
+    const story = storyFor(BOARD, ['pending', 'pending', 'pending', 'pending'], ['done', 'pending', 'pending', 'pending'], { mode: 'cepat' });
+    story.shots[0] = { ...story.shots[0]!, frame: undefined, jobId: 'job0' };
+    const api = fakeProjectApi({ story });
+    await open(api);
+    expect(card('00-pembuka').querySelector('video')).toBeNull();
+    expect(card('00-pembuka').querySelector('img')).toHaveAttribute('src', `/api/stories/${ID}/shots/00-pembuka/poster?v=job0&w=160`);
   });
 
   it('16:9 thumbnails are landscape; undone frames show a placeholder', async () => {

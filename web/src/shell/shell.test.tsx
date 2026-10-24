@@ -10,7 +10,7 @@ function app(opts: { user?: typeof admin; stories?: unknown; storiesFail?: () =>
     if (url === '/api/auth/me') return ok({ user });
     if (url === '/api/stories') return opts.storiesFail?.() ? fail(500, 'boom') : ok({ stories: opts.stories ?? STORIES });
     if (url === '/api/stories/catalog') return ok({ catalog: CATALOG, covers: {} });
-    if (url === '/api/flow/accounts') return ok({ accounts: [{ credits: 40 }], bridge: { online: true } });
+    if (url === '/api/quota') return ok({ flow: { credits: 40, usedToday: 10, capToday: 50, accounts: 1, online: true }, openrouter: { configured: false, remainingUsd: null, usedUsd: null }, storage: { usedBytes: 1024 ** 3, diskFreeBytes: null } });
     return undefined;
   });
   render(<App fetchImpl={fetchImpl} initialPath={opts.path ?? '/'} />);
@@ -20,6 +20,7 @@ function app(opts: { user?: typeof admin; stories?: unknown; storiesFail?: () =>
 describe('ChatGPT-style shell', () => {
   it('has a sidebar with a new-video action, the tools, and recent stories as history', async () => {
     app();
+    // found while the session check may still be pending: the same sidebar must stay mounted
     const nav = await screen.findByRole('navigation', { name: /menu utama/i });
     expect(within(nav).getByRole('link', { name: /buat baru/i })).toHaveAttribute('href', '/');
     for (const label of ['Template', 'Proyek', 'Studio', 'Naskah & suara', 'Publish']) expect(within(nav).getByRole('link', { name: new RegExp(label, 'i') })).toBeInTheDocument();
@@ -76,8 +77,13 @@ describe('ChatGPT-style shell', () => {
     expect(within(menu).queryByRole('menuitem', { name: /penggunaan/i })).not.toBeInTheDocument();
   });
 
-  it('shows the live bridge state to admins', async () => {
+  it('shows the quota (bridge state + credits) above the account menu; admins open Akun Flow from it', async () => {
     app();
-    await waitFor(() => expect(screen.getByRole('status', { name: /bridge/i })).toHaveTextContent(/online · 40 kredit/i));
+    const quota = await screen.findByRole('region', { name: /kuota/i });
+    await waitFor(() => expect(quota).toHaveTextContent(/flow online.*40 kredit/i));
+    expect(quota.compareDocumentPosition(screen.getByRole('button', { name: /^akun$/i })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.queryByRole('status', { name: /bridge/i })).toBeNull();
+    await userEvent.click(within(quota).getByRole('button', { name: /flow online/i }));
+    expect(await screen.findByRole('dialog')).toBeInTheDocument();
   });
 });

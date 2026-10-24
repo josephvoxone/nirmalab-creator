@@ -1,15 +1,16 @@
 import { useCallback, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { RefreshCw, Search } from 'lucide-react';
+import { ImagePlus, MoreHorizontal, RefreshCw, Search } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { useSession } from '../../lib/session.js';
 import { storiesApi } from '../stories/storiesClient.js';
 import { useCatalog } from '../stories/catalog.js';
 import { errorText } from '../settings/settingsClient.js';
-import { CATEGORIES, TemplateCover, type CatTemplate } from './shared.js';
+import { AspectMark, CATEGORIES, TemplateCover, type CatTemplate } from './shared.js';
 
 const MODE_LABEL = { konsisten: 'Konsisten', cepat: 'Cepat' } as const;
 
@@ -87,23 +88,28 @@ export default function TemplatesPage() {
       ) : (
         <ul aria-label="Daftar template" className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
           {shown.map(t => (
-            <li key={t.id} aria-label={t.name} className="group glass-panel flex flex-col overflow-hidden rounded-lg">
-              <TemplateCover template={t} catalog={catalog} state={covers[t.id]} className="aspect-[4/5] w-full" />
+            <li key={t.id} aria-label={t.name} className="group glass-panel relative flex flex-col overflow-hidden rounded-lg">
+              <TemplateCover template={t} catalog={catalog} state={covers[t.id]} width={240} height={300} className="aspect-[4/5] w-full" />
+              {user.isAdmin && (
+                <DropdownMenu>
+                  <DropdownMenuTrigger aria-label={`Menu template ${t.name}`}
+                    render={<Button type="button" size="icon-xs" variant="glass" className="absolute top-1.5 right-1.5 opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 aria-expanded:opacity-100 max-md:opacity-100" />}>
+                    <MoreHorizontal />
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-44">
+                    <DropdownMenuItem disabled={busyCover === t.id || !!covers[t.id]?.pending} onClick={() => void regenerate(t.id)} title="Lewat bridge, gratis">
+                      <ImagePlus /> Buat ulang cover
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              )}
               <div className="flex flex-1 flex-col gap-1.5 p-2.5">
-                <div className="flex items-center gap-1.5">
-                  <b className="truncate text-[13px] font-medium">{t.name}</b>
-                  <Badge variant="secondary" className="ml-auto h-4.5 px-1.5 text-[10.5px]">{MODE_LABEL[t.mode] ?? t.mode}</Badge>
-                </div>
+                <b className="truncate text-[13px] font-medium">{t.name}</b>
                 <p className="line-clamp-2 text-[12px] leading-snug text-muted-foreground">{t.tagline}</p>
-                <div className="mt-auto flex items-center gap-1 pt-1">
+                <div className="mt-auto flex items-center gap-2 pt-1">
+                  <Badge variant="secondary" className="mr-auto h-4.5 px-1.5 text-[10.5px]">{MODE_LABEL[t.mode] ?? t.mode}</Badge>
+                  <AspectMark aspect={t.aspect} />
                   <Button size="sm" variant="glass" data-strong="" onClick={() => navigate(`/?template=${t.id}`)} aria-label={`Pakai ${t.name}`}>Pakai</Button>
-                  <span className="text-[11px] text-muted-foreground">{t.aspect}</span>
-                  {user.isAdmin && (
-                    <Button size="icon-sm" variant="ghost" className="ml-auto" aria-label={`Buat ulang cover ${t.name}`} title="Buat ulang cover lewat bridge (gratis)"
-                      disabled={busyCover === t.id || covers[t.id]?.pending} onClick={() => void regenerate(t.id)}>
-                      <RefreshCw className={cn((busyCover === t.id || covers[t.id]?.pending) && 'animate-spin')} />
-                    </Button>
-                  )}
                 </div>
               </div>
             </li>
