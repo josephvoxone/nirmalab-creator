@@ -469,7 +469,7 @@ export function StudioPage(props: { baseUrl: string; fetchImpl: FlowFetch; techn
               <span className={`studio-pill ${bridge.online ? 'is-done' : 'is-failed'}`}>{bridge.online ? 'Online' : 'Offline'}</span>
             </header>
             <p className="studio-muted">{bridge.bridgeId ? `${bridge.bridgeId} · terakhir ${relative(bridge.lastSeenMs)}` : 'Belum pernah terhubung.'}</p>
-            <p className="studio-muted">Bridge dan Chrome Flow jalan otomatis di Mac (LaunchAgent): bridge hidup terus, Chrome Flow dibuka ulang tiap 5 menit bila mati. Job hanya diambil saat Chrome Flow siap.</p>
+            <p className="studio-muted">Bridge dan Chrome Flow jalan otomatis di Mac (LaunchAgent): bridge hidup terus, Chrome Flow dibuka ulang tiap 1 menit bila mati. Job hanya diambil saat Chrome Flow siap.</p>
             <p className="studio-muted">Akun Flow baru: buka Chrome khusus lalu login sekali, daftarkan dengan profil <code>cdp:http://127.0.0.1:&lt;port&gt;</code>.</p>
             <pre className="studio-code">cd ~/tools/nirmalab-creator/bridge{'\n'}./flow-chrome.sh flow-02 9334</pre>
           </section>
