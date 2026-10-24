@@ -23,8 +23,21 @@ export type FlowAccount = {
 
 export type FlowJobStatus = 'queued' | 'running' | 'done' | 'failed';
 
+export type FlowJobKind = 'video' | 'image' | 'character';
+export type FlowCharacterRef = { name: string; look: string };
+export type FlowJobResult = { mediaId?: string; caption?: string; flowCharacterId?: string };
+
 export type FlowJob = {
   id: string;
+  /** video = clip, image = keyframe still, character = reference sheet + Flow character. */
+  kind: FlowJobKind;
+  /** Jobs of one group (a story) run on one account: Flow characters/frames live in that account's project. */
+  group?: string;
+  /** Characters to ensure in the project and attach as ingredients (consistency). */
+  characters?: FlowCharacterRef[];
+  /** Keyframe to animate (image-to-video): a media in the same Flow project. */
+  startFrame?: { mediaId: string; caption: string };
+  result?: FlowJobResult;
   prompt: string;
   technique?: string;
   aspect: '9:16' | '16:9';
@@ -48,6 +61,8 @@ type FlowState = {
   accounts: FlowAccount[];
   jobs: FlowJob[];
   bridge?: FlowBridgeState;
+  /** group -> account that owns it */
+  groupAccounts?: Record<string, string>;
 };
 
 export type FlowBridgeState = {
@@ -90,8 +105,9 @@ export class FlowStore {
       return {
         version: 1,
         accounts: Array.isArray(parsed.accounts) ? parsed.accounts : [],
-        jobs: Array.isArray(parsed.jobs) ? parsed.jobs : [],
-        ...(parsed.bridge === undefined ? {} : { bridge: parsed.bridge })
+        jobs: Array.isArray(parsed.jobs) ? parsed.jobs.map(j => ({ ...j, kind: j.kind ?? 'video' })) : [],
+        ...(parsed.bridge === undefined ? {} : { bridge: parsed.bridge }),
+        ...(parsed.groupAccounts === undefined ? {} : { groupAccounts: parsed.groupAccounts })
       };
     } catch {
       return { ...EMPTY, accounts: [], jobs: [] };
@@ -202,6 +218,10 @@ export class FlowStore {
     aspect?: '9:16' | '16:9';
     durationSec?: number;
     maxAttempts?: number;
+    kind?: FlowJobKind;
+    group?: string;
+    characters?: FlowCharacterRef[];
+    startFrame?: { mediaId: string; caption: string };
   }): Promise<FlowJob> {
     return this.serialize(async () => {
       const state = await this.read();
@@ -209,6 +229,10 @@ export class FlowStore {
       if (!prompt) throw new Error('Prompt is required');
       const job: FlowJob = {
         id: newId('job'),
+        kind: input.kind ?? 'video',
+        ...(input.group ? { group: input.group } : {}),
+        ...(input.characters?.length ? { characters: input.characters.slice(0, 6).map(c => ({ name: c.name.slice(0, 40), look: c.look.slice(0, 600) })) } : {}),
+        ...(input.startFrame ? { startFrame: input.startFrame } : {}),
         prompt: prompt.slice(0, 4000),
         aspect: input.aspect ?? '9:16',
         durationSec: Math.min(Math.max(Math.round(input.durationSec ?? 8), 4), 10),
@@ -252,13 +276,18 @@ export class FlowStore {
         }
       }
       const usedToday = (a: FlowAccount) => (a.dayStamp === day ? a.creditsUsedToday : 0);
-      const account = state.accounts
+      const ready = state.accounts
         .map(a => this.normaliseAccount(a))
         .filter(a => a.status === 'ready')
-        .sort((a, b) => usedToday(a) - usedToday(b) || (a.lastUsedAtMs ?? 0) - (b.lastUsedAtMs ?? 0))[0];
-      const job = account === undefined ? undefined : state.jobs
-        .filter(j => j.status === 'queued')
-        .sort((a, b) => a.createdAtMs - b.createdAtMs)[0];
+        .sort((a, b) => usedToday(a) - usedToday(b) || (a.lastUsedAtMs ?? 0) - (b.lastUsedAtMs ?? 0));
+      const pins = state.groupAccounts ?? {};
+      let account: FlowAccount | undefined;
+      let job: FlowJob | undefined;
+      for (const candidate of state.jobs.filter(j => j.status === 'queued').sort((a, b) => a.createdAtMs - b.createdAtMs)) {
+        const pinned = candidate.group ? pins[candidate.group] : undefined;
+        const pick = pinned && state.accounts.some(a => a.id === pinned) ? ready.find(a => a.id === pinned) : ready[0];
+        if (pick) { account = pick; job = candidate; break; }
+      }
       if (!account || !job) {
         if (changed) await this.write(state);
         return undefined;
@@ -266,6 +295,9 @@ export class FlowStore {
       job.status = 'running';
       job.bridgeId = bridgeId;
       job.accountId = account.id;
+      if (job.group && !(state.groupAccounts ?? {})[job.group]) {
+        state.groupAccounts = { ...(state.groupAccounts ?? {}), [job.group]: account.id };
+      }
       job.startedAtMs = now;
       const stored = state.accounts.find(a => a.id === account.id);
       if (stored) {
@@ -280,7 +312,7 @@ export class FlowStore {
 
   async completeJob(
     id: string,
-    result: { filePath: string; bytes?: number; provider?: string }
+    result: { filePath: string; bytes?: number; provider?: string; result?: FlowJobResult }
   ): Promise<FlowJob | undefined> {
     return this.serialize(async () => {
       const state = await this.read();
@@ -290,6 +322,7 @@ export class FlowStore {
       job.resultPath = result.filePath;
       job.bytes = result.bytes;
       job.provider = result.provider ?? 'flow';
+      if (result.result) job.result = result.result;
       job.finishedAtMs = Date.now();
       await this.write(state);
       return job;

@@ -15,11 +15,16 @@ export type Shot = {
   transition?: string;
 };
 
+export type CharacterSpec = string | { name: string; look: string };
+export type CastMember = { token: string; name: string; look: string };
+
 export type Storyboard = {
   title: string;
   slug?: string;
+  /** konsisten = character sheets + approved keyframes animated (default for new stories); cepat = text-to-video per shot. */
+  mode?: 'konsisten' | 'cepat';
   aspect?: '9:16' | '16:9';
-  characters?: Record<string, string>;
+  characters?: Record<string, CharacterSpec>;
   style?: string;
   narrator?: string;
   audio?: string;
@@ -41,11 +46,51 @@ export function narrationWords(text: string | undefined): number {
   return (text ?? '').trim().split(/\s+/).filter(Boolean).length;
 }
 
-export function buildShotPrompt(board: Storyboard, shot: Shot): string {
-  let body = shot.prompt;
-  for (const [token, descriptor] of Object.entries(board.characters ?? {})) {
-    body = body.replace(new RegExp(`\\b${token}\\b`, 'g'), descriptor);
+const titleCase = (token: string) => token.toLowerCase().split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+
+function member(token: string, spec: CharacterSpec): CastMember {
+  return typeof spec === 'string' ? { token, name: titleCase(token), look: spec } : { token, name: spec.name || titleCase(token), look: spec.look };
+}
+
+const tokenRe = (token: string) => new RegExp(`\\b${token}\\b`, 'g');
+
+/** Characters that appear in at least one shot. */
+export function castOf(board: Storyboard): CastMember[] {
+  return Object.entries(board.characters ?? {})
+    .map(([token, spec]) => member(token, spec))
+    .filter(c => board.shots.some(s => !s.reuse && tokenRe(c.token).test(s.prompt)));
+}
+
+export function shotCast(board: Storyboard, shot: Shot): CastMember[] {
+  return castOf(board).filter(c => tokenRe(c.token).test(shot.prompt));
+}
+
+/** Replace tokens with display names (konsisten: the look comes from the attached reference) or full descriptors (cepat). */
+function expand(board: Storyboard, text: string, useNames: boolean): string {
+  let out = text;
+  for (const [token, spec] of Object.entries(board.characters ?? {})) {
+    const m = member(token, spec);
+    out = out.replace(tokenRe(token), useNames ? m.name : m.look);
   }
+  return out;
+}
+
+export function characterSheetPrompt(c: CastMember, board: Storyboard): string {
+  return [
+    `Full body character reference sheet of ${c.name} on a plain warm white background, front, side and back views, same outfit in every view, no text: ${c.look}.`,
+    board.style
+  ].filter(Boolean).join(' ');
+}
+
+/** Still keyframe for a shot: composition + characters by name; their look comes from the attached character references. */
+export function framePrompt(board: Storyboard, shot: Shot): string {
+  const names = shotCast(board, shot).map(c => c.name);
+  const keep = names.length ? ` Keep ${names.join(' and ')} exactly as in their character reference (same face, hair, outfit, colours).` : '';
+  return `${expand(board, shot.prompt, true)} ${board.style ?? ''}${keep} Vertical ${board.aspect ?? '9:16'} cinematic frame, no text.`.replace(/\s+/g, ' ').trim();
+}
+
+export function buildShotPrompt(board: Storyboard, shot: Shot): string {
+  const body = expand(board, shot.prompt, board.mode === 'konsisten');
   const audio = shot.silent
     ? board.audioSilent ?? ''
     : (board.audio ?? '').replace('{narrator}', board.narrator ?? 'a narrator').replace('{line}', (shot.narration ?? '').trim());

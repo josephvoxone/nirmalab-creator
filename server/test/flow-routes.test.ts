@@ -10,15 +10,15 @@ const BRIDGE_TOKEN = 'bridge-token-0123456789abcdef';
 let server: FastifyInstance | undefined;
 afterEach(async () => { await server?.close(); server = undefined; });
 
-async function setup() {
-  const dataDir = mkdtempSync(join(tmpdir(), 'flow-routes-'));
+async function setup(store?: import('../src/flow/store.js').FlowStore, dir?: string) {
+  const dataDir = dir ?? mkdtempSync(join(tmpdir(), 'flow-routes-'));
   const auth = new UserAuthStore(mkdtempSync(join(tmpdir(), 'flow-auth-')));
   const admin = await auth.createUser({ email: 'admin@x.io', password: 'admin-pass-1', isAdmin: true });
   const member = await auth.createUser({ email: 'member@x.io', password: 'member-pass-1', isAdmin: false });
   const adminCookie = `oc_session=${auth.createSession(admin.id).token}`;
   const memberCookie = `oc_session=${auth.createSession(member.id).token}`;
   server = Fastify();
-  await registerFlowRoutes(server, { userAuthStore: auth, dataDir, bridgeToken: BRIDGE_TOKEN });
+  await registerFlowRoutes(server, { userAuthStore: auth, dataDir, bridgeToken: BRIDGE_TOKEN, ...(store ? { store } : {}) });
   await server.ready();
   return { dataDir, adminCookie, memberCookie };
 }
@@ -155,5 +155,25 @@ describe('flow bridge routes', () => {
     expect(status.accounts[0].credits).toBe(103);
     expect(status.bridge.bridgeId).toBe('mac');
     expect(status.bridge.online).toBe(true);
+  });
+
+  it('upload hasil keyframe: PNG disimpan sebagai .png dan id Flow dari header tercatat', async () => {
+    const { FlowStore } = await import('../src/flow/store.js');
+    const dataDir = mkdtempSync(join(tmpdir(), 'flow-routes-'));
+    const store = new FlowStore(join(dataDir, 'flow'));
+    const { adminCookie } = await setup(store, dataDir);
+    const acc = await server!.inject({ method: 'POST', url: '/api/flow/accounts', headers: { cookie: adminCookie }, payload: { label: 'K', email: 'k@x.io' } });
+    expect(acc.statusCode).toBe(200);
+    const job = await store.createJob({ prompt: 'frame', kind: 'image', group: 'story_0123456789abcdef' });
+    const claim = await server!.inject({ method: 'POST', url: '/api/flow/bridge/claim', headers: { 'x-flow-bridge-token': BRIDGE_TOKEN }, payload: { bridgeId: 'mac' } });
+    expect(claim.json().job).toMatchObject({ id: job.id, kind: 'image' });
+    const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47]), Buffer.alloc(4000, 1)]);
+    const done = await server!.inject({
+      method: 'POST', url: `/api/flow/bridge/jobs/${job.id}/complete`, payload: png,
+      headers: { 'x-flow-bridge-token': BRIDGE_TOKEN, 'content-type': 'application/octet-stream', 'x-flow-media-id': 'm-123', 'x-flow-caption': encodeURIComponent('Girl on porch') }
+    });
+    expect(done.statusCode).toBe(200);
+    expect(done.json().job.resultPath).toMatch(/clips\/job_[a-f0-9]{16}\.png$/);
+    expect(done.json().job.result).toEqual({ mediaId: 'm-123', caption: 'Girl on porch' });
   });
 });

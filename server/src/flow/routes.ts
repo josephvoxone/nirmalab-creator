@@ -167,9 +167,21 @@ export async function registerFlowRoutes(server: FastifyInstance, options: FlowR
         return bad(reply, 400, 'INVALID_INPUT', 'Clip body missing or too small');
       }
       await mkdir(clipsDir, { recursive: true, mode: 0o700 });
-      const filePath = join(clipsDir, `${job.id}.mp4`);
+      const ext = job.kind === 'video' ? 'mp4' : 'png';
+      const filePath = join(clipsDir, `${job.id}.${ext}`);
       await writeFile(filePath, body, { mode: 0o600 });
-      const updated = await store.completeJob(job.id, { filePath, bytes: body.byteLength, provider: 'flow' });
+      const header = (name: string) => {
+        const v = request.headers[name];
+        const raw = typeof v === 'string' ? v : undefined;
+        if (!raw) return undefined;
+        try { return decodeURIComponent(raw).slice(0, 200); } catch { return raw.slice(0, 200); }
+      };
+      const result = {
+        ...(header('x-flow-media-id') ? { mediaId: header('x-flow-media-id') } : {}),
+        ...(header('x-flow-caption') ? { caption: header('x-flow-caption') } : {}),
+        ...(header('x-flow-character-id') ? { flowCharacterId: header('x-flow-character-id') } : {})
+      };
+      const updated = await store.completeJob(job.id, { filePath, bytes: body.byteLength, provider: 'flow', ...(Object.keys(result).length ? { result } : {}) });
       return { job: updated };
     });
 
