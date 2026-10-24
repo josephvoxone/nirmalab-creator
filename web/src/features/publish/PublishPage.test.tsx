@@ -86,6 +86,21 @@ describe('PublishPage (3 steps: Video → Detail → Kirim)', () => {
     expect(screen.queryByRole('button', { name: /hubungkan/i })).toBeNull();
   });
 
+  it('Detail shows the chosen video as a playable, compact preview stacked above the form on small screens', async () => {
+    renderPage(api({ youtube: true }));
+    await pickStory(/hujan pertama/i);
+    const video = screen.getByLabelText('Pratinjau Hujan Pertama') as HTMLVideoElement;
+    expect(video.tagName).toBe('VIDEO');
+    expect(video).toHaveAttribute('controls');
+    expect(video.getAttribute('src')).toBe('/api/stories/story_cccccccccccccccc/video');
+    expect(video.getAttribute('poster')).toBe('/api/stories/story_cccccccccccccccc/video/poster?w=480');
+    expect(screen.getByRole('button', { name: /layar penuh pratinjau hujan pertama/i })).toBeInTheDocument();
+    const preview = video.closest('[data-slot="publish-preview"]') as HTMLElement;
+    // never hidden on mobile, never stretched to the form's height
+    expect(preview.className).not.toMatch(/(^|\s)hidden(\s|$)/);
+    expect(preview.className).toMatch(/self-start/);
+  });
+
   it('picking a video moves to Detail with its title, and lists only connected platforms', async () => {
     renderPage(api({ youtube: true, tiktok: true }));
     await pickStory(/hujan pertama/i);

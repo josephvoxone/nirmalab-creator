@@ -12,6 +12,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Toggle } from '@/components/ui/toggle';
 import { useSession } from '../../lib/session.js';
 import { poster } from '../../lib/media.js';
+import { ClipPreview } from '../project/Player.js';
 import { DateTimePicker, Field, formatWhen, inputClass, Segmented, Steps, textareaClass } from '../../ui/controls.js';
 import { describeError, LoadingState } from '../../ui/states.js';
 import {
@@ -180,11 +181,12 @@ export default function PublishPage(props: { now?: Date }) {
       )}
 
       {step === 1 && story && (
-        <div className="grid gap-4 md:grid-cols-[220px_1fr]">
-          <Panel className="hidden p-0 md:block overflow-hidden">
-            <Poster id={story.id} className="aspect-[4/5]" />
-            <p className="truncate px-3 py-2 text-[12.5px] text-muted-foreground">{story.title}</p>
-          </Panel>
+        <div className="grid items-start gap-4 md:grid-cols-[240px_1fr]">
+          {/* Stacked above the form on small screens; beside it (and sticky) from md. Never stretched. */}
+          <div data-slot="publish-preview" className="glass-panel flex flex-col items-center gap-2 self-start rounded-lg p-2.5 md:sticky md:top-2">
+            <ClipPreview src={`/api/stories/${story.id}/video`} poster={poster.final(story.id, 480)} label={`Pratinjau ${story.title}`} maxH={360} />
+            <p className="w-full truncate px-1 text-[12.5px] text-muted-foreground">{story.title}</p>
+          </div>
           <Panel className="flex flex-col gap-3.5">
             <div className="flex flex-col gap-1">
               <Field label="Judul">
