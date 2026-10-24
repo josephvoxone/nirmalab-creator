@@ -345,3 +345,9 @@ export function resultHeaders(meta = {}) {
   if (meta.flowCharacterId) h['x-flow-character-id'] = encodeURIComponent(meta.flowCharacterId);
   return h;
 }
+
+/** Run a job while pinging every `everyMs` so the server keeps showing the bridge online during long renders. */
+export async function whileAlive(run, ping, everyMs = 30_000) {
+  const timer = setInterval(() => { void Promise.resolve().then(ping).catch(() => undefined); }, everyMs);
+  try { return await run(); } finally { clearInterval(timer); }
+}

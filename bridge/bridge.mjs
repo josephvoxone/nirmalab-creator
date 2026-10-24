@@ -18,7 +18,7 @@ import { readFile } from 'node:fs/promises';
 import { homedir, hostname } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { accountsToProbe, cdpReady, preflightUrl, cdpUrlForAccount, cdpUrlFromActivePort, ensureProject, isChromeAccount, parseToolResult, processJob, resultHeaders } from './src/core.mjs';
+import { accountsToProbe, cdpReady, preflightUrl, cdpUrlForAccount, cdpUrlFromActivePort, ensureProject, whileAlive, isChromeAccount, parseToolResult, processJob, resultHeaders } from './src/core.mjs';
 
 const env = process.env;
 const CREATOR_URL = (env.CREATOR_URL || 'https://creator.nirmalab.com').replace(/\/$/, '');
@@ -201,7 +201,8 @@ async function loop(once) {
       log('claim failed:', error.message);
     }
     if (claim?.job) {
-      const result = await handle(claim);
+      // Light ping only (no Chrome calls) so the app shows the bridge online while it renders.
+      const result = await whileAlive(() => handle(claim), () => postJson('/api/flow/bridge/heartbeat', { bridgeId: BRIDGE_ID, accounts: [] }));
       if (result.status === 'chrome-broken') {
         chromeStrikes++;
         if (cdp) await restartFlowChrome(cdp);
