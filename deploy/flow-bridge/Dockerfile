@@ -26,6 +26,7 @@ RUN npm ci --omit=dev >/dev/null 2>&1 || npm install --omit=dev
 # the bridge itself
 COPY nirmalab-creator/bridge /app
 COPY nirmalab-creator/deploy/flow-bridge/entry.sh /app/entry.sh
+COPY nirmalab-creator/deploy/flow-bridge/overlay-guard.mjs /app/overlay-guard.mjs
 RUN chmod +x /app/entry.sh /app/flow-chrome.sh /app/run.sh 2>/dev/null || true
 WORKDIR /app
 

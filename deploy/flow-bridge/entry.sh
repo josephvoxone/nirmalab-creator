@@ -64,4 +64,11 @@ if [ "${FLOW_LOGIN:-0}" = "1" ]; then
   while :; do sleep 30; done
 fi
 
+# First-run dialogs (welcome, privacy) sit over the composer and eat the bridge's clicks.
+# The guard clears them best effort; it must never block the bridge from starting.
+if [ -f /app/overlay-guard.mjs ]; then
+  node /app/overlay-guard.mjs >>/var/log/overlay-guard.log 2>&1 &
+  echo "[entry] overlay guard started (log: /var/log/overlay-guard.log)"
+fi
+
 cd /app && exec "$@"
