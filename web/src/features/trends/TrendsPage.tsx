@@ -27,9 +27,11 @@ const BOX = { '9:16': { w: 78, className: 'h-[138px] w-[78px]' }, '16:9': { w: 1
 function TrendCard(props: { item: TrendItem; onOpen: () => void }) {
   const { item } = props;
   const [broken, setBroken] = useState(false);
+  // Live streams often have no hqdefault yet: step down once before giving up.
+  const [fallback, setFallback] = useState(false);
   const aspect = aspectOf(item);
   const box = BOX[aspect];
-  const still = sizedImg(item.thumbnail, box.w);
+  const still = sizedImg(fallback ? item.thumbnail.replace(/(hq|sd|mq|maxres)default/, 'mqdefault') : item.thumbnail, box.w);
   // Unknown metrics are omitted, not printed as "0" or "56 tahun lalu".
   const meta = [item.channel, SOURCE_LABEL[item.source], item.publishedAtMs ? relativeTime(item.publishedAtMs) : '']
     .filter(Boolean).join(' · ');
@@ -44,7 +46,7 @@ function TrendCard(props: { item: TrendItem; onOpen: () => void }) {
       <span className={cn('relative shrink-0 self-center overflow-hidden rounded-md bg-muted', box.className)}>
         {!broken && (
           <img src={still.src} srcSet={still.srcSet} width={box.w} height={aspect === '9:16' ? 138 : 106} alt="" loading="lazy" decoding="async"
-            onError={() => setBroken(true)} className="absolute inset-0 size-full object-cover" />
+            onError={() => (fallback ? setBroken(true) : setFallback(true))} className="absolute inset-0 size-full object-cover" />
         )}
         {broken && <TrendingUp aria-hidden="true" className="absolute top-1/2 left-1/2 size-5 -translate-x-1/2 -translate-y-1/2 text-muted-foreground/50" />}
         {(item.durationSec ?? 0) > 0 && duration && <span className="absolute right-1 bottom-1 rounded bg-black/70 px-1 text-[10.5px] tabular-nums text-white">{duration}</span>}
