@@ -103,13 +103,38 @@ export function scoreParts(input: ScoreInput, query: Pick<TrendQuery, 'niche'> =
 }
 
 /** Final 0–100 score: the weighted sum of the four sub-scores, rounded. */
-export function trendScore(input: ScoreInput, query: Pick<TrendQuery, 'niche'> = {}, nowMs = Date.now()): number {
+export function trendScore(input: ScoreInput, query: Pick<TrendQuery, 'niche'> = {}, nowMs = Date.now(), peakViews = 0): number {
   const parts = scoreParts(input, query, nowMs);
+
+  // A public shelf with no publish date and no likes (the key-less YouTube mirror) leaves only
+  // views. Scoring it on the same weights would hand every card the same low number, so rank by
+  // share of the batch's views and renormalise over the parts we actually have.
+  const degraded = !input.publishedAtMs && input.likes + input.comments <= 0;
+  if (degraded) {
+    const velocityPart = viewsShare(input.views, peakViews);
+    const weighted = velocityPart * SCORE_WEIGHTS.velocity
+      + parts.freshness * SCORE_WEIGHTS.freshness
+      + parts.niche * SCORE_WEIGHTS.niche;
+    const total = SCORE_WEIGHTS.velocity + SCORE_WEIGHTS.freshness + SCORE_WEIGHTS.niche;
+    return Math.round(Math.min(1, Math.max(0, weighted / total)) * 100);
+  }
+
   const weighted = parts.velocity * SCORE_WEIGHTS.velocity
     + parts.engagement * SCORE_WEIGHTS.engagement
     + parts.freshness * SCORE_WEIGHTS.freshness
     + parts.niche * SCORE_WEIGHTS.niche;
   return Math.round(Math.min(1, Math.max(0, weighted)) * 100);
+}
+
+/**
+ * Views relative to the biggest item in the same batch, log-scaled so one viral short does not
+ * flatten everything else to zero. 1 = the batch's peak, 0 = no views at all.
+ */
+export function viewsShare(views: number, peak: number): number {
+  const value = Math.max(finite(views), 0);
+  const top = Math.max(finite(peak), 0);
+  if (top <= 0 || value <= 0) return 0;
+  return Math.min(1, Math.log1p(value) / Math.log1p(top));
 }
 
 /**

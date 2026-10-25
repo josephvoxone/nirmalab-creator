@@ -102,6 +102,18 @@ describe('final score', () => {
     expect(sum).toBeCloseTo(1, 10);
   });
 
+  it('ranks a key-less shelf by views share instead of flat-lining every card', () => {
+    const seed = (views: number) => ({ views, likes: 0, comments: 0, publishedAtMs: 0, title: 'x', description: '' });
+    const peak = 10_000;
+    const hot = trendScore(seed(peak), {}, NOW, peak);
+    const cold = trendScore(seed(50), {}, NOW, peak);
+    expect(hot).toBeGreaterThan(cold);
+    expect(hot).toBeGreaterThan(50);
+    expect(cold).toBeLessThan(hot);
+    // Without the peak (no batch context) nothing pretends to know the ranking.
+    expect(trendScore(seed(peak), {}, NOW, 0)).toBe(trendScore(seed(50), {}, NOW, 0));
+  });
+
   it('stays inside 0–100 and is deterministic', () => {
     const wild = { views: 10 ** 12, likes: 10 ** 12, comments: 10 ** 12, publishedAtMs: NOW - 60_000, title: 'AI AI AI', description: 'prompt veo midjourney' };
     const first = trendScore(wild, { niche: 'ai' }, NOW);
@@ -110,7 +122,8 @@ describe('final score', () => {
     expect(trendScore(wild, { niche: 'ai' }, NOW)).toBe(first);
 
     const dead = { views: 0, likes: 0, comments: 0, publishedAtMs: 0, title: '', description: '' };
-    expect(trendScore(dead, {}, NOW)).toBe(15); // freshness 0.5 × 0.2 + niche 0.5 × 0.1
+    // No date and no likes ⇒ the degraded branch renormalises over freshness + niche only.
+    expect(trendScore(dead, {}, NOW)).toBe(20);
   });
 
   it('ranks a fresh viral item above an older, bigger one', () => {

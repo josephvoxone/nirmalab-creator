@@ -30,8 +30,15 @@ function TrendCard(props: { item: TrendItem; onOpen: () => void }) {
   const aspect = aspectOf(item);
   const box = BOX[aspect];
   const still = sizedImg(item.thumbnail, box.w);
-  const meta = [item.channel, SOURCE_LABEL[item.source], relativeTime(item.publishedAtMs)].filter(Boolean).join(' · ');
+  // Unknown metrics are omitted, not printed as "0" or "56 tahun lalu".
+  const meta = [item.channel, SOURCE_LABEL[item.source], item.publishedAtMs ? relativeTime(item.publishedAtMs) : '']
+    .filter(Boolean).join(' · ');
   const duration = fmtDuration(item.durationSec);
+  const metrics = [
+    item.velocity > 0 ? fmtRate(item.velocity) : '',
+    item.engagement > 0 ? fmtPct(item.engagement) : '',
+    fmtCount(item.views) + ' tayangan'
+  ].filter(Boolean);
   return (
     <li aria-label={item.title} className="glass-panel flex items-start gap-2.5 rounded-lg p-2">
       <span className={cn('relative shrink-0 self-center overflow-hidden rounded-md bg-muted', box.className)}>
@@ -40,22 +47,18 @@ function TrendCard(props: { item: TrendItem; onOpen: () => void }) {
             onError={() => setBroken(true)} className="absolute inset-0 size-full object-cover" />
         )}
         {broken && <TrendingUp aria-hidden="true" className="absolute top-1/2 left-1/2 size-5 -translate-x-1/2 -translate-y-1/2 text-muted-foreground/50" />}
-        {duration && <span className="absolute right-1 bottom-1 rounded bg-black/70 px-1 text-[10.5px] tabular-nums text-white">{duration}</span>}
+        {(item.durationSec ?? 0) > 0 && duration && <span className="absolute right-1 bottom-1 rounded bg-black/70 px-1 text-[10.5px] tabular-nums text-white">{duration}</span>}
       </span>
       <div className="flex min-w-0 flex-1 flex-col gap-1">
         <p className="line-clamp-2 text-[13px] leading-snug font-medium">{item.title}</p>
         <p className="truncate text-[11.5px] text-muted-foreground">{meta}</p>
         <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[11.5px] text-muted-foreground">
           <Badge variant="secondary" className="h-4.5 px-1.5 text-[10.5px]">{hookLabel(item.hook)}</Badge>
-          <span className="tabular-nums">{fmtRate(item.velocity)}</span>
-          <span aria-hidden="true">·</span>
-          <span className="tabular-nums">{fmtPct(item.engagement)}</span>
-          <span aria-hidden="true">·</span>
-          <span className="tabular-nums">{fmtCount(item.views)} tayangan</span>
+          <span className="tabular-nums">{metrics.join(' · ')}</span>
         </div>
         <div className="mt-0.5 flex items-center gap-2">
           <Button size="sm" variant="glass" aria-label={`Bedah ${item.title}`} onClick={props.onOpen}><ScanSearch /> Bedah</Button>
-          {item.score ? <span className="text-[10.5px] text-muted-foreground tabular-nums">skor {Math.round(item.score * 100)}</span> : null}
+          {item.score ? <span className="text-[10.5px] text-muted-foreground tabular-nums">skor {Math.round(item.score)}</span> : null}
         </div>
       </div>
     </li>
@@ -133,6 +136,7 @@ export function TrendsPage() {
             <Choice label="Urutkan" size="sm" value={sort} options={SORTS} onChange={setSort} className="sm:ml-auto" />
           </div>
         )}
+        {data?.note ? <p className="text-[12px] text-muted-foreground">{data.note}</p> : null}
       </div>
 
       {error && !data ? (

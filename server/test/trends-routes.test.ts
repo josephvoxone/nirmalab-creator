@@ -294,11 +294,12 @@ describe('POST /api/trends/:id/clone', () => {
 });
 
 describe('wired into the app', () => {
-  it('GET /api/trends answers for a logged-in admin with every source unconfigured', async () => {
+  it('GET /api/trends answers without any key: youtube comes from the public mirror', async () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'oc-trends-app-'));
     const server = await buildApp({
       dataDir,
-      env: { OPENCREATOR_ADMIN_EMAIL: 'admin@x.io', OPENCREATOR_ADMIN_PASSWORD: 'admin-pass-1' },
+      // Point the mirror at a closed port: the test must never touch the network.
+      env: { OPENCREATOR_ADMIN_EMAIL: 'admin@x.io', OPENCREATOR_ADMIN_PASSWORD: 'admin-pass-1', TRENDS_PIPED_URL: 'http://127.0.0.1:9' },
       stories: { reconcileMs: 0, probe: async () => ({ durationSec: 6, hasAudio: true }), assemble: async () => undefined },
       providers: { workerMs: 0 },
       media: { cleanupMs: 0 }
@@ -310,9 +311,10 @@ describe('wired into the app', () => {
     const res = await server.inject({ method: 'GET', url: '/api/trends?region=ID&window=24h', headers: { cookie } });
 
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toMatchObject({ configured: false, items: [] });
+    expect(res.json()).toMatchObject({ configured: true, items: [], degraded: false });
     expect(Object.keys(res.json().sources).sort()).toEqual(['douyin', 'instagram', 'tiktok', 'youtube']);
-    expect(res.json().sources.youtube).toBe(false);
-    expect(res.json().detail.youtube).toEqual({ configured: false, items: 0 });
+    expect(res.json().sources.youtube).toBe(true);
+    expect(res.json().detail.youtube).toEqual({ configured: true, items: 0 });
+    expect(res.json().missing).toEqual(['TRENDS_DTK_URL', 'TRENDS_IG_FILE']);
   });
 });

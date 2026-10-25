@@ -28,6 +28,7 @@ import { createInstagramSource } from './instagram.js';
 import { collectTrends } from './pipeline.js';
 import { createDouyinSource, createTikTokSource } from './tiktok.js';
 import { createYouTubeSource } from './youtube.js';
+import { createPipedSource } from './piped.js';
 import type { FetchLike } from './http.js';
 import {
   NICHES,
@@ -63,8 +64,12 @@ const bad = (reply: FastifyReply, status: number, code: string, message: string)
 /** The sources the app runs with, each configured only by its own env var. */
 export function createTrendSources(env: NodeJS.ProcessEnv, fetchImpl?: FetchLike): TrendSource[] {
   const dtk = { url: env.TRENDS_DTK_URL, token: env.TRENDS_DTK_TOKEN, ...(fetchImpl ? { fetch: fetchImpl } : {}) };
+  // One youtube entry either way: the official API when a key exists, the public mirror when not.
+  const youtube = env.YOUTUBE_API_KEY?.trim()
+    ? createYouTubeSource({ apiKey: env.YOUTUBE_API_KEY, ...(fetchImpl ? { fetch: fetchImpl } : {}) })
+    : createPipedSource({ ...(env.TRENDS_PIPED_URL ? { instances: env.TRENDS_PIPED_URL.split(',') } : {}), ...(fetchImpl ? { fetch: fetchImpl } : {}) });
   return [
-    createYouTubeSource({ apiKey: env.YOUTUBE_API_KEY, ...(fetchImpl ? { fetch: fetchImpl } : {}) }),
+    youtube,
     createTikTokSource(dtk),
     createInstagramSource({ file: env.TRENDS_IG_FILE }),
     createDouyinSource(dtk)
@@ -106,7 +111,8 @@ type CacheEntry = {
   items: TrendItem[];
 };
 
-const CACHE_VERSION = 2;
+// Bumped for scoring/shape changes too: a cached score computed by older rules must not survive.
+const CACHE_VERSION = 3;
 
 const cacheFile = (dir: string, region: Region, windowHours: number, niche?: Niche): string =>
   join(dir, `${region}-${windowHours}h-${niche ?? 'semua'}.json`);
@@ -159,6 +165,11 @@ export function trendView(entry: CacheEntry, cached: boolean) {
     sources,
     missing,
     detail,
+    // Publish time missing ⇒ ranking cannot use velocity. Say so once instead of faking it.
+    degraded: entry.items.some(item => !item.publishedAtMs),
+    note: entry.items.some(item => !item.publishedAtMs)
+      ? 'Sumber publik tidak memberi tanggal unggah: urutan memakai tayangan dan kecocokan niche, bukan velocity.'
+      : null,
     items: entry.items
   };
 }

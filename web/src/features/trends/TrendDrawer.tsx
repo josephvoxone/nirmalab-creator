@@ -96,7 +96,7 @@ export function TrendDrawer(props: { item?: TrendItem; onClose: () => void; onCl
               <div className="flex min-w-0 flex-1 flex-col gap-0.5">
                 <SheetTitle className="text-[14px] leading-snug">{item.title}</SheetTitle>
                 <SheetDescription className="truncate text-[11.5px]">
-                  {item.channel ? `${item.channel} · ` : ''}{SOURCE_LABEL[item.source]} · {relativeTime(item.publishedAtMs)} · {fmtDuration(item.durationSec) || '—'}
+                  {[item.channel, SOURCE_LABEL[item.source], item.publishedAtMs ? relativeTime(item.publishedAtMs) : '', item.durationSec ? fmtDuration(item.durationSec) : ''].filter(Boolean).join(' · ')}
                 </SheetDescription>
               </div>
               <Button size="icon-sm" variant="ghost" aria-label="Tutup bedah" onClick={props.onClose}><X /></Button>
@@ -106,15 +106,15 @@ export function TrendDrawer(props: { item?: TrendItem; onClose: () => void; onCl
               <a href={item.url} target="_blank" rel="noreferrer" aria-label={`Buka ${item.title} di ${SOURCE_LABEL[item.source]}`}
                 className="group relative flex max-h-[190px] justify-center overflow-hidden rounded-md bg-muted outline-none focus-visible:ring-1 focus-visible:ring-ring/60">
                 <img src={still?.src} srcSet={still?.srcSet} alt="" loading="lazy" decoding="async" className="max-h-[190px] w-auto object-contain" />
-                <span aria-hidden="true" className="absolute right-1.5 bottom-1.5 rounded bg-black/70 px-1 text-[10.5px] tabular-nums text-white">{fmtDuration(item.durationSec)}</span>
+                <span aria-hidden="true" className="absolute right-1.5 bottom-1.5 rounded bg-black/70 px-1 text-[10.5px] tabular-nums text-white">{item.durationSec ? fmtDuration(item.durationSec) : ''}</span>
                 <span aria-hidden="true" className="absolute top-1.5 right-1.5 flex items-center gap-1 rounded bg-black/60 px-1.5 py-0.5 text-[10.5px] text-white opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100">
                   <ExternalLink className="size-3" /> Buka aslinya
                 </span>
               </a>
 
               <div className="grid grid-cols-3 gap-2 text-[12px]">
-                {[['Tayangan', fmtCount(item.views)], ['Naik', fmtRate(item.velocity)], ['Interaksi', fmtPct(item.engagement)],
-                  ['Suka', item.likes ? fmtCount(item.likes) : '—'], ['Komentar', item.comments ? fmtCount(item.comments) : '—'], ['Skor', item.score ? fmtPct(item.score) : '—']]
+                {[['Tayangan', fmtCount(item.views)], ['Naik', item.velocity > 0 ? fmtRate(item.velocity) : '—'], ['Interaksi', item.engagement > 0 ? fmtPct(item.engagement) : '—'],
+                  ['Suka', item.likes ? fmtCount(item.likes) : '—'], ['Komentar', item.comments ? fmtCount(item.comments) : '—'], ['Skor', item.score ? `${Math.round(item.score)}/100` : '—']]
                   .map(([label, value]) => (
                     <div key={label} className="glass-well flex flex-col rounded-md px-2 py-1">
                       <span className="text-[10.5px] text-muted-foreground">{label}</span>

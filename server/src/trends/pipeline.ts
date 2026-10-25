@@ -45,6 +45,8 @@ export function sortItems(items: TrendItem[]): TrendItem[] {
 
 /** One card per seed: deconstruct, score, round, and drop what the window excludes. */
 export function enrichSeeds(seeds: TrendSeed[], query: TrendQuery, nowMs = query.nowMs ?? Date.now()): TrendItem[] {
+  // Batch context: the key-less mirror has no velocity, so views are ranked against the peak.
+  const peakViews = seeds.reduce((top, seed) => Math.max(top, seed.views), 0);
   const items: TrendItem[] = [];
   for (const seed of seeds) {
     const publishedAtMs = Number.isFinite(seed.publishedAtMs) ? Math.max(0, Math.round(seed.publishedAtMs)) : 0;
@@ -76,7 +78,7 @@ export function enrichSeeds(seeds: TrendSeed[], query: TrendQuery, nowMs = query
       avgShotSec: parsed.avgShotSec,
       captionStyle: parsed.captionStyle,
       audioType: parsed.audioType,
-      score: trendScore(seed, query, nowMs)
+      score: trendScore(seed, query, nowMs, peakViews)
     });
   }
   return sortItems(items);

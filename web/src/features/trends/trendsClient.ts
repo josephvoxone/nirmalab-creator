@@ -50,6 +50,10 @@ export type TrendsResponse = {
   items: TrendItem[];
   /** Exact env names the server is missing (P3a fallback below when it sends none). */
   missing?: string[];
+  /** True when the active source cannot report publish time, so ranking skips velocity. */
+  degraded?: boolean;
+  /** One line explaining the degraded ranking, shown under the filters. */
+  note?: string | null;
 };
 
 export const SOURCE_LABEL: Record<TrendSource, string> = { youtube: 'YouTube', tiktok: 'TikTok', instagram: 'Instagram' };
@@ -174,7 +178,9 @@ export function fmtDuration(sec: number | undefined): string {
 export function aspectOf(item: TrendItem): '9:16' | '16:9' {
   if (item.aspect === '9:16' || item.aspect === '16:9') return item.aspect;
   if (item.source !== 'youtube') return '9:16';
-  return (item.durationSec ?? 0) > 60 ? '16:9' : '9:16';
+  const seconds = item.durationSec ?? 0;
+  // Duration 0 = unknown (public shelf): use the wide box rather than crop a 4:3 still into 9:16.
+  return seconds === 0 || seconds > 60 ? '16:9' : '9:16';
 }
 
 export const HOOK_LABEL: Record<Hook, string> = {
@@ -235,7 +241,9 @@ function normalize(raw: Partial<TrendsResponse> | undefined | null): TrendsRespo
     sources: { youtube: sources.youtube === true, tiktok: sources.tiktok === true, instagram: sources.instagram === true },
     generatedAtMs: Number.isFinite(raw?.generatedAtMs) ? raw?.generatedAtMs : undefined,
     items,
-    missing: Array.isArray(raw?.missing) ? raw!.missing.filter(m => typeof m === 'string' && m.length > 0) : undefined
+    missing: Array.isArray(raw?.missing) ? raw!.missing.filter(m => typeof m === 'string' && m.length > 0) : undefined,
+    degraded: raw?.degraded === true,
+    note: typeof raw?.note === 'string' && raw.note.length > 0 ? raw.note : null
   };
 }
 
