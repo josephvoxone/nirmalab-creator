@@ -65,6 +65,11 @@ function noNativeControls() {
 }
 
 describe('StudioPage — status bridge ringkas', () => {
+  it('says in one muted line that Studio makes one clip or still without a project', async () => {
+    renderPage(makeFetch());
+    expect(await screen.findByText('Studio = satu klip atau satu gambar lepas, tanpa proyek.')).toHaveClass('text-muted-foreground');
+  });
+
   it('menampilkan satu baris status bridge + kredit, dan link Kelola akun Flow membuka Pengaturan › Flow', async () => {
     const user = userEvent.setup();
     renderPage(makeFetch());

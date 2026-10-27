@@ -207,6 +207,7 @@ export function StudioPage(props: { baseUrl: string; fetchImpl: FlowFetch; techn
           <Button variant="ghost" size="icon-sm" aria-label="Muat ulang" title="Muat ulang" onClick={() => void refresh()}><RefreshCw /></Button>
         </div>
       </div>
+      <p className="text-[12.5px] text-muted-foreground">Studio = satu klip atau satu gambar lepas, tanpa proyek.</p>
 
       {loadError !== undefined && (
         <div role="alert" className="glass-panel flex flex-wrap items-center gap-2 rounded-lg px-3 py-2.5">

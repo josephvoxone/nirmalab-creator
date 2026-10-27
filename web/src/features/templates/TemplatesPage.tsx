@@ -54,6 +54,7 @@ export default function TemplatesPage() {
             className="min-w-0 flex-1 bg-transparent text-[13px] outline-none placeholder:text-muted-foreground" />
         </label>
       </div>
+      <p className="-mt-2 pb-4 text-[12.5px] text-muted-foreground">Template = resep untuk memulai proyek: gaya, tempo dan jumlah shot sudah diatur.</p>
 
       {catalog && (
         <div role="tablist" aria-label="Kategori" className="mb-4 flex gap-1 overflow-x-auto pb-1 [scrollbar-width:none]">

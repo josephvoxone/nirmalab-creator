@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react';
-import { Check, Copy, Cpu, Gauge, Link2, LogOut, Server, Settings2, UserRound, Users } from 'lucide-react';
+import { Cable, Check, Copy, Cpu, Gauge, Link2, LogOut, Server, Settings2, UserRound, Users } from 'lucide-react';
 import { ConnectionsPanel } from './ConnectionsPanel.js';
+import { IntegrationsPanel } from './IntegrationsPanel.js';
 import { ProviderPanel } from './ProviderPanel.js';
 import { cn } from '@/lib/utils';
 import { Badge } from '@/components/ui/badge';
@@ -16,7 +17,7 @@ import {
 } from './settingsClient.js';
 
 type Api = ReturnType<typeof settingsApi>;
-export type SettingsTab = 'umum' | 'akun' | 'anggota' | 'penggunaan' | 'flow' | 'provider' | 'koneksi';
+export type SettingsTab = 'umum' | 'akun' | 'anggota' | 'penggunaan' | 'flow' | 'provider' | 'integrasi' | 'koneksi';
 
 export const TABS: Array<{ id: SettingsTab; label: string; icon: typeof Users; admin?: boolean }> = [
   { id: 'umum', label: 'Umum', icon: Settings2 },
@@ -25,6 +26,7 @@ export const TABS: Array<{ id: SettingsTab; label: string; icon: typeof Users; a
   { id: 'penggunaan', label: 'Penggunaan', icon: Gauge, admin: true },
   { id: 'flow', label: 'Akun Flow', icon: Server, admin: true },
   { id: 'provider', label: 'Provider', icon: Cpu, admin: true },
+  { id: 'integrasi', label: 'Integrasi', icon: Cable, admin: true },
   { id: 'koneksi', label: 'Koneksi', icon: Link2 }
 ];
 
@@ -669,6 +671,7 @@ export default function SettingsPage(props: { tab?: SettingsTab; onTab?: (tab: S
         {own === 'penggunaan' && <UsageTab api={api} />}
         {own === 'flow' && <><PoolCard api={api} /><FlowCard api={api} /></>}
         {own === 'provider' && <ProviderPanel onOpenFlow={() => choose('flow')} />}
+        {own === 'integrasi' && <IntegrationsPanel />}
         {own === 'koneksi' && <ConnectionsPanel />}
       </div>
     </div>

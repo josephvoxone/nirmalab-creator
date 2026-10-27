@@ -35,7 +35,7 @@ describe('Settings dialog route', () => {
     render(<App fetchImpl={fetchImpl} initialPath="/pengaturan/penggunaan" />);
     const dialog = await screen.findByRole('dialog', { name: /pengaturan/i });
     const tabs = within(dialog).getByRole('tablist', { name: /pengaturan/i });
-    expect(within(tabs).getAllByRole('tab').map(t => t.textContent)).toEqual(['Umum', 'Akun', 'Anggota', 'Penggunaan', 'Akun Flow', 'Provider', 'Koneksi']);
+    expect(within(tabs).getAllByRole('tab').map(t => t.textContent)).toEqual(['Umum', 'Akun', 'Anggota', 'Penggunaan', 'Akun Flow', 'Provider', 'Integrasi', 'Koneksi']);
     expect(within(dialog).getByRole('tab', { name: 'Penggunaan' })).toHaveAttribute('aria-selected', 'true');
     await userEvent.keyboard('{Escape}');
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());

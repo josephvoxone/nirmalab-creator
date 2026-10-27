@@ -20,6 +20,11 @@ function app(opts: { failFirst?: boolean; user?: typeof admin; catalog?: typeof 
 const grid = () => screen.findByRole('list', { name: /daftar template/i });
 
 describe('Template gallery', () => {
+  it('says in one muted line that a template starts a project', async () => {
+    app();
+    expect(await screen.findByText('Template = resep untuk memulai proyek: gaya, tempo dan jumlah shot sudah diatur.')).toHaveClass('text-muted-foreground');
+  });
+
   it('lists every template with its category tabs', async () => {
     app();
     expect(await screen.findByRole('heading', { name: /^template$/i, level: 1 })).toBeInTheDocument();
