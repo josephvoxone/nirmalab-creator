@@ -61,6 +61,11 @@ the app. Output must stay bible-consistent (the anti-slop work of P1–P4 must n
     koneksi" button that calls the server's own tools/list with the token.
 11. **Studio vs Template** clarity: one line on each page saying what it produces (Template = recipe to
     start a project; Studio = one clip or still, no project).
+12. **Skills inside the assistant**: our existing skills (cinematic quality, cinematic footage,
+    anti-slop copywriting, viral hooks, P4 lint list) are condensed into a small skills pack that the
+    assistant always reads and MCP exposes as resources, so instructions come out bible-consistent.
+13. **Chat looks like Claude/ChatGPT**: streamed replies, markdown, tool-step lines, change chips,
+    image upload (button, paste, drag-drop) with thumbnails.
 
 ## 3. Non-goals
 
