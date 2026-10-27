@@ -54,7 +54,7 @@ const notFound = (reply: FastifyReply, what = 'Shot') => reply.code(404).send({ 
 
 const badRequest = (reply: FastifyReply, message: string) => reply.code(400).send({ error: { code: 'INVALID', message } });
 
-const ACTION_STATUS: Record<string, number> = { INVALID: 400, NOT_FOUND: 404, BUSY: 409, BUDGET: 409, STALE: 409, UNAVAILABLE: 503, FAILED: 503 };
+const ACTION_STATUS: Record<string, number> = { INVALID: 400, NOT_FOUND: 404, BUSY: 409, BUDGET: 409, STALE: 409, NOT_CONFIGURED: 400, UNAVAILABLE: 503, FAILED: 503 };
 
 /** An action result over HTTP: a plain error keeps its code; `needsConfirm` is a normal 200 the UI answers with confirm. */
 function sendAction(reply: FastifyReply, result: ActionResult, ok: () => Promise<Record<string, unknown>>) {

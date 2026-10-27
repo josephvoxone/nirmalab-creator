@@ -72,7 +72,7 @@ export type ActionContext = {
   rev?: number;
 };
 
-export type ActionErrorCode = 'INVALID' | 'NOT_FOUND' | 'BUSY' | 'BUDGET' | 'STALE' | 'UNAVAILABLE' | 'FAILED';
+export type ActionErrorCode = 'INVALID' | 'NOT_FOUND' | 'BUSY' | 'BUDGET' | 'STALE' | 'NOT_CONFIGURED' | 'UNAVAILABLE' | 'FAILED';
 export type Estimate = { credits?: number; usd?: number };
 export type ActionResult =
   | { ok: true; label: string; changed?: boolean; data?: unknown }
@@ -193,7 +193,7 @@ function toFailure(error: unknown): ActionResult {
     if (error.code === 'STALE') return fail(STALE_MESSAGE, 'STALE');
     return fail(error.message, error.code);
   }
-  if (error instanceof LlmError) return fail(error.code === 'NOT_CONFIGURED' ? NO_MODEL_MESSAGE : error.message, 'UNAVAILABLE');
+  if (error instanceof LlmError) return error.code === 'NOT_CONFIGURED' ? fail(NO_MODEL_MESSAGE, 'NOT_CONFIGURED') : fail(error.message, 'UNAVAILABLE');
   return fail(`Gagal: ${clip(error instanceof Error ? error.message : String(error), 300)}`, 'FAILED');
 }
 
@@ -763,7 +763,7 @@ export const ACTIONS: Record<ActionName, Action> = {
       if (!cardOf(b, flat)?.goal?.trim()) bad(`Scene ${scene.n} belum punya tujuan di bible — isi dulu (edit_scene goal).`);
       const keep = mode === 'replace' ? b.shots.length - flat.shots.length : b.shots.length;
       if (keep + (count as number) > 30) bad(`Proyek maksimal 30 shot — sekarang ${b.shots.length}.`);
-      if (!ctx.model || !(await ctx.model.configured())) return fail(NO_MODEL_MESSAGE, 'UNAVAILABLE');
+      if (!ctx.model || !(await ctx.model.configured())) return fail(NO_MODEL_MESSAGE, 'NOT_CONFIGURED');
       if (BUSY_STATUSES.includes(record.status)) return fail(BUSY_MESSAGE, 'BUSY');
       const shots = await breakdownScene(ctx.model, b, scene.id, count as number, brief, { mode, ...(ctx.signal ? { signal: ctx.signal } : {}) });
       // The turn ended while the model wrote: nothing is inserted after the caller gave up.

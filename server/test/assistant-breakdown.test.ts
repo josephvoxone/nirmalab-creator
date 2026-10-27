@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { ACTIONS, type ActionContext } from '../src/assistant/actions.js';
+import { ACTIONS, NO_MODEL_MESSAGE, type ActionContext } from '../src/assistant/actions.js';
 import { BreakdownError, REPLACE_REFUSED_MESSAGE, breakdownScene, parseIntents } from '../src/assistant/breakdown.js';
 import { buildApp } from '../src/app.js';
 import type { ChatInput, ChatOutput, TextModel } from '../src/llm/opencode.js';
@@ -149,6 +149,13 @@ describe('breakdown_scene action', () => {
     for (const id of gang.shots) expect(() => compileBoardShot(board, board.shots.find(s => s.id === id)!)).not.toThrow();
     expect((await t.service.get(story.id))!.rev).toBe(2);
     expect(await t.service.snapshots.list(story.id)).toHaveLength(1);
+  });
+
+  it('no text model → code NOT_CONFIGURED (not UNAVAILABLE) with the one shared message', async () => {
+    const t = serviceSetup();
+    const story = await t.service.create(withPlaceholder());
+    const r = await ACTIONS.breakdown_scene.run(ctxFor(t), story.id, { scene: 2, count: 2 });
+    expect(r).toEqual({ ok: false, code: 'NOT_CONFIGURED', error: NO_MODEL_MESSAGE });
   });
 
   it('appends to a scene that already has real shots', async () => {
