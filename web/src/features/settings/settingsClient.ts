@@ -53,6 +53,31 @@ export function settingsApi(fetchImpl: FetchLike) {
   };
 }
 
+/** Model teks (OpenCode Go) — mirrors server/src/llm/config.ts `TEXT_MODELS`. */
+export const TEXT_MODELS = [
+  { value: 'glm-5.3', label: 'glm-5.3', hint: 'andal untuk aksi' },
+  { value: 'glm-5.3-flash', label: 'glm-5.3-flash', hint: 'cepat' },
+  { value: 'beam-free', label: 'beam-free', hint: 'gratis' },
+  { value: 'deepseek-v4-pro', label: 'deepseek-v4-pro', hint: 'alternatif' }
+] as const;
+export type TextModelId = (typeof TEXT_MODELS)[number]['value'];
+export type TextModelState = { configured: boolean; keyHint?: string; model: TextModelId };
+export type TextModelTest = { ok: true; model: string; ms: number };
+
+export function textModelApi(fetchImpl: FetchLike) {
+  return {
+    get: () => requestJson<TextModelState>(fetchImpl, '/api/providers/text'),
+    save: (patch: { apiKey?: string | null; model?: TextModelId }) =>
+      requestJson<TextModelState>(fetchImpl, '/api/providers/text', { method: 'PUT', body: JSON.stringify(patch) }),
+    test: () => requestJson<TextModelTest>(fetchImpl, '/api/providers/text/test', post({}))
+  };
+}
+
+/** "Tersimpan · …abcd" from a server keyHint like "••••abcd". */
+export function textKeyText(hint?: string): string {
+  return `Tersimpan · …${(hint ?? '').replace(/[•*.\s]/g, '').slice(-4)}`;
+}
+
 export function inviteLink(origin: string, token: string): string {
   return `${origin}/join/${token}`;
 }

@@ -27,6 +27,8 @@ import { OpenRouterConfigStore } from './providers/config.js';
 import { auditShot } from './audit/vision.js';
 import { sampleFrames } from './audit/frames.js';
 import { AuditLedger } from './audit/ledger.js';
+import { TextModelConfigStore } from './llm/config.js';
+import { createOpenCodeModel, type TextModel } from './llm/opencode.js';
 
 export type AppOptions = {
   dataDir: string;
@@ -45,6 +47,12 @@ export type AppOptions = {
     fetch?: typeof fetch;
     /** OpenRouter worker interval; 0 disables. Default 5 s. */
     workerMs?: number;
+  };
+  text?: {
+    /** fetch used for OpenCode Go calls (tests inject a fake; never a real key in tests). Default: providers.fetch. */
+    fetch?: typeof fetch;
+    /** Replaces the OpenCode Go model entirely (tests). */
+    model?: TextModel;
   };
   media?: {
     /** ffmpeg used for thumbnails/posters (tests inject a counting runner). */
@@ -143,7 +151,10 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
       balance: () => openRouterBalance(options.dataDir, { fetch: providerFetch })
     }
   });
-  await registerProviderRoutes(server, { userAuthStore, dataDir: options.dataDir, flow: flowStore, fetch: providerFetch, catalog });
+  // One text-model store + client per process; later features (project assistant, MCP) take `textModel` from here.
+  const textStore = new TextModelConfigStore(options.dataDir);
+  const textModel = options.text?.model ?? createOpenCodeModel({ store: textStore, fetch: options.text?.fetch ?? providerFetch });
+  await registerProviderRoutes(server, { userAuthStore, dataDir: options.dataDir, flow: flowStore, fetch: providerFetch, catalog, text: { store: textStore, model: textModel } });
   await registerQuotaRoutes(server, { userAuthStore, dataDir: options.dataDir, flow: flowStore, balance: () => openRouterBalance(options.dataDir, { fetch: providerFetch }) });
   const workerMs = options.providers?.workerMs ?? 5000;
   if (workerMs > 0) {

@@ -33,6 +33,7 @@ function fake(opts: { providers?: Providers; get?: Reply; models?: Reply[]; test
     if (url === '/api/providers/openrouter/test' && method === 'POST') return reply(opts.test ?? { status: 200, body: { ok: true, balance: { usedUsd: 1.25, limitUsd: 10, remainingUsd: 8.75 } } });
     if (url === '/api/providers/openrouter/models' && opts.modelsHang) return new Promise<Response>(() => undefined);
     if (url === '/api/providers/openrouter/models') return reply(modelReplies.shift() ?? { status: 200, body: MODELS });
+    if (url === '/api/providers/text' && method === 'GET') return reply({ status: 200, body: { configured: false, model: 'glm-5.3' } });
     if (url === '/api/flow/accounts') return reply({ status: 200, body: { accounts: [], bridge: { online: true } } });
     if (url === '/api/flow/pool') return reply({ status: 200, body: { pool: { rotation: 'least-used' } } });
     return reply({ status: 404, body: { error: { message: `no fake for ${method} ${url}` } } });

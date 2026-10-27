@@ -6,6 +6,8 @@ import type { FlowStore } from '../flow/store.js';
 import { OpenRouterCatalog } from './catalog.js';
 import { OpenRouterError, keyBalance, type FetchLike } from './client.js';
 import { OpenRouterConfigStore, ProviderInputError, isModelId, type OpenRouterPatch } from './config.js';
+import { TextModelConfigStore, type TextModelPatch } from '../llm/config.js';
+import { LlmError, createOpenCodeModel, type TextModel } from '../llm/opencode.js';
 
 export type ProviderRouteOptions = {
   userAuthStore: UserAuthStore;
@@ -13,6 +15,8 @@ export type ProviderRouteOptions = {
   flow: FlowStore;
   fetch?: FetchLike;
   catalog?: OpenRouterCatalog;
+  /** OpenCode Go text model (one store instance per process; built from dataDir + fetch when omitted). */
+  text?: { store: TextModelConfigStore; model: TextModel };
 };
 
 const bad = (reply: FastifyReply, status: number, code: string, message: string) => reply.code(status).send({ error: { code, message } });
@@ -37,6 +41,8 @@ export async function registerProviderRoutes(server: FastifyInstance, options: P
   const fetchImpl = options.fetch ?? fetch;
   const config = new OpenRouterConfigStore(options.dataDir);
   const catalog = options.catalog ?? new OpenRouterCatalog(options.dataDir, { fetch: fetchImpl });
+  const textStore = options.text?.store ?? new TextModelConfigStore(options.dataDir);
+  const textModel = options.text?.model ?? createOpenCodeModel({ store: textStore, fetch: fetchImpl });
 
   server.get('/api/providers', async (request, reply) => {
     if (!requireAdmin(auth, request, reply)) return undefined;
@@ -106,6 +112,44 @@ export async function registerProviderRoutes(server: FastifyInstance, options: P
       return await catalog.models();
     } catch (error) {
       return bad(reply, 502, 'UPSTREAM', error instanceof Error ? error.message : 'Katalog model OpenRouter tidak bisa dimuat');
+    }
+  });
+
+  // Model teks (OpenCode Go): key + chosen model, and a one-line connection test.
+  server.get('/api/providers/text', async (request, reply) => {
+    if (!requireAdmin(auth, request, reply)) return undefined;
+    return textStore.view();
+  });
+
+  server.put<{ Body: Record<string, unknown> | undefined }>('/api/providers/text', async (request, reply) => {
+    if (!requireAdmin(auth, request, reply)) return undefined;
+    const body = request.body && typeof request.body === 'object' ? request.body : {};
+    const patch: TextModelPatch = {};
+    if ('apiKey' in body) {
+      if (body.apiKey !== null && typeof body.apiKey !== 'string') return bad(reply, 400, 'INVALID_INPUT', 'apiKey harus berupa teks atau null');
+      patch.apiKey = body.apiKey as string | null;
+    }
+    if ('model' in body) {
+      if (typeof body.model !== 'string') return bad(reply, 400, 'INVALID_INPUT', 'model harus berupa teks');
+      patch.model = body.model;
+    }
+    try {
+      return await textStore.patch(patch);
+    } catch (error) {
+      if (error instanceof ProviderInputError) return bad(reply, 400, 'INVALID_INPUT', error.message);
+      throw error;
+    }
+  });
+
+  server.post('/api/providers/text/test', async (request, reply) => {
+    if (!requireAdmin(auth, request, reply)) return undefined;
+    const started = Date.now();
+    try {
+      const out = await textModel.chat({ messages: [{ role: 'user', content: 'Balas satu kata: ok' }], maxTokens: 16 });
+      return { ok: true, model: out.model, ms: Date.now() - started };
+    } catch (error) {
+      if (error instanceof LlmError) return bad(reply, error.code === 'NOT_CONFIGURED' ? 400 : 502, error.code, error.message);
+      return bad(reply, 502, 'UNAVAILABLE', 'Model teks tidak bisa dihubungi');
     }
   });
 }

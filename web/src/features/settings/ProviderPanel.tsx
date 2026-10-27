@@ -18,6 +18,7 @@ import {
   fitsStory, fmtUsd, providersApi, savedKeyText, sortVideoModels,
   type Balance, type ModelInfo, type Models, type OpenRouterPatch, type OpenRouterState, type Providers
 } from '../providers/providersClient.js';
+import { TextModelPanel } from './TextModelPanel.js';
 
 type Api = ReturnType<typeof providersApi>;
 
@@ -263,6 +264,7 @@ export function ProviderPanel(props: { onOpenFlow: () => void }) {
           <>
             <FlowSummary flow={data.flow} onManage={props.onOpenFlow} />
             <OpenRouterCard api={api} state={data.openrouter ?? { configured: false, defaults: {} }} onState={openrouter => setData(d => (d ? { ...d, openrouter } : d))} />
+            <TextModelPanel />
           </>
         )}
     </>
