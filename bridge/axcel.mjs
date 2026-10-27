@@ -60,6 +60,14 @@ const SERVER_TOKEN = env.AXCEL_SERVER_TOKEN || env.FLOW_BRIDGE_TOKEN || '';
  * whenever /api/auth/me says the session is gone.
  */
 const SESI = (env.AXCEL_SESI || '').trim();
+/**
+ * Optional Turnstile-token provider (Peak, https://api.peak.fo). Cloudflare refuses to mint the
+ * `generate` token for our own browser on datacenter IPs, so when the local widget times out we buy
+ * one token instead (~$0.0009) and submit it from the same page. Without a key nothing changes.
+ */
+const PEAK_KEY = (env.AXCEL_PEAK_KEY || '').trim();
+const PEAK_URL = 'https://api.peak.fo/solve';
+const TURNSTILE_SITEKEY_URL = `${AXCEL_ORIGIN}/video/text-to-video/`;
 
 const log = (...parts) => { if (DEBUG) console.error('[axcel]', ...parts); };
 
@@ -370,6 +378,10 @@ async function generateTurnstile(page) {
     return await window.__axcelBridge.solve(${JSON.stringify(keyMain)}, 'generate');
   })()`, { timeout: 150_000, userGesture: true });
   log('turnstile generate:', raw ? `${raw.slice(0, 12)}… (${raw.length})` : raw, `${Date.now() - started}ms`);
+  if ((!raw || raw.startsWith('__')) && PEAK_KEY) {
+    const bought = await solveViaPeak(keyMain);
+    if (bought) return bought;
+  }
   if (!raw || raw.startsWith('__')) {
     const err = new Error(`Turnstile generate gagal (${raw || 'kosong'}) — coba lagi`);
     // A timeout on the managed widget is not "busy, try again": Cloudflare refuses this browser/IP
@@ -382,6 +394,31 @@ async function generateTurnstile(page) {
     throw err;
   }
   return raw;
+}
+
+/** Buy one `generate` token from Peak (proxy-less pool). Returns '' when not configured/failed. */
+async function solveViaPeak(sitekey) {
+  if (!PEAK_KEY) return '';
+  const started = Date.now();
+  try {
+    const res = await fetch(PEAK_URL, {
+      method: 'POST',
+      headers: { 'X-API-Key': PEAK_KEY, 'content-type': 'application/json' },
+      body: JSON.stringify({ task_type: 'TurnstileTaskProxyLess', sitekey, url: TURNSTILE_SITEKEY_URL, action: 'generate' }),
+      signal: AbortSignal.timeout(120_000)
+    });
+    const body = await res.json().catch(() => ({}));
+    const token = body?.data?.token;
+    if (!body?.success || typeof token !== 'string' || !token) {
+      log('peak gagal:', res.status, JSON.stringify(body).slice(0, 160));
+      return '';
+    }
+    log(`peak token ok (${token.length} char, $${body.cost ?? '?'}, ${Date.now() - started}ms)`);
+    return token;
+  } catch (error) {
+    log('peak error:', error.message);
+    return '';
+  }
 }
 
 /** Cookie jar for server-side downloads (the media route redirects to a signed CDN URL). */
