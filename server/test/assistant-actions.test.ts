@@ -398,6 +398,17 @@ describe('spending actions need confirm', () => {
     expect(jobs.map(j => j.technique).sort()).toEqual([`story:${story.id}/01-laras`, `story:${story.id}/02-kapas`]);
   });
 
+  it('render on an Axcel engine: still needs confirm, the label names the Axcel plan and no Flow credits', async () => {
+    const t = serviceSetup();
+    const story = await t.service.create({ ...twoScenes(), engine: { video: { provider: 'axcel', model: 'Seedance 2.0' } } } as Storyboard);
+    const r = await run(ctxFor(t), story.id, 'render', { scene: 1 });
+    expect(r).toMatchObject({ ok: false, needsConfirm: true, estimate: {} });
+    expect((r as { label: string }).label).toBe('Render 2 klip (scene 1, Axcel Seedance 2.0 · termasuk paket, 0 kredit Flow)');
+    expect(await t.flow.listJobs()).toHaveLength(0);
+    okOf(await run(ctxFor(t, { confirmed: true }), story.id, 'render', { scene: 1 }));
+    expect((await t.flow.listJobs()).every(j => j.provider === 'axcel')).toBe(true);
+  });
+
   it('confirmation comes from the caller (ctx.confirmed === true), never from model input', async () => {
     const t = serviceSetup();
     const story = await t.service.create(twoScenes());

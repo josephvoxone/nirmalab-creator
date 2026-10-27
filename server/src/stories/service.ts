@@ -14,7 +14,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type { FlowStore } from '../flow/store.js';
 import { linkOrCopy } from '../media/link.js';
-import { CREDITS_PER_SHOT, bibleSceneFor, castOf, frameHashFor, framePromptFor, hashFor, normalizeScenes, sceneOf, sheetHashFor, sheetPromptFor, shotCast, shotPromptFor, validateStoryboard, type Shot, type Storyboard } from './storyboard.js';
+import { AXCEL_PROJECT_RESOLUTION, CREDITS_PER_SHOT, axcelClipSec, bibleSceneFor, isSilent, castOf, frameHashFor, framePromptFor, hashFor, normalizeScenes, sceneOf, sheetHashFor, sheetPromptFor, shotCast, shotPromptFor, validateStoryboard, type Shot, type Storyboard } from './storyboard.js';
 import { ShotCompileError } from '../bible/compiler.js';
 import { bibleSceneErrors, syncBible } from '../bible/sync.js';
 import { SnapshotStore, type RestoreAttention, type RestoreOutcome } from './snapshots.js';
@@ -566,9 +566,14 @@ export class StoryService {
   }
 
   /** Job fields for the storyboard's engine of this kind ({} = Flow, today's behaviour). */
-  private engine(board: Storyboard, kind: 'image' | 'video'): { provider?: 'openrouter'; model?: string } {
+  private engine(board: Storyboard, kind: 'image' | 'video'): { provider?: 'openrouter' | 'axcel'; model?: string } {
     const engine = board.engine?.[kind];
-    return engine?.provider === 'openrouter' ? { provider: 'openrouter', model: engine.model } : {};
+    return engine?.provider === 'openrouter' || engine?.provider === 'axcel' ? { provider: engine.provider, model: engine.model } : {};
+  }
+
+  /** Engines that take files (OpenRouter, Axcel): the keyframe/sheets are sent as images, not Flow media ids. */
+  private takesFiles(engine: { provider?: string }): boolean {
+    return engine.provider === 'openrouter' || engine.provider === 'axcel';
   }
 
   /** OpenRouter video engine: clips × usdPerClip vs the known balance (unknown price or balance = no check). */
@@ -587,22 +592,24 @@ export class StoryService {
     const prompt = this.compiled(() => shotPromptFor(board, shot), shotId);
     const konsisten = record.mode === 'konsisten';
     const engine = this.engine(board, 'video');
+    const axcel = board.engine?.video?.provider === 'axcel' ? board.engine.video : undefined;
     const job = await this.deps.flow.createJob({
       prompt: state.auditRepair ? `${prompt} ${state.auditRepair}`.trim() : prompt,
       technique: `story:${record.id}/${shot.id}`,
       aspect: board.aspect ?? '9:16',
-      durationSec: 6,
+      durationSec: axcel ? axcelClipSec(axcel.model) : 6,
+      ...(axcel ? { resolution: AXCEL_PROJECT_RESOLUTION } : {}),
       kind: 'video',
       ...this.owner(record),
       ...engine,
       ...(konsisten ? {
         group: record.id,
         characters: shotCast(board, shot).map(c => ({ name: c.name, look: c.look })),
-        // OpenRouter animates the approved keyframe file (first_frame); Flow animates its own media.
-        ...(engine.provider === 'openrouter'
+        // OpenRouter/Axcel animate the approved keyframe file (start frame); Flow animates its own media.
+        ...(this.takesFiles(engine)
           ? (state.frame?.status === 'done' ? { startImage: this.framePath(record.id, shot.id) } : this.startUpload(record, shot))
           : state.frame?.mediaId ? { startFrame: { mediaId: state.frame.mediaId, caption: state.frame.caption ?? '' } } : {})
-      } : engine.provider === 'openrouter' ? this.startUpload(record, shot) : {})
+      } : this.takesFiles(engine) ? this.startUpload(record, shot) : {})
     });
     state.jobId = job.id;
     state.promptHash = hashFor(board, shot);
@@ -659,6 +666,8 @@ export class StoryService {
       const videoEngine = board.engine?.video;
       if (videoEngine?.provider === 'openrouter') {
         if (!options.force) await this.openRouterBudget(videoEngine.model, todo.length);
+      } else if (videoEngine?.provider === 'axcel') {
+        // Paid by the Axcel plan: no per-clip balance to check, and no Flow credits are spent.
       } else {
         const credits = await this.knownCredits();
         const needed = todo.length * CREDITS_PER_SHOT;
@@ -672,7 +681,8 @@ export class StoryService {
       record.run = { shots: record.shots.map(s => s.id).filter(sid => ids.has(sid) || previous.includes(sid)) };
       record.status = 'rendering';
       record.error = undefined;
-      await this.save(record, todo.length ? `${todo.length} shot masuk antrean Flow` : undefined);
+      const queue = videoEngine?.provider === 'axcel' ? `Axcel (${videoEngine.model})` : videoEngine?.provider === 'openrouter' ? 'OpenRouter' : 'Flow';
+      await this.save(record, todo.length ? `${todo.length} shot masuk antrean ${queue}` : undefined);
       return record;
     });
   }
@@ -754,7 +764,7 @@ export class StoryService {
       if (job.status !== 'done' || !job.resultPath) continue;
       const target = this.shotPath(record.id, state.id);
       await linkOrCopy(job.resultPath, target);
-      const reason = await this.qc(target, !!shot.silent);
+      const reason = await this.qc(target, isSilent(board, shot));
       if (reason) {
         await rm(target, { force: true });
         if ((await this.rejectTake(state, reason)) === 'requeue') await this.queueShot(record, board, state.id);
@@ -1024,7 +1034,7 @@ export class StoryService {
     const prompt = sheetPromptFor(member, board);
     const engine = this.engine(board, 'image');
     const card = board.bible?.characters?.find(c => c.token === cast.token);
-    const ref = engine.provider === 'openrouter' ? reference ?? this.referencePath(record.id, card?.reference) : undefined;
+    const ref = this.takesFiles(engine) ? reference ?? this.referencePath(record.id, card?.reference) : undefined;
     const job = await this.deps.flow.createJob({
       prompt, kind: 'character', group: record.id, aspect: '16:9', durationSec: 6, ...this.owner(record), ...engine,
       technique: `story:${record.id}/cast:${cast.token}`,
@@ -1044,8 +1054,8 @@ export class StoryService {
       prompt, kind: 'image', group: record.id, aspect: board.aspect ?? '9:16', durationSec: 6, ...this.owner(record), ...engine,
       technique: `story:${record.id}/frame:${shot.id}`,
       characters: shotCast(board, shot).map(c => ({ name: c.name, look: c.look })),
-      // OpenRouter gets the approved cast sheets as input references.
-      ...(engine.provider === 'openrouter' ? { references: [...(reference ? [reference] : []), ...shotCast(board, shot).map(c => this.castPath(record.id, c.token))] } : {})
+      // OpenRouter/Axcel get the approved cast sheets as input references.
+      ...(this.takesFiles(engine) ? { references: [...(reference ? [reference] : []), ...shotCast(board, shot).map(c => this.castPath(record.id, c.token))] } : {})
     });
     state.frame = { ...(state.frame ?? { attempts: 0 }), status: 'queued', jobId: job.id, promptHash: frameHashFor(board, shot), error: undefined } as TakeState;
   }
@@ -1130,7 +1140,7 @@ export class StoryService {
         ? [intent.subject, intent.action, intent.startState && intent.endState ? `from ${intent.startState} to ${intent.endState}` : ''].filter(Boolean).join(': ')
         : named(shot.prompt),
       ...(intent?.emotion ?? board.bible?.tone ? { mood: intent?.emotion ?? board.bible?.tone } : {}),
-      ...(shot.silent || !shot.narration ? {} : { dialogue: named(shot.narration) })
+      ...(isSilent(board, shot) || !shot.narration ? {} : { dialogue: named(shot.narration) })
     };
   }
 

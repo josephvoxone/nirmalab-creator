@@ -11,7 +11,7 @@ export type ModelInfo = {
   references?: boolean; usdPerClip?: number | null; usdPerImage?: number | null; priceLabel: string;
 };
 export type Models = { image: ModelInfo[]; video: ModelInfo[] };
-export type AxcelModelInfo = { id: string; name: string; kind: MediaKind; inputs: string[]; durations?: number[]; resolutions?: number[]; ratios: string[]; audio: boolean };
+export type AxcelModelInfo = { id: string; name: string; kind: MediaKind; inputs: string[]; durations?: number[]; resolutions?: number[]; ratios: string[]; audio: boolean; /** Failing at Axcel's provider right now. */ down?: boolean };
 export type OpenRouterState = { configured: boolean; keyHint?: string; defaults: { image?: string; video?: string } };
 export type AxcelState = {
   configured: boolean;
@@ -90,3 +90,13 @@ export const isAxcel = (e?: Engine): e is { provider: 'axcel'; model: string } =
 
 /** The Axcel model each kind defaults to (Axcel bills the plan, not per clip). */
 export const AXCEL_DEFAULT_MODEL: Record<MediaKind, string> = { image: 'Nano Banana Pro', video: 'Seedance 2.0' };
+
+/** Flow credits a clip costs (stories/storyboard.ts CREDITS_PER_SHOT). */
+const FLOW_CREDITS_PER_CLIP = 10;
+
+/** What rendering `clips` clips costs on `engine`: Flow credits, OpenRouter USD (when the price is known), or the Axcel plan. */
+export function clipCost(engine: Engine | undefined, clips: number, usdPerClip?: number | null): string {
+  if (isAxcel(engine)) return `Axcel ${engine.model} · termasuk paket`;
+  if (isOpenRouter(engine)) return typeof usdPerClip === 'number' ? `±${fmtUsd(clips * usdPerClip)} OpenRouter` : 'OpenRouter';
+  return `±${clips * FLOW_CREDITS_PER_CLIP} kredit`;
+}

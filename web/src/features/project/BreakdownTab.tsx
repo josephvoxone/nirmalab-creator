@@ -16,9 +16,9 @@ import {
 } from '@/components/ui/alert-dialog';
 import { useSession } from '../../lib/session.js';
 import { sized } from '../../lib/media.js';
-import { inputClass, textareaClass } from '../../ui/controls.js';
+import { Choice, inputClass, textareaClass } from '../../ui/controls.js';
 import { CREDITS_PER_SHOT, storiesApi } from '../stories/storiesClient.js';
-import { FLOW, fmtUsd, isOpenRouter, type Engine, type EngineSet, type MediaKind } from '../providers/providersClient.js';
+import { FLOW, fmtUsd, isAxcel, isOpenRouter, type Engine, type EngineSet, type MediaKind } from '../providers/providersClient.js';
 import { estimateUsd, openRouterOption, useEngines, type EngineCatalog } from '../providers/useEngines.js';
 import { EngineChoice } from '../providers/EnginePicker.js';
 import { DEFAULT_LOOK, useCatalog, type Look } from '../stories/catalog.js';
@@ -122,6 +122,7 @@ function engineOf(board: Board): EngineSet {
 /** "4 klip × ±$0,30 = ±$1,20" (OpenRouter) or "4 klip × 10 kredit Flow = ±40 kredit". */
 function estimateLine(kind: MediaKind, engine: Engine, catalog: EngineCatalog, count: number): string {
   const unit = kind === 'video' ? 'klip' : 'gambar';
+  if (isAxcel(engine)) return `${count} ${unit} · Axcel ${engine.model} · termasuk paket, 0 kredit Flow`;
   if (!isOpenRouter(engine)) return kind === 'video' ? `${count} klip × ${CREDITS_PER_SHOT} kredit Flow = ±${count * CREDITS_PER_SHOT} kredit` : `${count} gambar · gratis di Flow`;
   const model = openRouterOption(catalog, kind, engine).model;
   if (!model && catalog.status === 'loading') return `${count} ${unit} · memuat harga OpenRouter…`;
@@ -130,7 +131,24 @@ function estimateLine(kind: MediaKind, engine: Engine, catalog: EngineCatalog, c
   return total === null || typeof each !== 'number' ? `${count} ${unit} × harga OpenRouter belum diketahui` : `${count} ${unit} × ±${fmtUsd(each)} = ±${fmtUsd(total)}`;
 }
 
-function EngineSection(props: { board: Board; locked: boolean; catalog: EngineCatalog; onSave: (engine: EngineSet) => void }) {
+/** Axcel's models of one kind (the catalog's, else just the current one); a model that is down says so. */
+function AxcelModelChoice(props: { kind: MediaKind; value: string; catalog: EngineCatalog; disabled: boolean; onChange: (model: string) => void }) {
+  const listed = (props.catalog.axcelModels ?? []).filter(m => m.kind === props.kind);
+  const models = listed.some(m => m.id === props.value) ? listed : [{ id: props.value, name: props.value, down: false }, ...listed];
+  return (
+    <Choice label={`Model Axcel (${props.kind === 'video' ? 'video' : 'gambar'})`} size="sm" disabled={props.disabled} className="w-full"
+      value={props.value} onChange={props.onChange}
+      options={models.map(m => ({ value: m.id, label: m.down ? `${m.name} · gangguan di Axcel` : m.name }))} />
+  );
+}
+
+type AudioMode = 'narration' | 'ambient';
+const AUDIO_OPTIONS: Array<{ value: AudioMode; label: string }> = [
+  { value: 'narration', label: 'Narasi + suara ambien' },
+  { value: 'ambient', label: 'Ambien saja — tanpa suara & musik' }
+];
+
+function EngineSection(props: { board: Board; locked: boolean; catalog: EngineCatalog; onSave: (engine: EngineSet) => void; onAudio: (mode: AudioMode) => void }) {
   const { board } = props;
   const engine = engineOf(board);
   const image = engine.image ?? FLOW;
@@ -139,7 +157,7 @@ function EngineSection(props: { board: Board; locked: boolean; catalog: EngineCa
   const images = clips + Object.keys(board.characters ?? {}).length;
   const set = (kind: MediaKind, e: Engine) => props.onSave({ ...engine, [kind]: e });
   return (
-    <Section id="bd-engine" title="Mesin produksi" hint="Google Flow gratis lewat pool akun; OpenRouter dibayar per pemakaian. Berlaku untuk gambar dan klip yang dibuat berikutnya.">
+    <Section id="bd-engine" title="Mesin produksi" hint="Google Flow gratis lewat pool akun; OpenRouter dibayar per pemakaian; Axcel termasuk paket. Berlaku untuk gambar dan klip yang dibuat berikutnya.">
       <div className="grid gap-3 sm:grid-cols-2">
         <div className="flex min-w-0 flex-col gap-1">
           {board.mode === 'cepat' ? (
@@ -150,13 +168,22 @@ function EngineSection(props: { board: Board; locked: boolean; catalog: EngineCa
           ) : (
             <>
               <EngineChoice label="Mesin gambar" showLabel kind="image" catalog={props.catalog} value={image} disabled={props.locked} onChange={e => set('image', e)} className="w-full" />
+              {isAxcel(image) && <AxcelModelChoice kind="image" value={image.model} catalog={props.catalog} disabled={props.locked} onChange={model => set('image', { provider: 'axcel', model })} />}
               <span className="text-[11.5px] text-muted-foreground tabular-nums">Lembar karakter + keyframe: {estimateLine('image', image, props.catalog, images)}</span>
             </>
           )}
         </div>
         <div className="flex min-w-0 flex-col gap-1">
           <EngineChoice label="Mesin video" showLabel kind="video" catalog={props.catalog} value={video} disabled={props.locked} onChange={e => set('video', e)} className="w-full" />
+          {isAxcel(video) && <AxcelModelChoice kind="video" value={video.model} catalog={props.catalog} disabled={props.locked} onChange={model => set('video', { provider: 'axcel', model })} />}
           <span className="text-[11.5px] text-muted-foreground tabular-nums">{estimateLine('video', video, props.catalog, clips)}</span>
+        </div>
+        <div className="flex min-w-0 flex-col gap-1 sm:col-span-2">
+          <Choice label="Suara klip" showLabel size="sm" disabled={props.locked} className="w-full sm:w-80"
+            value={board.audioMode === 'ambient' ? 'ambient' : 'narration'} options={AUDIO_OPTIONS} onChange={props.onAudio} />
+          <span className="text-[11.5px] text-muted-foreground">
+            {board.audioMode === 'ambient' ? 'Klip tanpa suara orang dan tanpa musik — hanya suara tempatnya. Musik dan narasi ditambahkan nanti saat menyunting.' : 'Narasi tiap shot diucapkan di klip, ditambah suara tempatnya.'}
+          </span>
         </div>
       </div>
     </Section>
@@ -298,7 +325,8 @@ export function BreakdownTab() {
         {board.style && <p className="font-mono text-[11.5px] leading-relaxed text-muted-foreground">{board.style}</p>}
       </Section>
 
-      <EngineSection board={board} locked={locked} catalog={engines} onSave={engine => void p.save({ ...board, engine })} />
+      <EngineSection board={board} locked={locked} catalog={engines} onSave={engine => void p.save({ ...board, engine })}
+        onAudio={mode => void p.save({ ...board, audioMode: mode === 'ambient' ? 'ambient' : undefined })} />
 
       <AlertDialog open={!!doomed} onOpenChange={o => { if (!o) setDoomed(undefined); }}>
         <AlertDialogContent>

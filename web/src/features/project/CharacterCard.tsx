@@ -13,7 +13,7 @@ import { useSession } from '../../lib/session.js';
 import { UPLOAD_WIDTHS, sizedImg } from '../../lib/media.js';
 import { inputClass } from '../../ui/controls.js';
 import { describeError } from '../../ui/states.js';
-import { FLOW, fmtUsd, isOpenRouter, type Engine, type EngineSet } from '../providers/providersClient.js';
+import { FLOW, fmtUsd, isOpenRouter, type Engine, type EngineSet, clipCost, isAxcel } from '../providers/providersClient.js';
 import { CREDITS_PER_SHOT, UPLOAD_TYPES, storiesApi, uploadProblem, type SheetAnswer, type Story } from '../stories/storiesClient.js';
 import type { Board } from './model.js';
 import { shotsUsing } from './mentions.js';
@@ -59,13 +59,13 @@ export function anchorImpact(board: Board, story: Story, token: string): { shots
 /** A rename changes the compiled video prompt (the name is spoken): every done clip of that character is made again. */
 export function renameText(impact: { clips: number }, engine: EngineSet): string | undefined {
   if (!impact.clips) return undefined;
-  const cost = isOpenRouter(engine.video) ? 'dibayar per klip di OpenRouter' : `±${impact.clips * CREDITS_PER_SHOT} kredit`;
+  const cost = isAxcel(engine.video) ? clipCost(engine.video, impact.clips) : isOpenRouter(engine.video) ? 'dibayar per klip di OpenRouter' : `±${impact.clips * CREDITS_PER_SHOT} kredit`;
   return `Nama dipakai di prompt video — klip ${impact.clips} shot (${cost}) perlu dibuat ulang`;
 }
 
 export function impactText(impact: { shots: number; clips: number }, engine: EngineSet, konsisten: boolean): string {
-  const image = isOpenRouter(engine.image) ? 'dibayar di OpenRouter' : 'gratis di Flow';
-  const clips = isOpenRouter(engine.video) ? `klip ${impact.clips} shot (dibayar per klip di OpenRouter)` : `klip ${impact.clips} shot (±${impact.clips * CREDITS_PER_SHOT} kredit)`;
+  const image = isAxcel(engine.image) ? `Axcel ${engine.image.model} · termasuk paket` : isOpenRouter(engine.image) ? 'dibayar di OpenRouter' : 'gratis di Flow';
+  const clips = isAxcel(engine.video) ? `klip ${impact.clips} shot (${clipCost(engine.video, impact.clips)})` : isOpenRouter(engine.video) ? `klip ${impact.clips} shot (dibayar per klip di OpenRouter)` : `klip ${impact.clips} shot (±${impact.clips * CREDITS_PER_SHOT} kredit)`;
   if (!konsisten) return `Mengubah tampilan membuat ulang ${clips}`;
   return `Mengubah tampilan membuat ulang sheet + keyframe ${impact.shots} shot (${image})${impact.clips ? ` dan ${clips}` : ''}`;
 }

@@ -34,6 +34,121 @@ describe('Storyboard.engine validation', () => {
   });
 });
 
+const AX_VIDEO = { provider: 'axcel' as const, model: 'Seedance 2.0' };
+
+describe('stories with an Axcel engine', () => {
+  it('validation: axcel with a known model, for clips and stills; an unknown model is refused', () => {
+    expect(validateStoryboard({ ...board, engine: { video: AX_VIDEO, image: { provider: 'axcel', model: 'Nano Banana Pro' } } } as Storyboard)).toEqual([]);
+    expect(validateStoryboard({ ...board, engine: { video: { provider: 'axcel', model: 'Sora 9' } } } as unknown as Storyboard).join()).toMatch(/engine\.video.*Seedance 2\.0/);
+    expect(validateStoryboard({ ...board, engine: { video: { provider: 'axcel' } } } as unknown as Storyboard).join()).toMatch(/engine\.video/);
+  });
+
+  it('render: clips go to the Axcel worker with the model, at 720p and a length the model supports', async () => {
+    const t = setup();
+    const story = await t.service.create({ ...board, mode: 'cepat', engine: { video: AX_VIDEO } });
+    await t.service.render(story.id);
+    const jobs = await t.flow.listJobs();
+    expect(jobs).toHaveLength(2);
+    expect(jobs.every(j => j.provider === 'axcel' && j.model === 'Seedance 2.0' && j.durationSec === 5 && j.resolution === 720)).toBe(true);
+    // The Flow bridge never sees them.
+    expect(await t.flow.claimJob('mac')).toBeUndefined();
+
+    const veo = await t.service.create({ ...board, mode: 'cepat', engine: { video: { provider: 'axcel', model: 'Veo 3.1 Fast' } } });
+    await t.service.render(veo.id);
+    expect((await t.flow.listJobs()).filter(j => j.technique?.includes(veo.id)).every(j => j.durationSec === 8)).toBe(true);
+  });
+
+  it('an Axcel video engine skips the Flow credit check (the plan pays, no Flow credits are spent)', async () => {
+    const t = setup();
+    const acc = await t.flow.addAccount({ label: 'A', email: 'a@b.c' });
+    await t.flow.heartbeat('mac', [{ id: acc.id, credits: 0 }]);
+    const story = await t.service.create({ ...board, mode: 'cepat', engine: { video: AX_VIDEO } });
+    const record = await t.service.render(story.id);
+    expect(await t.flow.listJobs()).toHaveLength(2);
+    expect(record.events.at(-1)?.message).toBe('2 shot masuk antrean Axcel (Seedance 2.0)');
+  });
+
+  it('konsisten + axcel video engine: the approved keyframe file is the start frame', async () => {
+    const t = setup();
+    const story = await t.service.create({ ...board, mode: 'konsisten', engine: { video: AX_VIDEO } });
+    const finish = async (kind: 'character' | 'image') => {
+      const clips = join(t.dataDir, 'flow', 'clips');
+      mkdirSync(clips, { recursive: true });
+      for (const job of (await t.flow.listJobs()).filter(j => j.kind === kind && j.status === 'queued')) {
+        const file = join(clips, `${job.id}.png`);
+        writeFileSync(file, Buffer.alloc(20_000, 2));
+        await t.flow.completeJob(job.id, { filePath: file, result: { mediaId: `m-${job.id}`, caption: 'c' } });
+      }
+    };
+    await t.service.prepare(story.id);
+    await finish('character');
+    await t.service.reconcile(story.id);
+    await finish('image');
+    await t.service.reconcile(story.id);
+    await t.service.render(story.id);
+    const clips = (await t.flow.listJobs()).filter(j => j.kind === 'video');
+    expect(clips.every(j => j.provider === 'axcel')).toBe(true);
+    expect(clips.map(j => j.startImage).sort()).toEqual(['01-a', '02-b'].map(id => t.service.framePath(story.id, id)).sort());
+    expect(clips.every(j => j.startFrame === undefined)).toBe(true);
+  });
+
+  it('konsisten + axcel image engine: sheets and keyframes go to Axcel with the cast sheets as references', async () => {
+    const t = setup();
+    const story = await t.service.create({ ...board, mode: 'konsisten', engine: { image: { provider: 'axcel', model: 'Nano Banana Pro' } } } as Storyboard);
+    await t.service.prepare(story.id);
+    const [sheet] = await t.flow.listJobs();
+    expect(sheet).toMatchObject({ kind: 'character', provider: 'axcel', model: 'Nano Banana Pro' });
+    const clips = join(t.dataDir, 'flow', 'clips');
+    mkdirSync(clips, { recursive: true });
+    writeFileSync(join(clips, `${sheet!.id}.png`), Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47]), Buffer.alloc(20_000, 1)]));
+    await t.flow.completeJob(sheet!.id, { filePath: join(clips, `${sheet!.id}.png`), provider: 'axcel' });
+    await t.service.reconcile(story.id);
+    const frames = (await t.flow.listJobs()).filter(j => j.kind === 'image');
+    expect(frames).toHaveLength(2);
+    expect(frames.every(j => j.provider === 'axcel' && j.model === 'Nano Banana Pro')).toBe(true);
+    expect(frames[0]!.references).toEqual([t.service.castPath(story.id, 'RABBIT')]);
+  });
+});
+
+describe('audio: narration or ambient only', () => {
+  it('audio "ambient": every shot is silent (no voice), narration is optional, and the clip prompt changes but no keyframe does', async () => {
+    const { shotPromptFor, hashFor, frameHashFor } = await import('../src/stories/storyboard.js');
+    const voiced = { ...board, audioSilent: 'Audio: ambient sound only, no voice, no music.' };
+    const ambient = { ...voiced, audioMode: 'ambient' as const };
+    for (const shot of board.shots) {
+      expect(shotPromptFor(voiced, shot)).toContain('voice-over');
+      expect(shotPromptFor(ambient, shot)).not.toContain('voice-over');
+      expect(shotPromptFor(ambient, shot)).toContain('ambient sound only');
+      expect(hashFor(ambient, shot)).not.toBe(hashFor(voiced, shot));
+      expect(frameHashFor(ambient, shot)).toBe(frameHashFor(voiced, shot));
+    }
+    const unspoken = { ...ambient, shots: board.shots.map(s => ({ ...s, narration: '' })) };
+    expect(validateStoryboard(unspoken)).toEqual([]);
+    expect(validateStoryboard({ ...unspoken, audioMode: undefined }).join()).toMatch(/narration is empty/);
+    expect(validateStoryboard({ ...board, audioMode: 'loud' } as unknown as Storyboard).join()).toMatch(/audioMode/);
+  });
+
+  it('QC: a clip with no audio track passes in an ambient story, and is rejected in a narrated one', async () => {
+    const run = async (audioMode?: 'ambient') => {
+      const dataDir = mkdtempSync(join(tmpdir(), 'nc-pstories-'));
+      const flow = new FlowStore(join(dataDir, 'flow'));
+      const service = new StoryService({ dataDir, flow, probe: async () => ({ durationSec: 5, hasAudio: false }), assemble: async () => undefined });
+      const story = await service.create({ ...board, mode: 'cepat', ...(audioMode ? { audioMode } : {}) });
+      await service.render(story.id);
+      const clips = join(dataDir, 'flow', 'clips');
+      mkdirSync(clips, { recursive: true });
+      for (const job of await flow.listJobs()) {
+        const file = join(clips, `${job.id}.mp4`);
+        writeFileSync(file, Buffer.alloc(8192, 1));
+        await flow.completeJob(job.id, { filePath: file });
+      }
+      return (await service.reconcile(story.id))!.shots.map(s => s.status);
+    };
+    expect(await run('ambient')).toEqual(['done', 'done']);
+    expect(await run()).not.toContain('done');
+  });
+});
+
 function setup(openRouter?: StoryDeps['openRouter']) {
   const dataDir = mkdtempSync(join(tmpdir(), 'nc-pstories-'));
   const flow = new FlowStore(join(dataDir, 'flow'));

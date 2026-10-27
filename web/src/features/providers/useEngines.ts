@@ -5,12 +5,14 @@
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { FetchLike } from '../../lib/api.js';
-import { AXCEL_DEFAULT_MODEL, isAxcel, isOpenRouter, providersApi, shortPrice, type Engine, type MediaKind, type ModelInfo, type Models, type Providers } from './providersClient.js';
+import { AXCEL_DEFAULT_MODEL, isAxcel, isOpenRouter, providersApi, shortPrice, type AxcelModelInfo, type Engine, type MediaKind, type ModelInfo, type Models, type Providers } from './providersClient.js';
 
 export type EngineCatalog = {
   status: 'loading' | 'ready' | 'error';
   providers?: Providers;
   models?: Models;
+  /** Axcel's own catalog (names, which are down right now); absent when the bridge is not set up. */
+  axcelModels?: AxcelModelInfo[];
   error?: unknown;
   reload: () => void;
 };
@@ -29,7 +31,11 @@ export function useEngines(fetchImpl: FetchLike): EngineCatalog {
         if (providers?.openrouter?.configured) {
           try { models = await api.models(); } catch { models = undefined; /* names fall back to ids */ }
         }
-        if (alive) setState({ status: 'ready', providers, models });
+        let axcelModels: AxcelModelInfo[] | undefined;
+        if (providers?.axcel?.configured && !providers.axcel.error) {
+          try { axcelModels = (await api.axcelModels()).models; } catch { axcelModels = undefined; /* picker keeps the default model */ }
+        }
+        if (alive) setState({ status: 'ready', providers, models, axcelModels });
       } catch (error) {
         if (alive) setState({ status: 'error', error });
       }

@@ -253,3 +253,12 @@ describe('Breakdown › reference upload vs. the assistant', () => {
     expect(api.board.bible).toMatchObject({ characters: [{ token: 'JINGGA', reference: 'uploads/up_0123456789abcdef.png' }, BIBLE.characters[1]] });
   });
 });
+
+describe('cost texts on an Axcel engine', () => {
+  it('say the plan, never Flow credits', async () => {
+    const { impactText, renameText } = await import('./CharacterCard.js');
+    const engine = { image: { provider: 'axcel' as const, model: 'Nano Banana Pro' }, video: { provider: 'axcel' as const, model: 'Seedance 2.0' } };
+    expect(renameText({ clips: 3 }, engine)).toBe('Nama dipakai di prompt video — klip 3 shot (Axcel Seedance 2.0 · termasuk paket) perlu dibuat ulang');
+    expect(impactText({ shots: 2, clips: 1 }, engine, true)).toBe('Mengubah tampilan membuat ulang sheet + keyframe 2 shot (Axcel Nano Banana Pro · termasuk paket) dan klip 1 shot (Axcel Seedance 2.0 · termasuk paket)');
+  });
+});

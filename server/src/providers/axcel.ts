@@ -28,6 +28,8 @@ export type AxcelModelInfo = {
   resolutions?: number[];
   ratios: string[];
   audio: boolean;
+  /** The catalog marks the model as failing at Axcel's provider right now (renders are refused). */
+  down: boolean;
 };
 
 export type AxcelHealth = {
@@ -174,7 +176,8 @@ export class AxcelClient {
         ...(Array.isArray(m.durations) ? { durations: m.durations.filter((d): d is number => typeof d === 'number') } : {}),
         ...(Array.isArray(m.res) ? { resolutions: m.res.filter((r): r is number => typeof r === 'number') } : {}),
         ratios: Array.isArray(m.ratios) ? m.ratios.filter((r): r is string => typeof r === 'string') : [],
-        audio: m.audio === true
+        audio: m.audio === true,
+        down: m.status === 'FAIL'
       }];
     });
   }
@@ -295,7 +298,10 @@ export class AxcelWorker {
       // The last attempt counts as final too: `failJob` will mark the job failed, so the work must
       // not disappear just because the engine kept answering "try again".
       const exhausted = job.attempts + 1 >= job.maxAttempts;
-      const failover = (final || exhausted) && this.deps.failoverToFlow !== false ? await this.requeueOnFlow(job, message) : undefined;
+      // Project clips never move: a Flow take costs credits the user approved for Axcel, not Flow;
+      // the project shows the failed shot and the user decides (try again later, or switch engine).
+      const project = job.technique?.startsWith('story:') === true;
+      const failover = (final || exhausted) && !project && this.deps.failoverToFlow !== false ? await this.requeueOnFlow(job, message) : undefined;
       await this.deps.store.failJob(job.id, failover ? `${message} — dialihkan ke Google Flow (${failover})` : message, { final }).catch(() => undefined);
     }
   }
@@ -339,7 +345,7 @@ export class AxcelWorker {
     const submitted = await client.generate({
       model,
       prompt: job.prompt,
-      ...(job.kind === 'video' ? { duration: job.durationSec, resolution: DEFAULT_RESOLUTION, audio: true } : {}),
+      ...(job.kind === 'video' ? { duration: job.durationSec, resolution: job.resolution ?? DEFAULT_RESOLUTION, audio: true } : {}),
       ratio: job.aspect,
       inputs,
       idempotencyKey: job.id

@@ -1,5 +1,5 @@
 /** Test fixtures for the provider routes (docs/providers-and-media.md §1). */
-import type { Models, Providers } from './providersClient.js';
+import type { AxcelModelInfo, Models, Providers } from './providersClient.js';
 
 export const MODELS: Models = {
   image: [
@@ -13,6 +13,13 @@ export const MODELS: Models = {
     { id: 'kling/kling-2', name: 'Kling 2', aspects: ['9:16', '16:9'], durations: [5, 10], audio: false, firstFrame: true, usdPerClip: 0.5, priceLabel: '±$0,50 / klip 5 dtk' }
   ]
 };
+
+export const AXCEL_MODELS: AxcelModelInfo[] = [
+  { id: 'Seedance 2.0', name: 'Seedance 2.0', kind: 'video', inputs: ['text', 'start'], durations: [5, 8], resolutions: [480, 720], ratios: ['9:16'], audio: true, down: false },
+  { id: 'Seedance 2.5', name: 'Seedance 2.5', kind: 'video', inputs: ['text', 'start'], durations: [5, 8], resolutions: [480, 720], ratios: ['9:16'], audio: true, down: true },
+  { id: 'Veo 3.1 Fast', name: 'Veo 3.1 Fast', kind: 'video', inputs: ['text', 'start'], durations: [8], resolutions: [720], ratios: ['9:16'], audio: true, down: false },
+  { id: 'Nano Banana Pro', name: 'Nano Banana Pro', kind: 'image', inputs: ['text', 'refimg'], ratios: ['9:16'], audio: false, down: false }
+];
 
 export const CONFIGURED: Providers = {
   flow: { accounts: 3, credits: 450, online: true },
@@ -33,5 +40,6 @@ export function providerResponse(url: string, init: RequestInit | undefined, pro
   const method = init?.method ?? 'GET';
   if (url.endsWith('/api/providers') && method === 'GET') return providers ? json(200, providers) : json(403, { error: { message: 'Admin only' } });
   if (url.endsWith('/api/providers/openrouter/models') && method === 'GET') return json(200, MODELS);
+  if (url.endsWith('/api/providers/axcel/models') && method === 'GET') return json(200, { models: AXCEL_MODELS });
   return undefined;
 }

@@ -180,8 +180,14 @@ const compileIssues = (board: Storyboard, shot: Shot): string[] => {
   }
 };
 
+// OpenRouter engines (priced per use); Axcel engines (paid by the plan); both take image files.
 const imageEngine = (board: Storyboard) => board.engine?.image?.provider === 'openrouter' ? board.engine.image : undefined;
 const videoEngine = (board: Storyboard) => board.engine?.video?.provider === 'openrouter' ? board.engine.video : undefined;
+const axcelImage = (board: Storyboard) => board.engine?.image?.provider === 'axcel' ? board.engine.image : undefined;
+const axcelVideo = (board: Storyboard) => board.engine?.video?.provider === 'axcel' ? board.engine.video : undefined;
+const imageTakesFiles = (board: Storyboard) => !!(imageEngine(board) ?? axcelImage(board));
+const videoTakesFiles = (board: Storyboard) => !!(videoEngine(board) ?? axcelVideo(board));
+const axcelCost = (model: string) => `Axcel ${model} · termasuk paket, 0 kredit Flow`;
 
 function toFailure(error: unknown): ActionResult {
   if (error instanceof ActionInputError || error instanceof BreakdownError) return fail(error.message);
@@ -220,8 +226,10 @@ function withRedoNote<R extends ActionResult & { ok: true }>(result: R, before: 
     if (old?.frame?.status === 'done' && now.frame?.status !== 'done') frames += 1;
   }
   if (!clips && !frames) return result;
-  const cost = videoEngine(board) ? 'biaya OpenRouter' : `±${clips * CREDITS_PER_SHOT} kredit Flow`;
-  const parts = [clips ? `${clips} klip (${cost})` : '', frames ? `${frames} keyframe (gratis di Flow)` : ''].filter(Boolean);
+  const ax = axcelVideo(board);
+  const cost = videoEngine(board) ? 'biaya OpenRouter' : ax ? axcelCost(ax.model) : `±${clips * CREDITS_PER_SHOT} kredit Flow`;
+  const frameCost = imageEngine(board) ? 'biaya OpenRouter' : axcelImage(board) ? 'termasuk paket Axcel' : 'gratis di Flow';
+  const parts = [clips ? `${clips} klip (${cost})` : '', frames ? `${frames} keyframe (${frameCost})` : ''].filter(Boolean);
   return { ...result, label: `${result.label} — ${parts.join(' dan ')} perlu dibuat ulang` };
 }
 
@@ -330,6 +338,7 @@ async function estimateLeft(ctx: ActionContext, board: Storyboard, record: Story
     ? (record.cast ?? []).filter(c => c.status !== 'done').length + record.shots.filter(s => s.frame && s.frame.status !== 'done').length
     : 0;
   const video = videoEngine(board);
+  if (axcelVideo(board)) return { clips, images };
   if (!video) return { credits: clips * CREDITS_PER_SHOT, clips, images };
   const usd = await ctx.price?.usdPerClip(video.model).catch(() => null);
   return { ...(typeof usd === 'number' ? { usd: Math.round(clips * usd * 100) / 100 } : {}), clips, images };
@@ -340,7 +349,7 @@ function summary(board: Storyboard, record: StoryRecord, estimate: Estimate & { 
   const states = new Map(record.shots.map(s => [s.id, s]));
   const sceneN = new Map(b.scenes!.map((s, i) => [s.id, i + 1]));
   const cast = new Map((record.cast ?? []).map(c => [c.token, c]));
-  const engineName = (e: Engine | undefined) => (e?.provider === 'openrouter' ? `openrouter:${e.model}` : 'flow');
+  const engineName = (e: Engine | undefined) => (e?.provider === 'openrouter' || e?.provider === 'axcel' ? `${e.provider}:${e.model}` : 'flow');
   const tokens = new Set([...(b.bible?.characters ?? []).map(c => c.token), ...Object.keys(b.characters ?? {})]);
   return {
     title: b.title,
@@ -349,6 +358,7 @@ function summary(board: Storyboard, record: StoryRecord, estimate: Estimate & { 
     mode: record.mode ?? 'cepat',
     bible: !!b.bible,
     engine: { image: engineName(b.engine?.image), video: engineName(b.engine?.video) },
+    ...(b.audioMode === 'ambient' ? { audio: 'ambient only (no voice, no music): narration is not spoken' } : {}),
     look: b.look?.family ? `${b.look.family}${b.look.variant && b.look.variant !== b.look.family ? `:${b.look.variant}` : ''}` : b.look?.style ?? 'default',
     ...(level ? { shortened: true } : {}),
     ...(b.bible?.logline ? { logline: clip(b.bible.logline, caps.line ? 200 : 100) } : {}),
@@ -537,6 +547,8 @@ function spending(def: {
 
 async function imageEstimate(ctx: ActionContext, board: Storyboard, images: number): Promise<{ estimate: Estimate; cost: string }> {
   const engine = imageEngine(board);
+  const ax = axcelImage(board);
+  if (ax) return { estimate: {}, cost: axcelCost(ax.model) };
   if (!engine) return { estimate: { credits: 0 }, cost: 'gratis di Flow' };
   const each = await ctx.price?.usdPerImage?.(engine.model).catch(() => null);
   if (typeof each !== 'number') return { estimate: {}, cost: `${images} gambar OpenRouter, harga tidak diketahui` };
@@ -628,7 +640,7 @@ export const ACTIONS: Record<ActionName, Action> = {
   },
 
   add_shot: {
-    description: `Add one shot to a scene, after a given shot (or at the end of the scene). ${SHOT_DESCRIPTION_RULE} On bible projects give the intent (subject, action, startState, endState, emotion, framing, move) and narration; never prompt text. On projects without a bible give "prompt" (English prose) and narration. startFrame: an uploaded image id used as the first frame (OpenRouter video engines only).`,
+    description: `Add one shot to a scene, after a given shot (or at the end of the scene). ${SHOT_DESCRIPTION_RULE} On bible projects give the intent (subject, action, startState, endState, emotion, framing, move) and narration; never prompt text. On projects without a bible give "prompt" (English prose) and narration. startFrame: an uploaded image id used as the first frame (OpenRouter and Axcel video engines only).`,
     schema: obj({
       scene: SCENE_REF, after: { ...SHOT_REF, description: 'Insert after this shot number (0 = first in the scene)' }, ...INTENT_PROPS,
       prompt: { type: 'string', description: 'Legacy (no-bible) projects only' }, startFrame: { type: 'string', description: 'Uploaded image id (up_…) or a media pointer like "keyframe shot 2"' }
@@ -642,8 +654,8 @@ export const ACTIONS: Record<ActionName, Action> = {
       const pre = await ctx.stories.readStoryboard(storyId);
       const start = await referencePlan(ctx, storyId, pre, input, 'startFrame');
       // Flow cannot use a start frame: nothing is stored, and no copy is made for it.
-      const keep = start && videoEngine(pre) ? start : undefined;
-      const startNote = start && !keep ? ' Start frame tidak disimpan: hanya mesin video OpenRouter yang memakainya.' : '';
+      const keep = start && videoTakesFiles(pre) ? start : undefined;
+      const startNote = start && !keep ? ' Start frame tidak disimpan: hanya mesin video OpenRouter/Axcel yang memakainya.' : '';
       let label = '';
       const result = await mutate(ctx, storyId, board => {
         const b = normalizeScenes(board);
@@ -905,7 +917,7 @@ export const ACTIONS: Record<ActionName, Action> = {
       if (!result.ok) return result;
       const told = withRedoNote(result, before, await ctx.stories.get(storyId), pre);
       if (!reference) return told;
-      const note = imageEngine(pre) ? 'Referensi disimpan; dipakai saat sheet dibuat (make_sheet).' : FLOW_REFERENCE_NOTE;
+      const note = imageTakesFiles(pre) ? 'Referensi disimpan; dipakai saat sheet dibuat (make_sheet).' : FLOW_REFERENCE_NOTE;
       return { ...told, label: `${told.label}. ${note}` };
     })
   },
@@ -1015,7 +1027,7 @@ export const ACTIONS: Record<ActionName, Action> = {
   },
 
   make_sheet: spending({
-    description: `Make (or remake) the character sheet of ONE character (konsisten projects): one image job for that character only. Uses the reference stored on the character with OpenRouter image engines. Free on Flow, but it queues a job. ${CHAT_CONFIRM_RULE}`,
+    description: `Make (or remake) the character sheet of ONE character (konsisten projects): one image job for that character only. Uses the reference stored on the character with OpenRouter and Axcel image engines. Free on Flow, but it queues a job. ${CHAT_CONFIRM_RULE}`,
     schema: obj({ token: { type: 'string', description: 'Character TOKEN or name' }, reference: { type: 'string', description: 'Optional one-off reference: upload id (up_…) or media pointer' } }, ['token']),
     plan: async (ctx, storyId, input, record, board) => {
       if (record.mode !== 'konsisten') return fail('Lembar karakter hanya untuk mode konsisten.');
@@ -1027,8 +1039,8 @@ export const ACTIONS: Record<ActionName, Action> = {
       const reference = await referencePlan(ctx, storyId, board, input, 'reference');
       const { estimate, cost } = await imageEstimate(ctx, board, 1);
       const verb = cast.status === 'done' ? 'Buat ulang' : 'Buat';
-      const refNote = reference && !imageEngine(board) ? ` ${FLOW_REFERENCE_NOTE}` : '';
-      return { label: `${verb} sheet ${hit.name} (1 gambar, ${cost})${refNote}`, estimate, payload: { token: hit.token, name: hit.name, reference: reference && imageEngine(board) ? reference : undefined } };
+      const refNote = reference && !imageTakesFiles(board) ? ` ${FLOW_REFERENCE_NOTE}` : '';
+      return { label: `${verb} sheet ${hit.name} (1 gambar, ${cost})${refNote}`, estimate, payload: { token: hit.token, name: hit.name, reference: reference && imageTakesFiles(board) ? reference : undefined } };
     },
     execute: async (ctx, storyId, _input, plan) => {
       const { token, name, reference } = plan.payload as { token: string; name: string; reference?: RefPlan };
@@ -1044,7 +1056,7 @@ export const ACTIONS: Record<ActionName, Action> = {
   }),
 
   redraw_frame: spending({
-    description: `Draw the keyframe of ONE shot again (konsisten projects). ${SHOT_DESCRIPTION_RULE} note: a short one-off English instruction for this take (no camera gear, no TOKENs); reference: an uploaded image id or media pointer, sent with OpenRouter image engines. Free on Flow, but it queues a job. ${CHAT_CONFIRM_RULE}`,
+    description: `Draw the keyframe of ONE shot again (konsisten projects). ${SHOT_DESCRIPTION_RULE} note: a short one-off English instruction for this take (no camera gear, no TOKENs); reference: an uploaded image id or media pointer, sent with OpenRouter and Axcel image engines. Free on Flow, but it queues a job. ${CHAT_CONFIRM_RULE}`,
     schema: obj({ shot: SHOT_REF, note: { type: 'string' }, reference: { type: 'string' } }, ['shot']),
     plan: async (ctx, storyId, input, record, board) => {
       if (record.mode !== 'konsisten') return fail('Keyframe hanya untuk mode konsisten.');
@@ -1061,8 +1073,8 @@ export const ACTIONS: Record<ActionName, Action> = {
       // Planned only: a media pointer is copied in execute, after the user confirmed.
       const reference = await referencePlan(ctx, storyId, board, input, 'reference');
       const { estimate, cost } = await imageEstimate(ctx, board, 1);
-      const refNote = reference && !imageEngine(board) ? ` ${FLOW_REFERENCE_NOTE}` : '';
-      return { label: `Gambar ulang keyframe shot ${n} (1 gambar, ${cost})${refNote}`, estimate, payload: { id, n, note, reference: reference && imageEngine(board) ? reference : undefined } };
+      const refNote = reference && !imageTakesFiles(board) ? ` ${FLOW_REFERENCE_NOTE}` : '';
+      return { label: `Gambar ulang keyframe shot ${n} (1 gambar, ${cost})${refNote}`, estimate, payload: { id, n, note, reference: reference && imageTakesFiles(board) ? reference : undefined } };
     },
     execute: async (ctx, storyId, _input, plan) => {
       const { id, n, note, reference } = plan.payload as { id: string; n: number; note?: string; reference?: RefPlan };
@@ -1078,7 +1090,7 @@ export const ACTIONS: Record<ActionName, Action> = {
   }),
 
   prepare: spending({
-    description: `Make the character sheets and keyframes that are still missing (konsisten projects), for one scene or the whole project. Free on Flow, paid on OpenRouter image engines; it queues jobs. ${CHAT_CONFIRM_RULE}`,
+    description: `Make the character sheets and keyframes that are still missing (konsisten projects), for one scene or the whole project. Free on Flow, paid on OpenRouter image engines, part of the plan on Axcel; it queues jobs. ${CHAT_CONFIRM_RULE}`,
     schema: obj({ scene: SCENE_REF }),
     plan: async (ctx, _storyId, input, record, board) => {
       if (record.mode !== 'konsisten') return fail('Keyframe hanya untuk mode konsisten.');
@@ -1121,9 +1133,13 @@ export const ACTIONS: Record<ActionName, Action> = {
       const what = shot ? `shot ${shot.n}` : scene ? `scene ${scene.n}` : 'semua shot';
       if (!todo) return { ok: true, label: `Tidak ada klip yang perlu dirender untuk ${what}.`, changed: false };
       const video = videoEngine(b);
+      const ax = axcelVideo(b);
       let estimate: Estimate;
       let cost: string;
-      if (!video) {
+      if (ax) {
+        estimate = {};
+        cost = axcelCost(ax.model);
+      } else if (!video) {
         estimate = { credits: todo * CREDITS_PER_SHOT };
         cost = `±${todo * CREDITS_PER_SHOT} kredit Flow`;
       } else {

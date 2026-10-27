@@ -200,3 +200,17 @@ describe('Scene board — new shot on a bible board', () => {
     expect(within(sheet).queryByRole('textbox', { name: /prompt \(english\)/i })).toBeNull();
   });
 });
+
+describe('Scene board — render button cost follows the engine', () => {
+  it('Flow: credits', async () => {
+    mountProject(<ProjectPage pollMs={0} />, setup(bibleBoard()).fetchImpl);
+    expect(await screen.findByRole('button', { name: /Render scene · ±\d+ kredit/ })).toBeInTheDocument();
+  });
+
+  it('Axcel: the model and the plan, on the scene button and on the next-step button', async () => {
+    const axcel = setup({ ...bibleBoard(), engine: { video: { provider: 'axcel', model: 'Seedance 2.0' } } } as Board);
+    mountProject(<ProjectPage pollMs={0} />, axcel.fetchImpl);
+    expect(await screen.findByRole('button', { name: 'Render scene · Axcel Seedance 2.0 · termasuk paket' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Render semua · Axcel Seedance 2.0 · termasuk paket' })).toBeInTheDocument();
+  });
+});

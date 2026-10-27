@@ -118,6 +118,16 @@ describe('AxcelClient', () => {
     expect(models[1]).toMatchObject({ id: 'Nano Banana Pro', kind: 'image', audio: false });
   });
 
+  it('passes the catalog status on, so a picker can say a model is down at Axcel', async () => {
+    const fetchImpl = (async () => json({ models: [
+      { model: 'Seedance 2.0', type: 'video', inputs: ['start'], audio: true, status: 'FAIL' },
+      { model: 'Seedance 2.5', type: 'video', inputs: ['start'], audio: true, status: 'OK' },
+      { model: 'Veo 3.1 Fast', type: 'video', inputs: ['start'], audio: true }
+    ] })) as unknown as typeof fetch;
+    const models = await new AxcelClient(fetchImpl, { url: 'http://127.0.0.1:8899', token: 'x'.repeat(20) }).models();
+    expect(models.map(m => m.down)).toEqual([true, false, false]);
+  });
+
   it('turns a bridge 502 into an AxcelError that says whether a retry can help', async () => {
     const fetchImpl = (async () => json({ error: 'Sesi Axcel berakhir', final: true }, 502)) as unknown as typeof fetch;
     const client = new AxcelClient(fetchImpl, { url: 'http://127.0.0.1:8899', token: 'x'.repeat(20) });
@@ -144,6 +154,31 @@ describe('AxcelWorker', () => {
     }));
     expect(collect).toHaveBeenCalledWith('job_remote_1', 'video', 'job_axcel_1', '/api/media/job_remote_1.mp4?k=1');
     expect(state.completed).toEqual([{ id: 'job_axcel_1', filePath: '/tmp/clips/job_axcel_1.mp4', bytes: 4096, provider: 'axcel' }]);
+  });
+
+  it('renders at the resolution the job asks for (projects ask 720), else the default', async () => {
+    const { store } = fakeStore([job({ resolution: 720 })]);
+    const generate = vi.fn(async () => ({ jobId: 'j' }));
+    const client = { generate, job: vi.fn(async () => ({ status: 'done' })), collect: vi.fn(async () => ({ path: '/tmp/x.mp4', bytes: 2048 })), upload: vi.fn() } as unknown as AxcelClient;
+    const worker = new AxcelWorker({ store, client: async () => client, sleep: async () => undefined });
+    await worker.tick();
+    await worker.idle();
+    expect(generate).toHaveBeenCalledWith(expect.objectContaining({ resolution: 720, duration: 5 }));
+  });
+
+  it('never moves a project clip to Google Flow: that would spend Flow credits nobody approved', async () => {
+    const { state, store } = fakeStore([job({ technique: 'story:story_0123456789abcdef/01-a', maxAttempts: 1 })]);
+    const client = {
+      generate: vi.fn(async () => { throw new AxcelError('MODEL_GANGGUAN: Model ini sedang gangguan', 502, true); }),
+      job: vi.fn(), collect: vi.fn(), upload: vi.fn()
+    } as unknown as AxcelClient;
+    const worker = new AxcelWorker({ store, client: async () => client, sleep: async () => undefined });
+    await worker.tick();
+    await worker.idle();
+    expect(state.fallback).toBeUndefined();
+    expect(state.failed[0]).toMatchObject({ id: 'job_axcel_1', final: true });
+    expect(state.failed[0].error).toContain('MODEL_GANGGUAN');
+    expect(state.failed[0].error).not.toContain('Google Flow');
   });
 
   it('uploads the keyframe for an image-to-video job', async () => {

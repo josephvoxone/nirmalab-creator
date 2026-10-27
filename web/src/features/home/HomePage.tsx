@@ -114,9 +114,11 @@ export default function HomePage() {
 
   const credits = Number(shots) * CREDITS_PER_SHOT;
   const usd = engine.video.provider === 'openrouter' ? estimateUsd('video', videoOption.model, Number(shots)) : null;
-  const cost = engine.video.provider === 'openrouter'
-    ? (usd === null ? 'harga OpenRouter belum diketahui' : `±${fmtUsd(usd)} render`)
-    : `±${credits} kredit render`;
+  const cost = engine.video.provider === 'axcel'
+    ? `render Axcel ${engine.video.model} · termasuk paket`
+    : engine.video.provider === 'openrouter'
+      ? (usd === null ? 'harga OpenRouter belum diketahui' : `±${fmtUsd(usd)} render`)
+      : `±${credits} kredit render`;
   const suggestions = useMemo(() => {
     const seen = new Set<string>();
     const firstPerCategory = templates.filter(t => { const c = t.category ?? t.id; if (seen.has(c)) return false; seen.add(c); return true; });

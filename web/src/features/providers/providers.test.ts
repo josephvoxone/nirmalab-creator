@@ -1,9 +1,19 @@
 import { describe, expect, it } from 'vitest';
-import { fmtUsd, savedKeyText, shortPrice, sortVideoModels } from './providersClient.js';
+import { clipCost, fmtUsd, savedKeyText, shortPrice, sortVideoModels } from './providersClient.js';
 import { engineFor, estimateUsd, openRouterOption, type EngineCatalog } from './useEngines.js';
 import { CONFIGURED, MODELS, UNCONFIGURED } from './fixtures.js';
 
 const cat = (over: Partial<EngineCatalog> = {}): EngineCatalog => ({ status: 'ready', providers: CONFIGURED, models: MODELS, reload: () => undefined, ...over });
+
+describe('clipCost: what rendering N clips costs on the chosen engine', () => {
+  it('Flow in credits, OpenRouter in USD when known, Axcel as part of the plan', () => {
+    expect(clipCost(undefined, 2)).toBe('±20 kredit');
+    expect(clipCost({ provider: 'flow' }, 1)).toBe('±10 kredit');
+    expect(clipCost({ provider: 'openrouter', model: 'google/veo-3.1-lite' }, 4, 0.3)).toBe('±$1,20 OpenRouter');
+    expect(clipCost({ provider: 'openrouter', model: 'google/veo-3.1-lite' }, 4)).toBe('OpenRouter');
+    expect(clipCost({ provider: 'axcel', model: 'Seedance 2.0' }, 20)).toBe('Axcel Seedance 2.0 · termasuk paket');
+  });
+});
 
 describe('provider helpers', () => {
   it('sorts video models by price per clip, unknown prices last', () => {

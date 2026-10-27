@@ -84,6 +84,8 @@ export type FlowJob = {
   references?: string[];
   /** OpenRouter video: absolute path of the keyframe sent as first_frame. */
   startImage?: string;
+  /** Axcel video: output height (480/720/1080); absent = the worker's default. */
+  resolution?: number;
   /** OpenRouter generation id of a submitted video (resumed after a restart). */
   remoteId?: string;
   error?: string;
@@ -376,6 +378,7 @@ export class FlowStore {
     model?: string;
     references?: string[];
     startImage?: string;
+    resolution?: number;
   }): Promise<FlowJob> {
     const openrouter = input.provider === 'openrouter';
     const axcel = input.provider === 'axcel';
@@ -404,7 +407,8 @@ export class FlowStore {
           provider: (openrouter ? 'openrouter' : 'axcel') as ProviderId,
           model: input.model!,
           ...(input.references?.length ? { references: input.references.slice(0, 8) } : {}),
-          ...(input.startImage ? { startImage: input.startImage } : {})
+          ...(input.startImage ? { startImage: input.startImage } : {}),
+          ...(axcel && input.resolution && [480, 720, 1080].includes(input.resolution) ? { resolution: input.resolution } : {})
         } : {})
       };
       state.jobs.push(job);

@@ -5,6 +5,7 @@
 import type { Story } from '../stories/storiesClient.js';
 import { stageOf, type Board } from './model.js';
 import { elapsedLabel } from './SceneHelpers.js';
+import { clipCost, type EngineSet } from '../providers/providersClient.js';
 
 export type NextStep =
   | { kind: 'working'; label: string }
@@ -32,7 +33,7 @@ export function nextStep(story: Story, board: Board): NextStep {
   const todo = story.shots.length - done;
   if (current === 'breakdown') return { kind: 'prepare', label: 'Buat karakter & keyframe · gratis' };
   if (current === 'keyframe') return { kind: 'prepare', label: 'Buat keyframe semua · gratis' };
-  if (current === 'render') return { kind: 'render', label: `Render semua · ±${todo * 10} kredit` };
+  if (current === 'render') return { kind: 'render', label: `Render semua · ${clipCost((board.engine as EngineSet | undefined)?.video, todo)}` };
   if (!story.video) return { kind: 'assemble', label: 'Rakit video' };
   if (story.videoStale) return { kind: 'assemble', label: 'Rakit ulang video' };
   return { kind: 'publish', label: 'Publish' };

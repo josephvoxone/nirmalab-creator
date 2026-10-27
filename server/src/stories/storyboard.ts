@@ -13,6 +13,7 @@ import { ShotCompileError, compileShot, type CompiledShot, type ShotIntent } fro
 import { validateBible, type SceneCard, type StoryBible } from '../bible/story.js';
 import { LEGACY_STYLE_MAP, compileStyleSentence, lookById, type StyleBible } from '../bible/styles.js';
 import { CATALOG } from './looks.js';
+import { AXCEL_MODELS, isAxcelModel, type AxcelModel } from '../providers/axcel.js';
 
 export type Shot = {
   id: string;
@@ -41,8 +42,20 @@ export type Scene = {
   shots: string[];
 };
 export type CastMember = { token: string; name: string; look: string };
-/** Who renders: Flow (Mac bridge, default) or an OpenRouter model. */
-export type Engine = { provider: 'flow' } | { provider: 'openrouter'; model: string };
+/** Who renders: Flow (bridge, default), an OpenRouter model or an Axcel model (paid by the plan). */
+export type Engine = { provider: 'flow' } | { provider: 'openrouter'; model: string } | { provider: 'axcel'; model: AxcelModel };
+
+/** Clip length Axcel accepts closest to the 6 s a shot is written for (Seedance: 5, Veo 3.1 Fast: 8). */
+export function axcelClipSec(model: AxcelModel): number {
+  return model === 'Veo 3.1 Fast' ? 8 : 5;
+}
+/** Project clips on Axcel render at 720p (the bridge default, 480, is for quick Studio tries). */
+export const AXCEL_PROJECT_RESOLUTION = 720;
+
+/** A shot is rendered without a voice: its own `silent`, or the whole story is ambient-only. */
+export function isSilent(board: Pick<Storyboard, 'audioMode'>, shot: Pick<Shot, 'silent'> & { intent?: { silent?: boolean } }): boolean {
+  return board.audioMode === 'ambient' || !!(shot.intent?.silent ?? shot.silent);
+}
 
 export type Storyboard = {
   title: string;
@@ -58,6 +71,8 @@ export type Storyboard = {
   narrator?: string;
   audio?: string;
   audioSilent?: string;
+  /** 'ambient': no voice in any clip, only the sound of the place (music is added later in the edit). */
+  audioMode?: 'narration' | 'ambient';
   negative?: string;
   crossfade?: number;
   titleCard?: { lines: string[]; kicker?: string };
@@ -187,7 +202,7 @@ export function framePrompt(board: Storyboard, shot: Shot): string {
 
 export function buildShotPrompt(board: Storyboard, shot: Shot): string {
   const body = expand(board, shot.prompt, board.mode === 'konsisten');
-  const audio = shot.silent
+  const audio = isSilent(board, shot)
     ? board.audioSilent ?? ''
     : (board.audio ?? '').replace('{narrator}', board.narrator ?? 'a narrator').replace('{line}', expand(board, (shot.narration ?? '').trim(), true));
   return [body, settingLine(board, shot), board.style, audio].filter(Boolean).join(' ') + (board.negative ? `\n${board.negative}` : '');
@@ -255,7 +270,7 @@ export function compileBoardShot(board: Storyboard, shot: Shot): CompiledShot {
     framing: shot.intent.framing ?? (typeof camera.framing === 'string' ? camera.framing : undefined),
     move: shot.intent.move ?? (typeof camera.move === 'string' ? camera.move : undefined),
     narration: shot.intent.narration ?? shot.narration,
-    silent: shot.intent.silent ?? shot.silent
+    silent: isSilent(board, shot)
   };
   return compileShot({ look: lookFor(board), bible: board.bible, scene, shot: intent, negative: board.negative });
 }
@@ -380,7 +395,7 @@ export function validateStoryboard(board: Storyboard): string[] {
       if (moves.size > 1) errors.push(`${shot.id}: more than one camera move (${[...moves].join(', ')})`);
       if (buildShotPrompt(board, shot).length > 3800) errors.push(`${shot.id}: prompt too long`);
     }
-    if (!shot.silent) {
+    if (!isSilent(board, shot)) {
       const words = narrationWords(shot.narration);
       if (words === 0) errors.push(`${shot.id}: narration is empty`);
       if (words > MAX_NARRATION_WORDS) errors.push(`${shot.id}: narration has ${words} words (max ${MAX_NARRATION_WORDS} to fit ~6 s)`);
@@ -388,6 +403,7 @@ export function validateStoryboard(board: Storyboard): string[] {
   }
   errors.push(...validateBreakdown(board));
   errors.push(...validateEngine(board.engine));
+  if (board.audioMode !== undefined && board.audioMode !== 'narration' && board.audioMode !== 'ambient') errors.push('audioMode must be narration or ambient');
   return errors;
 }
 
@@ -404,7 +420,9 @@ export function validateEngine(engine: unknown): string[] {
     if (!e || typeof e !== 'object') errors.push(`engine.${kind} must be { provider }`);
     else if (e.provider === 'openrouter') {
       if (!(typeof e.model === 'string' && e.model.length <= 120 && MODEL_ID.test(e.model))) errors.push(`engine.${kind}: model is required for openrouter (e.g. google/veo-3.1-fast)`);
-    } else if (e.provider !== 'flow') errors.push(`engine.${kind}: provider must be flow or openrouter`);
+    } else if (e.provider === 'axcel') {
+      if (!isAxcelModel(e.model)) errors.push(`engine.${kind}: model for axcel must be one of ${AXCEL_MODELS.join(', ')}`);
+    } else if (e.provider !== 'flow') errors.push(`engine.${kind}: provider must be flow, openrouter or axcel`);
   }
   return errors;
 }

@@ -8,6 +8,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Clapperboard, Film, Loader2, Maximize2, RefreshCw, Save, Sparkles, Trash2 } from 'lucide-react';
+import { clipCost, type EngineSet } from '../providers/providersClient.js';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet';
@@ -278,7 +279,7 @@ function ShotEditor(props: { shotId: string; catalog?: Catalog; onClose: () => v
             </Button>
           )}
           <Button type="button" size="sm" variant="glass" disabled={locked || busy || dirty || st?.status === 'queued'} onClick={() => void p.render({ shot: shot.id })}>
-            <Clapperboard /> Render shot ini · ±{CREDITS_PER_SHOT} kredit
+            <Clapperboard /> Render shot ini · {clipCost((board.engine as EngineSet | undefined)?.video, 1)}
           </Button>
           <Button type="button" size="sm" variant="ghost" disabled={locked || busy || board.shots.length <= 1} onClick={() => setConfirming(true)}
             className="ml-auto text-destructive hover:text-destructive"><Trash2 /> Hapus</Button>

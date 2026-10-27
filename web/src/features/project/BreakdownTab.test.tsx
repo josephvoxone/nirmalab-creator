@@ -109,6 +109,28 @@ describe('Breakdown tab · Mesin produksi', () => {
     expect(await within(section).findByText('4 klip × ±$0,30 = ±$1,20')).toBeInTheDocument();
   });
 
+  it('picks Axcel for video: saves the model, lists the Axcel models (down ones say so) and shows the plan instead of credits', async () => {
+    const api = fakeProjectApi();
+    const section = await mount(api);
+    await pick(/mesin video/i, 'Axcel · Gold · Seedance 2.0');
+    await waitFor(() => expect(lastBoard(api)?.engine).toEqual({ video: { provider: 'axcel', model: 'Seedance 2.0' } }));
+    expect(await within(section).findByText('4 klip · Axcel Seedance 2.0 · termasuk paket, 0 kredit Flow')).toBeInTheDocument();
+    await userEvent.click(await within(section).findByRole('combobox', { name: 'Model Axcel (video)' }));
+    expect(await screen.findByRole('option', { name: /Seedance 2\.5.*gangguan/ })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('option', { name: /Veo 3\.1 Fast/ }));
+    await waitFor(() => expect(lastBoard(api)?.engine).toEqual({ video: { provider: 'axcel', model: 'Veo 3.1 Fast' } }));
+  });
+
+  it('audio: narration by default; "Ambien saja" saves audioMode ambient (no voice, music later in the edit)', async () => {
+    const api = fakeProjectApi();
+    const section = await mount(api);
+    const audio = within(section).getByRole('combobox', { name: 'Suara klip' });
+    expect(audio).toHaveTextContent('Narasi + suara ambien');
+    await userEvent.click(audio);
+    await userEvent.click(await screen.findByRole('option', { name: /Ambien saja/ }));
+    await waitFor(() => expect(lastBoard(api)?.audioMode).toBe('ambient'));
+  });
+
   it('picks OpenRouter for images separately and keeps the video engine', async () => {
     const api = fakeProjectApi({ board: { ...BOARD, engine: { video: { provider: 'openrouter', model: 'google/veo-3.1' } } } });
     const section = await mount(api);

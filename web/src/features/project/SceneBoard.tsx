@@ -12,6 +12,7 @@ import { castIn, renderCost } from './SceneHelpers.js';
 import { SceneShots, type ShotActions } from './SceneShots.js';
 import { BreakdownResult, SceneBreakdownDialog, type BreakdownDone } from './SceneBreakdownDialog.js';
 import { media } from './useProject.js';
+import { clipCost, type EngineSet } from '../providers/providersClient.js';
 import { playerPosterWidth, poster, sized } from '../../lib/media.js';
 
 const NO_LOCATION = '__none__';
@@ -121,7 +122,7 @@ export function SceneBoard(props: {
             <span className="flex items-center gap-1 text-[12px] text-muted-foreground"><Check className="size-3.5 text-(--success)" /> Semua klip scene ini siap</span>
           ) : (
             <Button type="button" size="sm" disabled={!idle || cost.todo === 0} onClick={actions.render} title={`${cost.todo} shot belum dirender`}>
-              <Clapperboard /> Render scene · ±{cost.credits} kredit
+              <Clapperboard /> Render scene · {clipCost((board.engine as EngineSet | undefined)?.video, cost.todo)}
             </Button>
           )}
           <Button type="button" size="sm" variant="ghost" aria-pressed={preview} onClick={() => setPreview(v => !v)}><Play /> Preview scene</Button>
