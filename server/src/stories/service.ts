@@ -16,6 +16,8 @@ import type { FlowStore } from '../flow/store.js';
 import { linkOrCopy } from '../media/link.js';
 import { CREDITS_PER_SHOT, bibleSceneFor, castOf, frameHashFor, framePromptFor, hashFor, normalizeScenes, sceneOf, sheetHashFor, sheetPromptFor, shotCast, shotPromptFor, validateStoryboard, type Shot, type Storyboard } from './storyboard.js';
 import { ShotCompileError } from '../bible/compiler.js';
+import { bibleSceneErrors, syncBible } from '../bible/sync.js';
+import { SnapshotStore, type RestoreResult } from './snapshots.js';
 import { AUDIT_GATE, AuditParseError, MAX_AUDIT_IMAGES, type AuditDimensions, type AuditExpectation, type AuditResult } from '../audit/vision.js';
 
 import { composeStyle, resolveLook } from './looks.js';
@@ -91,6 +93,8 @@ export type ShotState = {
 
 export type StoryRecord = {
   id: string;
+  /** Storyboard revision: 1 at creation (and for records written before revisions), +1 on every storyboard change. */
+  rev: number;
   title: string;
   status: StoryStatus;
   createdAtMs: number;
@@ -137,10 +141,13 @@ export type StoryDeps = {
 };
 
 export class StoryError extends Error {
-  constructor(public code: 'INVALID' | 'NOT_FOUND' | 'BUSY' | 'BUDGET', message: string) {
+  constructor(public code: 'INVALID' | 'NOT_FOUND' | 'BUSY' | 'BUDGET' | 'STALE', message: string) {
     super(message);
   }
 }
+
+/** Shown verbatim to the user when a save was based on an older revision (409). */
+export const STALE_MESSAGE = 'Proyek baru diubah di tempat lain — muat ulang.';
 
 const hash = (s: string) => createHash('sha256').update(s).digest('hex').slice(0, 16);
 const BUSY_STATUSES: StoryStatus[] = ['casting', 'framing', 'rendering', 'assembling'];
@@ -166,9 +173,15 @@ export function idleStatus(record: StoryRecord): StoryStatus {
 export class StoryService {
   private locks = new Map<string, Promise<unknown>>();
   private readonly root: string;
+  /** Undo snapshots; they share this service's per-story lock. */
+  readonly snapshots: SnapshotStore;
 
   constructor(private deps: StoryDeps) {
     this.root = join(deps.dataDir, 'stories');
+    this.snapshots = new SnapshotStore(this.root, {
+      lock: (id, fn) => this.withLock(id, fn),
+      beforeRestore: (current, restored) => this.beforeRestore(current, restored)
+    });
   }
 
   storyDir(id: string): string {
@@ -203,7 +216,9 @@ export class StoryService {
 
   private async readRecord(id: string): Promise<StoryRecord | undefined> {
     try {
-      return JSON.parse(await readFile(join(this.storyDir(id), 'story.json'), 'utf8')) as StoryRecord;
+      const record = JSON.parse(await readFile(join(this.storyDir(id), 'story.json'), 'utf8')) as StoryRecord;
+      if (typeof record.rev !== 'number') record.rev = 1;
+      return record;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
       throw error;
@@ -239,6 +254,7 @@ export class StoryService {
     const now = Date.now();
     const record: StoryRecord = {
       id,
+      rev: 1,
       title: board.title.trim(),
       status: 'draft',
       createdAtMs: now,
@@ -274,15 +290,27 @@ export class StoryService {
     return (await this.list()).filter(r => ['casting', 'framing', 'rendering', 'assembling'].includes(r.status)).map(r => r.id);
   }
 
-  async updateStoryboard(id: string, input: Storyboard): Promise<StoryRecord> {
+  /**
+   * Save an edited storyboard. `opts.rev` = the revision the caller read: a different current
+   * revision throws STALE (spec §9.3); absent = no check (older clients). Bible boards are synced
+   * from one function first (both copies of characters/locations/scenes, shot prompts from intent).
+   */
+  async updateStoryboard(id: string, input: Storyboard, opts: { rev?: number } = {}): Promise<StoryRecord> {
     this.assertValid(input);
-    const board = normalizeScenes(input);
+    const incoming = normalizeScenes(input);
     return this.withLock(id, async () => {
       const record = await this.require(id);
+      if (opts.rev !== undefined && opts.rev !== record.rev) throw new StoryError('STALE', STALE_MESSAGE);
       if (BUSY_STATUSES.includes(record.status)) {
         throw new StoryError('BUSY', 'Story sedang diproses; tunggu selesai atau gagal dulu');
       }
       const before = await this.readStoryboard(id).catch(() => undefined);
+      let board = incoming;
+      if (incoming.bible) {
+        board = normalizeScenes(syncBible(incoming, before));
+        const errors = [...bibleSceneErrors(board, before), ...validateStoryboard(board)];
+        if (errors.length) throw new StoryError('INVALID', errors.join('; '));
+      }
       const changed = !before || canonical({ ...before, slug: id }) !== canonical({ ...board, slug: id });
       const previous = new Map(record.shots.map(s => [s.id, s]));
       const konsisten = board.mode === 'konsisten';
@@ -324,10 +352,39 @@ export class StoryService {
       const cut = (shots: ShotState[]) => shots.map(s => `${s.id}:${s.status}:${s.jobId ?? ''}`).join('|');
       if (record.video && changed && cut(record.shots) !== cut([...previous.values()])) record.videoStale = true;
       record.status = idleStatus(record);
+      if (changed) record.rev += 1;
       await this.writeJson(join(this.storyDir(id), 'storyboard.json'), { ...board, slug: id });
       await this.save(record, 'Storyboard diubah');
       return record;
     });
+  }
+
+  /**
+   * Undo (spec §9.2): put back the storyboard and take state of a snapshot. 'stale' when the story
+   * changed after that snapshot's change (currentRev or the stored rev ≠ revAfter), 'missing' when
+   * the snapshot is unknown or was never committed. Runs under the story lock.
+   */
+  async restoreSnapshot(id: string, undoId: string, currentRev: number): Promise<RestoreResult> {
+    await this.require(id);
+    return this.snapshots.restore(id, undoId, currentRev);
+  }
+
+  /** Under the lock, before a restore writes: refuse while jobs run; bring back the media of restored takes. */
+  private async beforeRestore(current: StoryRecord, restored: StoryRecord): Promise<void> {
+    if (BUSY_STATUSES.includes(current.status)) throw new StoryError('BUSY', 'Story sedang diproses; tunggu selesai atau gagal dulu');
+    // A newer take may have replaced the file (render after the edit): re-link the restored job's result.
+    const relink = async (take: { status: ShotStatus; jobId?: string } | undefined, now: { jobId?: string } | undefined, target: string) => {
+      if (take?.status !== 'done' || !take.jobId || take.jobId === now?.jobId) return;
+      const job = await this.deps.flow.getJob(take.jobId);
+      if (job?.resultPath && existsSync(job.resultPath)) await linkOrCopy(job.resultPath, target);
+    };
+    const shots = new Map(current.shots.map(s => [s.id, s]));
+    for (const shot of restored.shots) {
+      await relink(shot, shots.get(shot.id), this.shotPath(current.id, shot.id));
+      await relink(shot.frame, shots.get(shot.id)?.frame, this.framePath(current.id, shot.id));
+    }
+    const cast = new Map((current.cast ?? []).map(c => [c.token, c]));
+    for (const c of restored.cast ?? []) await relink(c, cast.get(c.token), this.castPath(current.id, c.token));
   }
 
   private async require(id: string): Promise<StoryRecord> {
@@ -708,6 +765,7 @@ export class StoryService {
         shot.prompt = prompt.trim();
         this.assertValid(board);
         await this.writeJson(join(this.storyDir(id), 'storyboard.json'), board);
+        record.rev += 1;
         Object.assign(state, { status: 'pending', attempts: 0, error: undefined });
       }
       state.frame = { status: 'pending', attempts: 0 };

@@ -12,6 +12,7 @@ import { createHash } from 'node:crypto';
 import { ShotCompileError, compileShot, type CompiledShot, type ShotIntent } from '../bible/compiler.js';
 import { validateBible, type SceneCard, type StoryBible } from '../bible/story.js';
 import { LEGACY_STYLE_MAP, compileStyleSentence, lookById, type StyleBible } from '../bible/styles.js';
+import { CATALOG } from './looks.js';
 
 export type Shot = {
   id: string;
@@ -253,6 +254,46 @@ export function compileBoardShot(board: Storyboard, shot: Shot): CompiledShot {
     silent: shot.intent.silent ?? shot.silent
   };
   return compileShot({ look: lookFor(board), bible: board.bible, scene, shot: intent, negative: board.negative });
+}
+
+/** Catalog prompt text for a framing/move given as id or as its prompt text; `fallback` id otherwise. */
+function optionText(options: Array<{ id: string; prompt: string }>, value: unknown, fallback: string): string {
+  const v = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  const hit = v ? options.find(o => o.id === v || o.prompt.toLowerCase() === v) : undefined;
+  return (hit ?? options.find(o => o.id === fallback)!).prompt;
+}
+
+const escapeRe = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/**
+ * Prose `shot.prompt` of a bible shot, rebuilt from its intent (spec §9.9):
+ * "<Framing>, the camera <move>. <TOKEN…> <action>." The TOKENs are the characters the subject
+ * names (by token or name, any case), so TOKEN-based cast detection (`shotCast`) keeps working.
+ * The compiler never reads this text: clip/frame prompts of bible shots do not depend on it.
+ */
+export function promptFromIntent(board: Storyboard, shot: Shot): string {
+  const camera = shot as Shot & { framing?: string; move?: string };
+  const framing = optionText(CATALOG.framings, shot.intent?.framing ?? camera.framing, 'medium');
+  const move = optionText(CATALOG.moves, shot.intent?.move ?? camera.move, 'static');
+  const subject = (shot.intent?.subject ?? '').trim().replace(/[.\s]+$/, '');
+  const names = new Map<string, Set<string>>();
+  const add = (token: string, name: string | undefined) => {
+    if (!/^[A-Z][A-Z0-9_]{1,30}$/.test(token)) return;
+    const set = names.get(token) ?? new Set<string>([token]);
+    if (name?.trim()) set.add(name.trim());
+    names.set(token, set);
+  };
+  for (const c of board.bible?.characters ?? []) add(c.token, c.name);
+  for (const [token, spec] of Object.entries(board.characters ?? {})) add(token, member(token, spec).name);
+  const found: Array<{ token: string; at: number }> = [];
+  for (const [token, aliases] of names) {
+    const at = Math.min(...[...aliases].map(a => subject.search(new RegExp(`(^|[^\\p{L}\\p{N}_])${escapeRe(a)}(?![\\p{L}\\p{N}_])`, 'iu'))).filter(i => i >= 0));
+    if (Number.isFinite(at)) found.push({ token, at });
+  }
+  const who = found.length ? found.sort((a, b) => a.at - b.at).map(f => f.token).join(' and ') : subject;
+  const action = (shot.intent?.action ?? '').trim().replace(/[.\s]+$/, '');
+  const body = [who, action].filter(Boolean).join(' ');
+  return `${framing}, ${move}.${body ? ` ${body}.` : ''}`.replace(/\s+/g, ' ').trim();
 }
 
 /** Exact text sent to Flow for a clip: compiled for bible shots, legacy prose otherwise. */

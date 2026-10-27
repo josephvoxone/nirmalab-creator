@@ -7,9 +7,10 @@ import { draftStoryboard, type TextGenerator } from './draft.js';
 import { CATALOG } from './looks.js';
 import type { CoverService } from './covers.js';
 import { StoryError, type StoryService } from './service.js';
-import { SHOT_ID, validateEngine, type Storyboard } from './storyboard.js';
+import { ShotCompileError } from '../bible/compiler.js';
+import { SHOT_ID, compileBoardShot, validateEngine, type Shot, type Storyboard } from './storyboard.js';
 
-const STATUS: Record<StoryError['code'], number> = { INVALID: 400, NOT_FOUND: 404, BUSY: 409, BUDGET: 409 };
+const STATUS: Record<StoryError['code'], number> = { INVALID: 400, NOT_FOUND: 404, BUSY: 409, BUDGET: 409, STALE: 409 };
 
 function fail(reply: FastifyReply, error: unknown) {
   if (error instanceof StoryError) return reply.code(STATUS[error.code]).send({ error: { code: error.code, message: error.message } });
@@ -139,10 +140,35 @@ export async function registerStoryRoutes(
     } catch (error) { return fail(reply, error); }
   });
 
-  server.put<{ Params: { id: string }; Body: { storyboard?: unknown } }>('/api/stories/:id', async (request, reply) => {
+  server.put<{ Params: { id: string }; Body: { storyboard?: unknown; rev?: unknown } }>('/api/stories/:id', async (request, reply) => {
     if (!requireAdmin(auth, request, reply)) return undefined;
+    // `rev` = the revision this client read; absent = no check (clients from before revisions).
+    const rev = request.body?.rev ?? undefined;
+    if (rev !== undefined && !(typeof rev === 'number' && Number.isInteger(rev))) return badRequest(reply, 'rev must be a number');
     try {
-      return { story: await stories.updateStoryboard(request.params.id, asBoard(request.body?.storyboard)) };
+      return { story: await stories.updateStoryboard(request.params.id, asBoard(request.body?.storyboard), rev === undefined ? {} : { rev }) };
+    } catch (error) { return fail(reply, error); }
+  });
+
+  /** Preview the compiled prompts of one shot against the saved board (nothing is saved). */
+  server.post<{ Params: { id: string }; Body: { shot?: unknown } }>('/api/stories/:id/compile-shot', async (request, reply) => {
+    if (!requireAdmin(auth, request, reply)) return undefined;
+    const shot = request.body?.shot as Shot | undefined;
+    if (!shot || typeof shot !== 'object' || Array.isArray(shot) || typeof shot.id !== 'string' || !SHOT_ID.test(shot.id)) {
+      return badRequest(reply, 'shot with a valid id is required');
+    }
+    try {
+      if (!(await stories.get(request.params.id))) return notFound(reply, 'Story');
+      const board = await stories.readStoryboard(request.params.id);
+      const exists = board.shots.some(s => s.id === shot.id);
+      const preview: Storyboard = { ...board, shots: exists ? board.shots.map(s => (s.id === shot.id ? shot : s)) : [...board.shots, shot] };
+      try {
+        const compiled = compileBoardShot(preview, shot);
+        return { imagePrompt: compiled.imagePrompt, videoPrompt: compiled.videoPrompt, issues: [], warnings: compiled.warnings };
+      } catch (error) {
+        if (error instanceof ShotCompileError) return { imagePrompt: '', videoPrompt: '', issues: error.issues, warnings: [] };
+        throw error;
+      }
     } catch (error) { return fail(reply, error); }
   });
 
