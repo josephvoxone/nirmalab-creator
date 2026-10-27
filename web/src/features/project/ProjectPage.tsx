@@ -15,6 +15,7 @@ import { BibleTab } from './BibleTab.js';
 import { BreakdownTab } from './BreakdownTab.js';
 import { TimelineTab } from './TimelineTab.js';
 import { ResultTab } from './ResultTab.js';
+import { AssistantColumn, AssistantSheet, AssistantToggle, useAssistantDock } from '../assistant/AssistantDock.js';
 
 const TABS = [
   { id: 'scene', label: 'Scene' },
@@ -147,6 +148,7 @@ export function ProjectPage(props: { pollMs?: number }) {
   const [params, setParams] = useSearchParams();
   const tab = (TABS.find(t => t.id === params.get('tab'))?.id ?? 'scene') as TabId;
   const choose = (t: TabId) => setParams(prev => { const n = new URLSearchParams(prev); n.set('tab', t); return n; }, { replace: true });
+  const dock = useAssistantDock();
 
   if (p.loadError && !p.story) {
     const missing = p.loadError instanceof ApiError && p.loadError.status === 404;
@@ -173,13 +175,15 @@ export function ProjectPage(props: { pollMs?: number }) {
   const counts: Partial<Record<TabId, number>> = { scene: p.board.scenes?.length ?? 1 };
   return (
     <ProjectProvider value={p}>
-      <div className="mx-auto flex w-full max-w-[1200px] flex-col gap-3">
+      <div className="mx-auto flex w-full max-w-[1200px] items-start gap-4">
+      <div className="flex min-w-0 flex-1 flex-col gap-3">
         <div className="flex flex-wrap items-start gap-3">
-          <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <div className="flex min-w-[min(100%,14rem)] flex-1 flex-col gap-0.5">
             <Title p={p} />
             {p.board.logline && <p className="text-[12.5px] text-muted-foreground">{p.board.logline}</p>}
           </div>
           <PrimaryAction p={p} />
+          <AssistantToggle dock={dock} />
         </div>
         <div className="flex flex-wrap items-center gap-3 border-b pb-2">
           <StageBar p={p} />
@@ -204,6 +208,9 @@ export function ProjectPage(props: { pollMs?: number }) {
           {tab === 'aktivitas' && <Activity p={p} />}
         </div>
       </div>
+        <AssistantColumn dock={dock} story={p.story} board={p.board} onChanged={p.reload} />
+      </div>
+      <AssistantSheet dock={dock} story={p.story} board={p.board} onChanged={p.reload} />
     </ProjectProvider>
   );
 }
