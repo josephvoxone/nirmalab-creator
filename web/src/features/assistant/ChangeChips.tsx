@@ -46,6 +46,7 @@ export function ChangeChips(props: { changes: TurnChange[]; busy?: boolean; onUn
               )}
           </span>
           {refused[c.undoId] && lastOfGroup.has(i) && <span role="alert" className="pl-2 text-[11.5px] text-destructive">{refused[c.undoId]}</span>}
+          {lastOfGroup.has(i) && c.notes?.map(n => <span key={n} role="status" className="pl-2 text-[11.5px] text-muted-foreground">{n}</span>)}
         </li>
       ))}
     </ul>

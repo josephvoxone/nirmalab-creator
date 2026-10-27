@@ -16,7 +16,7 @@ import { uploadProblem, type Story } from '../stories/storiesClient.js';
 import { mentionTriggers } from '../project/IntentFields.js';
 import type { Board } from '../project/model.js';
 import {
-  assistantApi, FINAL_CONFIRM_CODES, MAX_ATTACHMENTS, NOT_CONFIGURED, slashItems, suggestions,
+  assistantApi, attentionText, FINAL_CONFIRM_CODES, MAX_ATTACHMENTS, NOT_CONFIGURED, slashItems, suggestions,
   type SendBody, type Turn, type TurnAttachment, type TurnChange, type TurnPending
 } from './assistantClient.js';
 import { Composer, COMPOSER_ID, type Draft } from './Composer.js';
@@ -311,8 +311,9 @@ export function AssistantPanel(props: AssistantPanelProps) {
 
   const undo = async (undoId: string): Promise<string | undefined> => {
     try {
-      await api.undo(storyId, undoId);
-      setTurns(ts => ts?.map(t => (t.changes?.some(c => c.undoId === undoId) ? { ...t, changes: t.changes.map(c => (c.undoId === undoId ? { ...c, undone: true } : c)) } : t)));
+      const r = await api.undo(storyId, undoId);
+      const notes = attentionText(props.board, props.story, r.attention);
+      setTurns(ts => ts?.map(t => (t.changes?.some(c => c.undoId === undoId) ? { ...t, changes: t.changes.map(c => (c.undoId === undoId ? { ...c, undone: true, ...(notes.length ? { notes } : {}) } : c)) } : t)));
       onChanged.current();
       return undefined;
     } catch (error) {

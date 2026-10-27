@@ -163,6 +163,18 @@ describe('AssistantPanel', () => {
     expect(screen.getByRole('button', { name: 'Batalkan: Shot 1 dihapus' })).toBeInTheDocument();
   });
 
+  it('an undo whose old files are gone says which takes must be made again (global shot numbers)', async () => {
+    const api = fakeAssistantApi({
+      turns: [turn({ id: 't1', role: 'assistant', text: 'Selesai.', changes: [{ label: 'Shot 3 diubah', undoId: 'snap_a' }] })],
+      undo: () => new Response(JSON.stringify({ ok: true, rev: 5, attention: [{ id: '02-jalan', take: 'clip' }, { id: '03-peluk', take: 'frame' }, { id: 'BIMA', take: 'cast' }] }), { status: 200 })
+    });
+    mount(api);
+    await userEvent.setup().click(await screen.findByRole('button', { name: 'Batalkan: Shot 3 diubah' }));
+    expect(await screen.findByText('Klip shot 3 perlu dibuat ulang (file lama tidak ada).')).toBeInTheDocument();
+    expect(screen.getByText('Keyframe shot 4 perlu dibuat ulang (file lama tidak ada).')).toBeInTheDocument();
+    expect(screen.getByText('Sheet Bima perlu dibuat ulang (file lama tidak ada).')).toBeInTheDocument();
+  });
+
   it('pending card: Jalankan posts {confirm} and streams; superseded is disabled; Lewati hides', async () => {
     const api = fakeAssistantApi({
       turns: [turn({

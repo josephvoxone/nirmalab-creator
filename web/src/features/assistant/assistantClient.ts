@@ -6,12 +6,14 @@ import { requestJson, post, type FetchLike } from '../../lib/api.js';
 import type { MentionItem } from '../../ui/MentionTextarea.js';
 import type { Story, Upload } from '../stories/storiesClient.js';
 import { storiesApi } from '../stories/storiesClient.js';
-import type { Board } from '../project/model.js';
+import { normalizeScenes, type Board } from '../project/model.js';
 import { postSse, type SseEvent } from './sse.js';
 
 export type Estimate = { credits?: number; usd?: number };
 export type TurnAttachment = { id: string; url: string; w: number; h: number };
-export type TurnChange = { label: string; undoId: string; undone?: boolean };
+export type TurnChange = { label: string; undoId: string; undone?: boolean; notes?: string[] };
+/** A take an undo could not bring back (its file is gone): it is made again. */
+export type UndoAttention = { id: string; take: 'clip' | 'frame' | 'cast' | string };
 export type TurnPending = { id: string; label: string; estimate: Estimate; createdAt?: string; used?: string; superseded?: boolean; name?: string; rev?: number };
 export type Turn = {
   id: string;
@@ -49,7 +51,7 @@ export function assistantApi(fetchImpl: FetchLike) {
   return {
     history: (id: string) => requestJson<History>(fetchImpl, base(id)),
     send: (id: string, body: SendBody, onEvent: (e: SseEvent) => void, signal?: AbortSignal) => postSse(fetchImpl, base(id), body, onEvent, signal),
-    undo: (id: string, undoId: string) => requestJson<{ ok: boolean; rev: number }>(fetchImpl, `${base(id)}/undo/${encodeURIComponent(undoId)}`, post({})),
+    undo: (id: string, undoId: string) => requestJson<{ ok: boolean; rev: number; attention?: UndoAttention[] }>(fetchImpl, `${base(id)}/undo/${encodeURIComponent(undoId)}`, post({})),
     upload: (id: string, file: Blob, signal?: AbortSignal) => storiesApi(fetchImpl).upload(id, file, signal) as Promise<Upload>
   };
 }
@@ -100,4 +102,20 @@ export function suggestions(board: Board, story?: Story): string[] {
   if ((story?.mode ?? board.mode) === 'konsisten' && name) out.push(`Buat sheet untuk ${name}`);
   for (const fallback of ['Ringkas proyek ini', 'Apa langkah berikutnya?']) if (out.length < 3) out.push(fallback);
   return out.slice(0, 3);
+}
+
+/** Plain sentences for an undo's `attention`, with the global shot numbers the UI shows. */
+export function attentionText(board: Board, story: Story, attention: UndoAttention[] | undefined): string[] {
+  if (!attention?.length) return [];
+  const b = normalizeScenes(board);
+  const order = (b.scenes ?? []).flatMap(s => s.shots);
+  const number = (id: string) => { const i = order.indexOf(id); return i === -1 ? id : String(i + 1); };
+  const nameOf = (token: string) => {
+    const spec = board.characters?.[token];
+    return story.cast?.find(c => c.token === token)?.name ?? (typeof spec === 'object' && spec ? spec.name : undefined) ?? token;
+  };
+  return attention.map(a => {
+    const what = a.take === 'clip' ? `Klip shot ${number(a.id)}` : a.take === 'frame' ? `Keyframe shot ${number(a.id)}` : `Sheet ${nameOf(a.id)}`;
+    return `${what} perlu dibuat ulang (file lama tidak ada).`;
+  });
 }
