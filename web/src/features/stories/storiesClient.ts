@@ -101,7 +101,7 @@ export function storiesApi(fetchImpl: FetchLike) {
     compileShot: (id: string, shot: StoryboardShot & Record<string, unknown>) => requestJson<CompiledPreview>(fetchImpl, `/api/stories/${id}/compile-shot`, post({ shot })),
     breakdown: (id: string, sceneId: string, body: { count: number; brief?: string; mode?: BreakdownMode }) =>
       requestJson<{ label: string; changed: boolean; undoId?: string; story: Story; storyboard: Storyboard }>(fetchImpl, `/api/stories/${id}/scenes/${encodeURIComponent(sceneId)}/breakdown`, post(body)),
-    makeSheet: (id: string, token: string, confirm: boolean) => requestJson<SheetAnswer>(fetchImpl, `/api/stories/${id}/cast/${token}/sheet`, post(confirm ? { confirm: true } : {})),
+    makeSheet: (id: string, token: string, confirm: boolean, rev?: number) => requestJson<SheetAnswer>(fetchImpl, `/api/stories/${id}/cast/${token}/sheet`, post(confirm ? { confirm: true, ...(typeof rev === 'number' ? { rev } : {}) } : {})),
     /** Raw image body (no multipart): the Content-Type names the format. */
     upload: (id: string, file: Blob, signal?: AbortSignal) => requestJson<Upload>(fetchImpl, `/api/stories/${id}/uploads`, { method: 'POST', body: file, headers: { 'Content-Type': file.type }, ...(signal ? { signal } : {}) }),
     /** `uploads/up_….png` on a card → the URL that serves it. */

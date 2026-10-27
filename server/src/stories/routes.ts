@@ -319,12 +319,15 @@ export async function registerStoryRoutes(
   });
 
   /** "Buat sheet": one sheet job for one character. Without `confirm: true` (the user's click) it only answers the estimate. */
-  server.post<{ Params: { id: string; token: string }; Body: { confirm?: unknown; reference?: unknown } }>('/api/stories/:id/cast/:token/sheet', async (request, reply) => {
+  server.post<{ Params: { id: string; token: string }; Body: { confirm?: unknown; reference?: unknown; rev?: unknown } }>('/api/stories/:id/cast/:token/sheet', async (request, reply) => {
     const user = requireAdmin(auth, request, reply);
     if (!user) return undefined;
     try {
       if (!(await stories.get(request.params.id))) return notFound(reply, 'Story');
-      const ctx: ActionContext = { ...uiContext(user.id), confirmed: request.body?.confirm === true };
+      // `rev`: the project revision the click was made on; a newer one is refused (409 STALE), nothing queued.
+      const rev = request.body?.rev;
+      if (rev !== undefined && (typeof rev !== 'number' || !Number.isInteger(rev))) return reply.code(400).send({ error: { code: 'INVALID', message: 'rev harus angka' } });
+      const ctx: ActionContext = { ...uiContext(user.id), confirmed: request.body?.confirm === true, ...(typeof rev === 'number' ? { rev } : {}) };
       const result = await ACTIONS.make_sheet.run(ctx, request.params.id, {
         token: request.params.token,
         ...(typeof request.body?.reference === 'string' ? { reference: request.body.reference } : {})

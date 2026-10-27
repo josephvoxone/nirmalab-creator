@@ -676,7 +676,12 @@ describe('story routes: uploads, sheet, scope', () => {
     expect(ask.statusCode).toBe(200);
     expect(ask.json()).toMatchObject({ needsConfirm: true, estimate: { credits: 0 } });
     expect(await flow.listJobs()).toHaveLength(0);
-    const go = await server.inject({ method: 'POST', url: `/api/stories/${id}/cast/KAPAS/sheet`, headers: { cookie }, payload: { confirm: true } });
+    // A click made on an older view of the project (another tab, the assistant) is refused, nothing queued.
+    const stale = await server.inject({ method: 'POST', url: `/api/stories/${id}/cast/KAPAS/sheet`, headers: { cookie }, payload: { confirm: true, rev: 99 } });
+    expect(stale.statusCode).toBe(409);
+    expect(stale.json().error.code).toBe('STALE');
+    expect(await flow.listJobs()).toHaveLength(0);
+    const go = await server.inject({ method: 'POST', url: `/api/stories/${id}/cast/KAPAS/sheet`, headers: { cookie }, payload: { confirm: true, rev: ask.json().rev ?? 1 } });
     expect(go.statusCode).toBe(200);
     expect(go.json().story.status).toBe('casting');
     expect(await flow.listJobs()).toHaveLength(1);

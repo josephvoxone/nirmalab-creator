@@ -77,7 +77,8 @@ describe('Breakdown › character cards (bible boards)', () => {
     await waitFor(() => expect(api.calls.filter(c => c.url.includes('/sheet'))).toHaveLength(1));
     const call = api.calls.find(c => c.url.includes('/sheet'))!;
     expect(call.url).toBe(`/api/stories/${ID}/cast/BIMA/sheet`);
-    expect(call.body).toEqual({ confirm: true });
+    // The click is pinned to the revision it was made on (409 STALE if the project moved).
+    expect(call.body).toEqual({ confirm: true, rev: story.rev ?? 1 });
     await waitFor(() => expect(card(screen.getByRole('region', { name: /^karakter$/i }), 'Bima')).toHaveTextContent('Membuat…'));
   });
 
@@ -92,7 +93,7 @@ describe('Breakdown › character cards (bible boards)', () => {
     expect(await within(bima).findByText(/±\$0,04/)).toBeInTheDocument();
     expect(api.calls.filter(c => c.url.includes('/sheet')).map(c => c.body)).toEqual([{}]);
     await userEvent.click(within(bima).getByRole('button', { name: /jalankan/i }));
-    await waitFor(() => expect(api.calls.filter(c => c.url.includes('/sheet')).map(c => c.body)).toEqual([{}, { confirm: true }]));
+    await waitFor(() => expect(api.calls.filter(c => c.url.includes('/sheet')).map(c => c.body)).toEqual([{}, { confirm: true, rev: story.rev ?? 1 }]));
   });
 
   it('uploads a reference as a raw image body, stores it on the card, shows it, and removes it', async () => {
@@ -154,6 +155,21 @@ describe('Breakdown › character cards (bible boards)', () => {
     // Everything else in the bible survives the save.
     expect(lastBoard(api)?.bible?.locations).toEqual(BIBLE.locations);
     expect(lastBoard(api)?.bible?.characters?.[1]).toEqual(BIBLE.characters[1]);
+  });
+
+  it('warns before saving a rename: the name is spoken in every clip of that character', async () => {
+    const board = bibleBoard();
+    const api = setup({ board, story: storyFor(board, [], ['pending', 'done', 'pending', 'done']) });
+    const cast = await open(api);
+    const jingga = card(cast, 'Jingga');
+    await userEvent.click(within(jingga).getByRole('button', { name: 'Ubah Jingga' }));
+    const warning = 'Nama dipakai di prompt video — klip 2 shot (±20 kredit) perlu dibuat ulang';
+    expect(within(jingga).queryByText(warning)).toBeNull();
+    const name = within(jingga).getByRole('textbox', { name: 'Nama Jingga' });
+    await userEvent.clear(name);
+    await userEvent.type(name, 'Jingga Kecil');
+    expect(within(jingga).getByText(warning)).toBeInTheDocument();
+    expect(api.calls.filter(c => c.method === 'PUT')).toHaveLength(0);
   });
 
   it('a new character is written on both sides (bible card + cast entry); its sheet waits until a shot uses it', async () => {

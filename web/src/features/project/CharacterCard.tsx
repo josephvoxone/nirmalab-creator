@@ -56,6 +56,13 @@ export function anchorImpact(board: Board, story: Story, token: string): { shots
   return { shots: ids.length, clips: ids.filter(id => story.shots.find(s => s.id === id)?.status === 'done').length };
 }
 
+/** A rename changes the compiled video prompt (the name is spoken): every done clip of that character is made again. */
+export function renameText(impact: { clips: number }, engine: EngineSet): string | undefined {
+  if (!impact.clips) return undefined;
+  const cost = isOpenRouter(engine.video) ? 'dibayar per klip di OpenRouter' : `±${impact.clips * CREDITS_PER_SHOT} kredit`;
+  return `Nama dipakai di prompt video — klip ${impact.clips} shot (${cost}) perlu dibuat ulang`;
+}
+
 export function impactText(impact: { shots: number; clips: number }, engine: EngineSet, konsisten: boolean): string {
   const image = isOpenRouter(engine.image) ? 'dibayar di OpenRouter' : 'gratis di Flow';
   const clips = isOpenRouter(engine.video) ? `klip ${impact.clips} shot (dibayar per klip di OpenRouter)` : `klip ${impact.clips} shot (±${impact.clips * CREDITS_PER_SHOT} kredit)`;
@@ -123,6 +130,7 @@ export function CharacterCard(props: { card: Card; engine: EngineSet; locked: bo
   const file = useRef<HTMLInputElement>(null);
 
   const anchorsChanged = draft.anchors.join('\n') !== card.anchors.join('\n');
+  const renamed = !!draft.name.trim() && draft.name.trim() !== card.name.trim();
   const changed = anchorsChanged || (['name', 'want', 'need', 'arc'] as const).some(k => draft[k].trim() !== card[k].trim());
   const impact = anchorImpact(board, story, card.token);
   const start = () => { setDraft(card); setEditing(true); };
@@ -135,7 +143,7 @@ export function CharacterCard(props: { card: Card; engine: EngineSet; locked: bo
     setSheetBusy(true);
     setProblem(undefined);
     try {
-      const r = await api.makeSheet(p.id, card.token, confirm);
+      const r = await api.makeSheet(p.id, card.token, confirm, story.rev ?? 1);
       if (r.needsConfirm) setQuote(r);
       else { setQuote(undefined); if (r.story) p.apply({ story: r.story }); }
     } catch (e) {
@@ -208,6 +216,7 @@ export function CharacterCard(props: { card: Card; engine: EngineSet; locked: bo
               })}
             </div>
             {anchorsChanged && <p role="status" className="rounded-md bg-(--brand-muted) px-2.5 py-1.5 text-[12px]">{impactText(impact, props.engine, konsisten)}</p>}
+            {renamed && !anchorsChanged && renameText(impact, props.engine) && <p role="status" className="rounded-md bg-(--brand-muted) px-2.5 py-1.5 text-[12px]">{renameText(impact, props.engine)}</p>}
             <div className="flex gap-1.5">
               <Button size="sm" onClick={() => void save()} disabled={!changed || !draft.name.trim() || !!p.busy}>Simpan</Button>
               <Button size="sm" variant="ghost" onClick={() => setEditing(false)}>Batal</Button>

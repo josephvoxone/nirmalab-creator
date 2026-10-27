@@ -363,6 +363,12 @@ describe('/mcp (Streamable HTTP, bearer token)', () => {
     expect(await s.flow.listJobs()).toHaveLength(0);
     expect(await s.history()).toEqual([]);
 
+    // confirm:true without the rev of the cost answer is not an approval of a known cost.
+    const blind = await call(client, 'render', { project_id: s.id, scene: 1, confirm: true });
+    expect(blind.isError).toBe(true);
+    expect(blind.text).toBe('Sertakan rev dari jawaban biaya');
+    expect(await s.flow.listJobs()).toHaveLength(0);
+
     // A stale rev: the board changed since the cost was shown.
     await call(client, 'edit_shot', { project_id: s.id, shot: 1, emotion: 'lega' });
     const stale = await call(client, 'render', { project_id: s.id, scene: 1, confirm: true, rev: ask.json.rev });

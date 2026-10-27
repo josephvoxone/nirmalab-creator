@@ -5,7 +5,7 @@
  *
  * Tools = `list_projects`, `create_project` and every action of the shared action layer (the same
  * code the in-app chat runs), each with a required `project_id`. Spending tools take the client's
- * own `confirm: true` (the MCP client's approval UI is the gate) and an optional `rev` pin.
+ * own `confirm: true` (the MCP client's approval UI is the gate) plus the required `rev` of the cost answer.
  * Every mutating call is logged in that project's assistant history as `MCP · <token name>` with
  * the same Batalkan chip as the chat. Results are JSON text; errors are `isError` + plain message.
  */
@@ -91,7 +91,7 @@ export function mcpTools(): Tool[] {
       ...(schema.properties ?? {}),
       ...(action.spends ? {
         confirm: { type: 'boolean', description: 'true only after the user agreed to the cost from the previous call.' },
-        rev: { type: 'integer', description: 'The rev returned with the cost; the call is refused if the project changed since.' }
+        rev: { type: 'integer', description: 'The rev returned with the cost; required with confirm. The call is refused if the project changed since.' }
       } : {})
     };
     tools.push({
@@ -163,7 +163,9 @@ async function runActionTool(deps: McpDeps, caller: McpCaller, name: ActionName,
   // The client's own approval: only the boolean true counts, and only on a spending tool.
   const confirmed = action.spends && confirm === true;
   let pinned: number | undefined;
-  if (confirmed && rev !== undefined && rev !== null) {
+  // The approval is for the cost the user saw, and that cost was answered with a rev.
+  if (confirmed && (rev === undefined || rev === null)) return failure('Sertakan rev dari jawaban biaya');
+  if (confirmed) {
     if (typeof rev !== 'number' || !Number.isInteger(rev)) return failure('rev harus angka dari jawaban biaya sebelumnya');
     if (rev !== record.rev) return failure(STALE_REV_MESSAGE);
     pinned = rev;
