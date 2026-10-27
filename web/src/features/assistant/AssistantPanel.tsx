@@ -68,6 +68,8 @@ export type AssistantPanelProps = {
   closeLabel?: string;
   /** `x` in the sheet (closes it), the panel icon in the column (hides it). */
   closeIcon?: 'x' | 'panel';
+  /** Docked in the shell's right column: the top bar matches the app top bar (h-12). */
+  docked?: boolean;
   /** Put the cursor in the composer on mount (the sheet). */
   autoFocus?: boolean;
   /** Move focus to the close/hide button (the column was just shown), then call `onFocused`. */
@@ -392,7 +394,7 @@ export function AssistantPanel(props: AssistantPanelProps) {
 
   return (
     <section aria-label="Asisten proyek" {...dropProps} className="relative flex h-full min-h-0 flex-col">
-      <header className="flex h-10 shrink-0 items-center gap-2 border-b border-border/60 pr-1.5 pl-3">
+      <header className={cn('flex shrink-0 items-center gap-2 pr-1.5 pl-3', props.docked ? 'h-12' : 'h-10 border-b border-border/60')}>
         <h2 className="text-[13px] font-medium">Asisten proyek</h2>
         {props.onClose && (
           <span ref={closeWrap} className="ml-auto"><IconTip label={props.closeLabel ?? 'Sembunyikan asisten'} onClick={props.onClose}>{props.closeIcon === 'x' ? <X /> : <PanelRightClose />}</IconTip></span>

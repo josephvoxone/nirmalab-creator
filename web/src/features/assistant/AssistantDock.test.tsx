@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ProjectPage } from '../project/ProjectPage.js';
+import { Layout } from '../../shell/Layout.js';
 import { bibleBoard, fakeProjectApi, ID, mountProject, storyFor } from '../project/testkit.js';
 import { AssistantColumn, OPEN_KEY, type AssistantDock } from './AssistantDock.js';
 import type { AssistantPanelProps } from './AssistantPanel.js';
@@ -52,6 +53,25 @@ describe('assistant on the project page', () => {
     expect(screen.queryByRole('complementary', { name: 'Kolom asisten' })).toBeNull();
     expect(screen.queryByRole('button', { name: /asisten/i })).toBeNull();
     expect(fake.calls.some(c => c.url.includes('/assistant'))).toBe(false);
+  });
+
+  it('in the app shell the column is a full-height panel beside main (level with the top bar), its toggle in the top bar', async () => {
+    const media = mockMatchMedia(() => true);
+    const storage = memoryStorage();
+    restore = () => { media(); storage.restore(); };
+    mountProject(<Layout title="Proyek"><ProjectPage pollMs={60_000} /></Layout>, api().fetchImpl);
+    const column = await screen.findByRole('complementary', { name: 'Kolom asisten' });
+    const main = screen.getByRole('main');
+    // Not inside the page: a sibling of <main>, so the whole page (top bar included) shrinks beside it.
+    expect(main.contains(column)).toBe(false);
+    expect(column.parentElement?.parentElement).toBe(main.parentElement);
+    expect(column).toHaveClass('h-svh');
+    // The panel's own top bar has the app top bar's height.
+    expect(within(column).getByRole('heading', { name: 'Asisten proyek' }).closest('header')).toHaveClass('h-12');
+    // Hidden → "Tampilkan asisten" sits in the app top bar, not beside the project title.
+    await userEvent.setup().click(within(column).getByRole('button', { name: 'Sembunyikan asisten' }));
+    const show = await screen.findByRole('button', { name: 'Tampilkan asisten' });
+    expect(within(main.querySelector('header')!).getByRole('button', { name: 'Tampilkan asisten' })).toBe(show);
   });
 
   it('a blocked localStorage still lets the column open and close', async () => {

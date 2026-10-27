@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { RIGHT_PANEL_ID, TOPBAR_SLOT_ID } from './slots.js';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import {
   BookOpenText, Clapperboard, Gauge, LayoutGrid, LogOut, PanelLeft, Search, Send, Cpu, Server, Settings, SquarePen, TrendingUp, Users, Wand2, type LucideIcon
@@ -232,12 +233,14 @@ export function Layout(props: { title: string; actions?: ReactNode; children: Re
         <header className="flex h-12 shrink-0 items-center gap-1.5 px-3">
           {(!open || drawer) && <IconButton label="Buka sidebar" onClick={() => setOpen(true)}><PanelLeft /></IconButton>}
           {props.title && <h1 className="min-w-0 truncate px-1 text-sm font-medium">{props.title}</h1>}
-          <div className="ml-auto flex items-center gap-1.5">{props.actions}</div>
+          <div className="ml-auto flex items-center gap-1.5"><span id={TOPBAR_SLOT_ID} className="contents" />{props.actions}</div>
         </header>
         <div className="min-h-0 flex-1 overflow-y-auto [scrollbar-width:thin]">
           <div className={props.bare ? 'h-full' : 'content mx-auto px-4 pt-2 pb-8 md:px-6'}>{props.children}</div>
         </div>
       </main>
+      {/* A page's side panel (the project assistant) lands here: full height, level with the top bar. */}
+      <div id={RIGHT_PANEL_ID} className="contents" />
       <SearchDialog open={searching} onOpenChange={setSearching} />
     </div>
   );

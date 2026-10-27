@@ -16,7 +16,7 @@ import { BreakdownTab } from './BreakdownTab.js';
 import { TimelineTab } from './TimelineTab.js';
 import { ResultTab } from './ResultTab.js';
 import { useSession } from '../../lib/session.js';
-import { AssistantColumn, AssistantSheet, AssistantToggle, useAssistantDock } from '../assistant/AssistantDock.js';
+import { AssistantColumn, AssistantSheet, AssistantToggle, useAssistantDock, useDockedInShell } from '../assistant/AssistantDock.js';
 
 const TABS = [
   { id: 'scene', label: 'Scene' },
@@ -152,6 +152,8 @@ export function ProjectPage(props: { pollMs?: number }) {
   const dock = useAssistantDock();
   // The assistant (chat, MCP, uploads) is admin-only on the server: members get no panel at all.
   const assistant = useSession().user.isAdmin;
+  // In the app shell the column docks beside `main` (full height); the page keeps its own width.
+  const docked = useDockedInShell();
 
   if (p.loadError && !p.story) {
     const missing = p.loadError instanceof ApiError && p.loadError.status === 404;
@@ -176,7 +178,7 @@ export function ProjectPage(props: { pollMs?: number }) {
   }
 
   const counts: Partial<Record<TabId, number>> = { scene: p.board.scenes?.length ?? 1 };
-  const columnShown = assistant && dock.wide && dock.open;
+  const columnShown = assistant && dock.wide && dock.open && !docked;
   return (
     <ProjectProvider value={p}>
       {/* With the assistant column beside them the tabs keep about the same ~1100 px (the shell's

@@ -5,12 +5,14 @@
  * The panel itself (markdown renderer included) loads lazily the first time it is shown; a chunk
  * that fails to load shows an inline error with "Coba lagi" and the rest of the page keeps working.
  */
+import { createPortal } from 'react-dom';
 import { Component, lazy, Suspense, useCallback, useEffect, useRef, useState, useSyncExternalStore, type ComponentType, type LazyExoticComponent, type ReactNode } from 'react';
 import { MessageSquare, PanelRight, RotateCcw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Sheet, SheetContent } from '@/components/ui/sheet';
 import { Skeleton } from '@/components/ui/skeleton';
 import { describeError } from '../../ui/states.js';
+import { RIGHT_PANEL_ID, TOPBAR_SLOT_ID, useShellSlot } from '../../shell/slots.js';
 import { IconTip } from './IconTip.js';
 import { COMPOSER_ID } from './ids.js';
 import type { AssistantPanelProps } from './AssistantPanel.js';
@@ -29,8 +31,8 @@ function lazyPanel(load: PanelLoader) {
 
 export const OPEN_KEY = 'nc.assistant.open';
 const LG = '(min-width: 64rem)';
-/** Below this the tabs would get narrow beside the column: it starts hidden (one click shows it). */
-const ROOMY = '(min-width: 80rem)';
+/** Below this the page would get narrow beside sidebar + column: it starts hidden (one click shows it). */
+const ROOMY = '(min-width: 90rem)';
 
 const matches = (query: string) => typeof window !== 'undefined' && typeof window.matchMedia === 'function' && window.matchMedia(query).matches;
 
@@ -85,17 +87,19 @@ export function useAssistantDock(): AssistantDock {
 export function AssistantToggle(props: { dock: AssistantDock }) {
   const { dock } = props;
   const wrap = useRef<HTMLSpanElement>(null);
+  // In the shell the control sits at the right end of the top bar, above where the column opens.
+  const slot = useShellSlot(TOPBAR_SLOT_ID);
   const showing = dock.wide && !dock.open;
   useEffect(() => {
     if (!showing || dock.focus !== 'show') return;
     wrap.current?.querySelector('button')?.focus();
     dock.clearFocus?.();
   }, [showing, dock]);
-  if (!dock.wide) {
-    return <Button size="sm" variant="glass" onClick={() => dock.setSheet(true)} aria-haspopup="dialog"><MessageSquare /> Asisten</Button>;
-  }
-  if (dock.open) return null;
-  return <span ref={wrap} className="contents"><IconTip label="Tampilkan asisten" onClick={dock.toggle}><PanelRight /></IconTip></span>;
+  const control = !dock.wide
+    ? <Button size="sm" variant="glass" onClick={() => dock.setSheet(true)} aria-haspopup="dialog"><MessageSquare /> Asisten</Button>
+    : dock.open ? null : <span ref={wrap} className="contents"><IconTip label="Tampilkan asisten" onClick={dock.toggle}><PanelRight /></IconTip></span>;
+  if (!control) return null;
+  return slot ? createPortal(control, slot) : control;
 }
 
 function PanelFallback() {
@@ -139,20 +143,33 @@ function PanelSlot(props: AssistantPanelProps & { load?: PanelLoader }) {
 
 type Shared = { dock: AssistantDock; story: Story; board: Board; onChanged: () => void; /** Tests: a loader that fails. */ load?: PanelLoader };
 
-/** lg+: the sticky column. Mounted once shown, then only hidden, so a reply keeps streaming. */
+/** True when the shell has the right column: the page then keeps its normal width (the column is not inside it). */
+export function useDockedInShell(): boolean {
+  return !!useShellSlot(RIGHT_PANEL_ID);
+}
+
+/**
+ * lg+: the column. In the shell it is a full-height panel beside `main`, level with the top bar, and
+ * the page shrinks (ChatGPT-style); alone (tests) it sits inline beside the tabs. Mounted once
+ * shown, then only hidden, so a reply keeps streaming.
+ */
 export function AssistantColumn(props: Shared) {
   const { dock } = props;
+  const slot = useShellSlot(RIGHT_PANEL_ID);
   const [shown, setShown] = useState(dock.open);
   if (dock.open && !shown) setShown(true);
   if (!dock.wide || !shown) return null;
-  return (
+  const panel = (
     <aside hidden={!dock.open} aria-label="Kolom asisten"
-      className="glass-panel sticky top-2 flex h-[calc(100svh-4rem)] w-[380px] shrink-0 flex-col overflow-hidden rounded-xl">
+      className={slot
+        ? 'flex h-svh w-[380px] shrink-0 flex-col overflow-hidden border-l bg-sidebar animate-in fade-in-0 slide-in-from-right-6 duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]'
+        : 'glass-panel sticky top-2 flex h-[calc(100svh-4rem)] w-[380px] shrink-0 flex-col overflow-hidden rounded-xl'}>
       {/* Keyed by project: drafts, history and streams never carry over to another project. */}
-      <PanelSlot key={props.story.id} load={props.load} story={props.story} board={props.board} onChanged={props.onChanged}
+      <PanelSlot key={props.story.id} load={props.load} story={props.story} board={props.board} onChanged={props.onChanged} docked={!!slot}
         onClose={dock.toggle} closeLabel="Sembunyikan asisten" focusClose={dock.open && dock.focus === 'hide'} onFocused={dock.clearFocus} />
     </aside>
   );
+  return slot ? createPortal(panel, slot) : panel;
 }
 
 /** Below lg: the same panel in a sheet from the right (full height, up to 420 px wide). */
