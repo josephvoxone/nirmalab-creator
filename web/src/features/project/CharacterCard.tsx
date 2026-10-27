@@ -230,7 +230,7 @@ export function CharacterCard(props: { card: Card; engine: EngineSet; locked: bo
             </div>
             {card.anchors.length ? (
               <ul aria-label={`Anchor ${card.name}`} className="flex flex-wrap gap-1">
-                {card.anchors.map(a => <li key={a} className="flex h-5.5 items-center rounded-md bg-muted px-1.5 text-[11.5px]">{a}</li>)}
+                {card.anchors.map(a => <li key={a} className="flex min-h-5.5 items-center rounded-md bg-muted px-1.5 py-0.5 text-[11.5px] leading-snug">{a}</li>)}
               </ul>
             ) : <p className="text-[12px] text-muted-foreground italic">Belum ada anchor — tambahkan satu ciri yang bisa dilihat (mis. kalung kulit merah pudar).</p>}
             <div className="flex flex-col gap-0.5">
