@@ -1,7 +1,7 @@
 import type { FastifyBaseLogger, FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { createReadStream, existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import { sendImage, sendPoster, type MediaCache } from '../media/images.js';
+import { THUMB_WIDTHS, sendImage, sendPoster, type MediaCache } from '../media/images.js';
 import { requireAdmin, sessionUser } from '../auth/routes.js';
 import type { UserAuthStore } from '../auth/store.js';
 import { DraftError, draftStoryboard, type TextGenerator } from './draft.js';
@@ -368,6 +368,10 @@ export async function registerStoryRoutes(
       if (!(await stories.get(request.params.id))) return notFound(reply, 'Story');
       const file = join(uploadsDir(stories.storyDir(request.params.id)), request.params.file);
       if (!existsSync(file)) return notFound(reply, 'Upload');
+      // `?w=`: a cached webp thumbnail (the same resize cache as frames and sheets), small widths included.
+      if ((request.query as Record<string, unknown> | undefined)?.w !== undefined) {
+        return await sendImage(request, reply.header('x-content-type-options', 'nosniff'), file, options.media, THUMB_WIDTHS);
+      }
       return reply.header('content-type', mimeOfFile(request.params.file)!).header('x-content-type-options', 'nosniff').header('cache-control', 'private, max-age=3600')
         .header('content-length', statSync(file).size).send(createReadStream(file));
     } catch (error) { return fail(reply, error); }

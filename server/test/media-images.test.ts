@@ -147,6 +147,32 @@ describe('image endpoints ?w=', () => {
 });
 
 
+describe('uploads ?w= (reference thumbnails)', () => {
+  it('GET uploads/:file?w=64 answers a cached 64-wide webp; without ?w= the original bytes; odd widths are refused', async () => {
+    const ffmpeg = counted();
+    const t = await setupApp({ media: { ffmpeg } });
+    const original = readFileSync(makePng(join(t.dataDir, 'ref.png'), 800, 1200));
+    const up = await t.server.inject({ method: 'POST', url: `/api/stories/${t.storyId}/uploads`, headers: { cookie: t.cookie, 'content-type': 'image/png' }, payload: original });
+    expect(up.statusCode).toBe(201);
+    const url = up.json().url as string;
+    const small = await t.server.inject({ url: `${url}?w=64`, headers: { cookie: t.cookie } });
+    expect(small.statusCode).toBe(200);
+    expect(small.headers['content-type']).toBe('image/webp');
+    expect(small.headers['x-content-type-options']).toBe('nosniff');
+    expect(probeBuffer(small.rawPayload, t.dataDir)).toMatchObject({ codec: 'webp', width: 64, height: 96 });
+    expect(small.rawPayload.length).toBeLessThan(original.length);
+    // Cached like every other ?w= image.
+    await t.server.inject({ url: `${url}?w=64`, headers: { cookie: t.cookie } });
+    expect(ffmpeg.calls).toBe(1);
+    expect((await t.server.inject({ url: `${url}?w=96`, headers: { cookie: t.cookie } })).headers['content-type']).toBe('image/webp');
+    const raw = await t.server.inject({ url, headers: { cookie: t.cookie } });
+    expect(raw.headers['content-type']).toBe('image/png');
+    expect(raw.rawPayload.equals(original)).toBe(true);
+    expect((await t.server.inject({ url: `${url}?w=63`, headers: { cookie: t.cookie } })).statusCode).toBe(400);
+    expect((await t.server.inject({ url: `${url}?w=64` })).statusCode).toBe(401);
+  });
+});
+
 describe('posters', () => {
   const seek = (args: string[]) => Number(args[args.indexOf('-ss') + 1]);
 

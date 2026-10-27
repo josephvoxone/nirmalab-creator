@@ -23,12 +23,14 @@ export function ffmpegRunner(bin = process.env.MEDIA_FFMPEG || 'ffmpeg'): Ffmpeg
 }
 
 export const WIDTHS = [160, 320, 480, 720, 1080] as const;
+/** Small thumbnails too (40–48 px reference chips: 64 at 1x, 96 at 2x); for uploaded images. */
+export const THUMB_WIDTHS = [64, 96, ...WIDTHS] as const;
 
-/** `?w=`: undefined when absent, null when not one of WIDTHS. */
-export function parseWidth(value: unknown): number | undefined | null {
+/** `?w=`: undefined when absent, null when not one of `widths`. */
+export function parseWidth(value: unknown, widths: readonly number[] = WIDTHS): number | undefined | null {
   if (value === undefined) return undefined;
   const w = typeof value === 'string' && /^\d{1,5}$/.test(value) ? Number(value) : NaN;
-  return (WIDTHS as readonly number[]).includes(w) ? w : null;
+  return widths.includes(w) ? w : null;
 }
 
 /** Versioned URLs (`v=`) never change; bare ones are re-checked after five minutes. */
@@ -120,17 +122,17 @@ export class MediaCache {
   }
 }
 
-const badWidth = (reply: FastifyReply) =>
-  reply.code(400).send({ error: { code: 'INVALID', message: `w must be one of ${WIDTHS.join(', ')}` } });
+const badWidth = (reply: FastifyReply, widths: readonly number[] = WIDTHS) =>
+  reply.code(400).send({ error: { code: 'INVALID', message: `w must be one of ${widths.join(', ')}` } });
 
 /**
- * Send an image file: original bytes (type from magic bytes) or, with `?w=`, a cached webp.
- * The caller has checked that `file` exists.
+ * Send an image file: original bytes (type from magic bytes) or, with `?w=` (one of `widths`), a
+ * cached webp. The caller has checked that `file` exists.
  */
-export async function sendImage(request: FastifyRequest, reply: FastifyReply, file: string, media: MediaCache) {
+export async function sendImage(request: FastifyRequest, reply: FastifyReply, file: string, media: MediaCache, widths: readonly number[] = WIDTHS) {
   const query = request.query as Record<string, unknown> | undefined;
-  const width = parseWidth(query?.w);
-  if (width === null) return badWidth(reply);
+  const width = parseWidth(query?.w, widths);
+  if (width === null) return badWidth(reply, widths);
   const path = width === undefined ? file : await media.resized(file, width);
   const type = width === undefined ? sniffMediaType(file) : 'image/webp';
   return reply.header('content-type', type).header('cache-control', cacheControl(query))
