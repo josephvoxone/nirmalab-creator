@@ -48,6 +48,8 @@ h2 { font-size: 15px; font-weight: 600; }
 .topbar h1 { font-size: 16px; font-weight: 600; }
 .topbar-actions { display: flex; align-items: center; gap: 8px; }
 .content { padding: 18px; display: flex; flex-direction: column; gap: 12px; max-width: 1200px; width: 100%; }
+/* The project page with the assistant column beside its tabs (ProjectPage): the tabs keep ~1100 px. */
+.content:has(> [data-assistant-column]) { max-width: 1520px; }
 
 /* Account */
 .account { position: relative; }

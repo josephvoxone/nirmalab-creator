@@ -34,13 +34,23 @@ export const PENDING_TTL_MS = 30 * 60 * 1000;
 export const NOT_CONFIGURED = 'NOT_CONFIGURED';
 export const MAX_ATTACHMENTS = 4;
 
+/**
+ * An uploaded image at a width the server resizes to (`THUMB_WIDTHS` in server/src/media/images.ts:
+ * 64, 96, 160, 320, 480, 720, 1080); any other width is refused with a 400.
+ */
+export const sizedUrl = (url: string, w: 64 | 96 | 160 | 320 | 480 | 720 | 1080) => `${url}${url.includes('?') ? '&' : '?'}w=${w}`;
+/** The 64 px thumbnail and its denser variants. */
+export const thumbProps = (url: string) => ({ src: sizedUrl(url, 64), srcSet: `${sizedUrl(url, 96)} 1.5x, ${sizedUrl(url, 160)} 2x` });
+/** The preview dialog: the largest served width, never the original. */
+export const PREVIEW_WIDTH = 1080;
+
 export function assistantApi(fetchImpl: FetchLike) {
   const base = (id: string) => `/api/stories/${id}/assistant`;
   return {
     history: (id: string) => requestJson<History>(fetchImpl, base(id)),
     send: (id: string, body: SendBody, onEvent: (e: SseEvent) => void, signal?: AbortSignal) => postSse(fetchImpl, base(id), body, onEvent, signal),
     undo: (id: string, undoId: string) => requestJson<{ ok: boolean; rev: number }>(fetchImpl, `${base(id)}/undo/${encodeURIComponent(undoId)}`, post({})),
-    upload: (id: string, file: Blob) => storiesApi(fetchImpl).upload(id, file) as Promise<Upload>
+    upload: (id: string, file: Blob, signal?: AbortSignal) => storiesApi(fetchImpl).upload(id, file, signal) as Promise<Upload>
   };
 }
 

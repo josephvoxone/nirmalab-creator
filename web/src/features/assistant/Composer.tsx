@@ -9,11 +9,13 @@ import { ArrowUp, Loader2, Paperclip, Square, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { MentionTextarea, type MentionTriggers } from '../../ui/MentionTextarea.js';
 import type { Upload } from '../stories/storiesClient.js';
-import { MAX_ATTACHMENTS } from './assistantClient.js';
+import { MAX_ATTACHMENTS, thumbProps } from './assistantClient.js';
+import { COMPOSER_ID } from './ids.js';
 
+/** `preview` is the local blob URL: shown while uploading and until the sized server thumbnail has loaded. */
 export type Draft = { key: string; name: string; preview?: string; status: 'uploading' | 'done'; upload?: Upload };
 
-export const COMPOSER_ID = 'assistant-composer';
+export { COMPOSER_ID } from './ids.js';
 export const PLACEHOLDER = 'Minta asisten… (@ karakter, # lokasi, / shot)';
 const ACCEPT = 'image/png,image/jpeg,image/webp';
 
@@ -23,6 +25,8 @@ export type ComposerProps = {
   triggers: MentionTriggers;
   drafts: Draft[];
   onRemove: (key: string) => void;
+  /** The sized server thumbnail of a draft has loaded: the local preview can go. */
+  onLoaded: (key: string) => void;
   onFiles: (files: File[]) => void;
   problem?: string;
   streaming: boolean;
@@ -59,12 +63,19 @@ export function Composer(props: ComposerProps) {
         {props.drafts.length > 0 && (
           <ul aria-label="Lampiran" className="flex flex-wrap gap-1.5 px-1 pt-1 pb-1.5">
             {props.drafts.map((d, i) => {
-              const src = d.upload?.url ?? d.preview;
+              const hide = (e: { currentTarget: HTMLImageElement }) => { e.currentTarget.style.visibility = 'hidden'; };
               return (
                 <li key={d.key} className="group/att relative size-16 shrink-0 overflow-hidden rounded-lg border border-border/70 bg-muted">
-                  {src
-                    ? <img src={src} alt={d.status === 'done' ? `Lampiran ${i + 1}` : ''} width={64} height={64} decoding="async" onError={e => { e.currentTarget.style.visibility = 'hidden'; }} className={cn('size-16 object-cover text-transparent', d.status === 'uploading' && 'opacity-50')} />
-                    : <span className="flex size-16 items-center justify-center px-1 text-center text-[10px] break-all text-muted-foreground">{d.name}</span>}
+                  {d.preview && (
+                    <img src={d.preview} alt="" width={64} height={64} decoding="async" onError={hide}
+                      className={cn('absolute inset-0 size-16 object-cover text-transparent', d.status === 'uploading' && 'opacity-50')} />
+                  )}
+                  {d.upload && (
+                    <img {...thumbProps(d.upload.url)} alt={`Lampiran ${i + 1}`} width={64} height={64} loading="lazy" decoding="async"
+                      onLoad={() => props.onLoaded(d.key)} onError={hide}
+                      className={cn('relative size-16 object-cover text-transparent', d.preview && 'opacity-0')} />
+                  )}
+                  {!d.preview && !d.upload && <span className="flex size-16 items-center justify-center px-1 text-center text-[10px] break-all text-muted-foreground">{d.name}</span>}
                   {d.status === 'uploading' && (
                     <span role="status" aria-label={`Mengunggah ${d.name}`} className="absolute inset-0 flex items-center justify-center">
                       <Loader2 aria-hidden="true" className="size-4 animate-spin text-foreground" />

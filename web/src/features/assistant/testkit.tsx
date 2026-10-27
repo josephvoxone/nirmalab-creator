@@ -22,7 +22,11 @@ export function fakeAssistantApi(opts: {
   /** Answer a POST before streaming (e.g. a 409) — return undefined to stream. */
   refuse?: (body: Record<string, unknown>) => Response | undefined;
   undo?: (undoId: string) => Response;
+  /** Hold every upload until `releaseUploads(status)`; the fake ignores the signal (a slow proxy). */
+  holdUploads?: boolean;
 } = {}) {
+  let releaseUpload: (status: number) => void = () => undefined;
+  let uploadHeld = new Promise<number>(r => { releaseUpload = r; });
   const calls: AssistantCall[] = [];
   const streams: Stream[] = [];
   let turns = opts.turns ?? [];
@@ -61,6 +65,10 @@ export function fakeAssistantApi(opts: {
     if (undo && method === 'POST') return opts.undo?.(decodeURIComponent(undo[1]!)) ?? json(200, { ok: true, rev: 9, attention: [] });
     if (url === `/api/stories/${SID}/uploads` && method === 'POST') {
       uploads++;
+      if (opts.holdUploads) {
+        const status = await uploadHeld;
+        if (status !== 201) return json(status, { error: { message: 'Unggahan gagal di server' } });
+      }
       return json(201, { id: `up_${String(uploads).padStart(16, '0')}`, url: `/api/stories/${SID}/uploads/up_${uploads}.png`, w: 1024, h: 1536, bytes: 2048 });
     }
     return json(404, { error: { message: `no fake for ${method} ${url}` } });
@@ -68,6 +76,7 @@ export function fakeAssistantApi(opts: {
   return {
     fetchImpl, calls, streams,
     releaseHistory: () => release(),
+    releaseUploads: (status = 201) => { releaseUpload(status); uploadHeld = new Promise<number>(r => { releaseUpload = r; }); },
     setTurns: (t: Turn[]) => { turns = t; },
     setConfigured: (v: boolean) => { configured = v; },
     posts: () => calls.filter(c => c.method === 'POST' && c.url === `/api/stories/${SID}/assistant`)

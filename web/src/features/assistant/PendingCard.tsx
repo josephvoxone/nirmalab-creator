@@ -1,6 +1,7 @@
 /**
  * A spending step the assistant proposed: its label, the cost, and one click "Jalankan" (the only
- * way money or credits are spent from chat). "Lewati" hides it for this session. A pending the
+ * way money or credits are spent from chat). "Lewati" hides it while the panel stays mounted (it is
+ * not stored: closing the sheet, a reload or another project brings it back). A pending the
  * server will refuse (used, superseded, expired) is shown disabled with the reason.
  */
 import { useState } from 'react';

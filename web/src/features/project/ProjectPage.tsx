@@ -173,41 +173,44 @@ export function ProjectPage(props: { pollMs?: number }) {
   }
 
   const counts: Partial<Record<TabId, number>> = { scene: p.board.scenes?.length ?? 1 };
+  const columnShown = dock.wide && dock.open;
   return (
     <ProjectProvider value={p}>
-      <div className="mx-auto flex w-full max-w-[1200px] items-start gap-4">
-      <div className="flex min-w-0 flex-1 flex-col gap-3">
-        <div className="flex flex-wrap items-start gap-3">
-          <div className="flex min-w-[min(100%,14rem)] flex-1 flex-col gap-0.5">
-            <Title p={p} />
-            {p.board.logline && <p className="text-[12.5px] text-muted-foreground">{p.board.logline}</p>}
+      {/* With the assistant column beside them the tabs keep about the same ~1100 px (the shell's
+          .content widens to match through `data-assistant-column`, see app.css). */}
+      <div data-assistant-column={columnShown || undefined} className={cn('mx-auto flex w-full items-start gap-4', columnShown ? 'max-w-[1520px]' : 'max-w-[1200px]')}>
+        <div className="flex min-w-0 flex-1 flex-col gap-3">
+          <div className="flex flex-wrap items-start gap-3">
+            <div className="flex min-w-[min(100%,14rem)] flex-1 flex-col gap-0.5">
+              <Title p={p} />
+              {p.board.logline && <p className="text-[12.5px] text-muted-foreground">{p.board.logline}</p>}
+            </div>
+            <PrimaryAction p={p} />
+            <AssistantToggle dock={dock} />
           </div>
-          <PrimaryAction p={p} />
-          <AssistantToggle dock={dock} />
+          <div className="flex flex-wrap items-center gap-3 border-b pb-2">
+            <StageBar p={p} />
+            <span className="ml-auto flex items-center gap-1 text-[11.5px] text-muted-foreground"><Sparkles className="size-3" /> {p.story.mode === 'konsisten' ? 'Mode konsisten' : 'Mode cepat'} · {p.board.aspect ?? '9:16'}</span>
+          </div>
+          <Banners p={p} />
+          <div role="tablist" aria-label="Bagian proyek" className="flex gap-1 overflow-x-auto [scrollbar-width:none]">
+            {TABS.map(t => (
+              <button key={t.id} type="button" role="tab" id={`ptab-${t.id}`} aria-controls={`ppanel-${t.id}`} aria-selected={tab === t.id} onClick={() => choose(t.id)}
+                className={cn('flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2.5 text-[12.5px] text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring/60',
+                  tab === t.id && 'glass-chosen text-foreground')}>
+                {t.label}{counts[t.id] !== undefined && <span className="text-[11px] text-muted-foreground">{counts[t.id]}</span>}
+              </button>
+            ))}
+          </div>
+          <div role="tabpanel" id={`ppanel-${tab}`} aria-labelledby={`ptab-${tab}`} className="min-w-0">
+            {tab === 'scene' && <SceneTab />}
+            {tab === 'bible' && <BibleTab />}
+            {tab === 'breakdown' && <BreakdownTab />}
+            {tab === 'timeline' && <TimelineTab />}
+            {tab === 'hasil' && <ResultTab />}
+            {tab === 'aktivitas' && <Activity p={p} />}
+          </div>
         </div>
-        <div className="flex flex-wrap items-center gap-3 border-b pb-2">
-          <StageBar p={p} />
-          <span className="ml-auto flex items-center gap-1 text-[11.5px] text-muted-foreground"><Sparkles className="size-3" /> {p.story.mode === 'konsisten' ? 'Mode konsisten' : 'Mode cepat'} · {p.board.aspect ?? '9:16'}</span>
-        </div>
-        <Banners p={p} />
-        <div role="tablist" aria-label="Bagian proyek" className="flex gap-1 overflow-x-auto [scrollbar-width:none]">
-          {TABS.map(t => (
-            <button key={t.id} type="button" role="tab" id={`ptab-${t.id}`} aria-controls={`ppanel-${t.id}`} aria-selected={tab === t.id} onClick={() => choose(t.id)}
-              className={cn('flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2.5 text-[12.5px] text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring/60',
-                tab === t.id && 'glass-chosen text-foreground')}>
-              {t.label}{counts[t.id] !== undefined && <span className="text-[11px] text-muted-foreground">{counts[t.id]}</span>}
-            </button>
-          ))}
-        </div>
-        <div role="tabpanel" id={`ppanel-${tab}`} aria-labelledby={`ptab-${tab}`} className="min-w-0">
-          {tab === 'scene' && <SceneTab />}
-          {tab === 'bible' && <BibleTab />}
-          {tab === 'breakdown' && <BreakdownTab />}
-          {tab === 'timeline' && <TimelineTab />}
-          {tab === 'hasil' && <ResultTab />}
-          {tab === 'aktivitas' && <Activity p={p} />}
-        </div>
-      </div>
         <AssistantColumn dock={dock} story={p.story} board={p.board} onChanged={p.reload} />
       </div>
       <AssistantSheet dock={dock} story={p.story} board={p.board} onChanged={p.reload} />

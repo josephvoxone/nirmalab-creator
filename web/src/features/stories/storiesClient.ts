@@ -99,7 +99,7 @@ export function storiesApi(fetchImpl: FetchLike) {
       requestJson<{ label: string; changed: boolean; undoId?: string; story: Story; storyboard: Storyboard }>(fetchImpl, `/api/stories/${id}/scenes/${encodeURIComponent(sceneId)}/breakdown`, post(body)),
     makeSheet: (id: string, token: string, confirm: boolean) => requestJson<SheetAnswer>(fetchImpl, `/api/stories/${id}/cast/${token}/sheet`, post(confirm ? { confirm: true } : {})),
     /** Raw image body (no multipart): the Content-Type names the format. */
-    upload: (id: string, file: Blob) => requestJson<Upload>(fetchImpl, `/api/stories/${id}/uploads`, { method: 'POST', body: file, headers: { 'Content-Type': file.type } }),
+    upload: (id: string, file: Blob, signal?: AbortSignal) => requestJson<Upload>(fetchImpl, `/api/stories/${id}/uploads`, { method: 'POST', body: file, headers: { 'Content-Type': file.type }, ...(signal ? { signal } : {}) }),
     /** `uploads/up_….png` on a card → the URL that serves it. */
     uploadUrl: (id: string, rel: string) => `/api/stories/${id}/uploads/${rel.replace(/^uploads\//, '')}`,
     render: (id: string, force: boolean, scope: { scene?: string; shot?: string } = {}) => requestJson<{ story: Story }>(fetchImpl, `/api/stories/${id}/render`, post({ force, ...scope })),

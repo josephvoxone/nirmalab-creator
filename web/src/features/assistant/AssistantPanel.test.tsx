@@ -1,4 +1,6 @@
-import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { MemoryRouter, Route, Routes, useLocation, useNavigate, type Location } from 'react-router-dom';
+import { SessionContext } from '../../lib/session.js';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { bibleBoard, BOARD, storyFor } from '../project/testkit.js';
@@ -6,7 +8,7 @@ import type { Board } from '../project/model.js';
 import type { Story } from '../stories/storiesClient.js';
 import { AssistantPanel } from './AssistantPanel.js';
 import { PLACEHOLDER } from './Composer.js';
-import { sseParser } from './sse.js';
+import { postSse, sseParser, type SseEvent } from './sse.js';
 import { ev, fakeAssistantApi, mountWith, SID, turn } from './testkit.js';
 
 type Api = ReturnType<typeof fakeAssistantApi>;
@@ -41,6 +43,29 @@ describe('sse parser', () => {
     expect(p.push('ta: {"text":"Ha"}\n\n: ping\n\nevent: done\r\ndata: {"rev":3}\r\n\r\n')).toEqual([
       { event: 'delta', data: { text: 'Ha' } }, { event: 'done', data: { rev: 3 } }
     ]);
+  });
+
+  it('a CRLF split across chunks is one line break, not a blank line', () => {
+    const p = sseParser();
+    expect(p.push('event: delta\r')).toEqual([]);
+    expect(p.push('\ndata: {"text":"a"}\r\n\r')).toEqual([]);
+    expect(p.push('\n')).toEqual([{ event: 'delta', data: { text: 'a' } }]);
+  });
+
+  it('flush returns the last event when the stream ends without a blank line (a held CR too)', () => {
+    const p = sseParser();
+    expect(p.push('event: done\r\ndata: {"rev":4}\r')).toEqual([]);
+    expect(p.flush()).toEqual([{ event: 'done', data: { rev: 4 } }]);
+    expect(p.flush()).toEqual([]);
+  });
+
+  it('a multibyte character split across network chunks arrives whole', async () => {
+    const bytes = new TextEncoder().encode(ev('delta', { text: 'Café — siap' }));
+    const cut = bytes.indexOf(0xc3) + 1; // inside "é"
+    const body = new ReadableStream<Uint8Array>({ start(c) { c.enqueue(bytes.slice(0, cut)); c.enqueue(bytes.slice(cut)); c.close(); } });
+    const got: SseEvent[] = [];
+    await postSse(async () => new Response(body, { status: 200 }), '/x', {}, e => got.push(e));
+    expect(got).toEqual([{ event: 'delta', data: { text: 'Café — siap' } }]);
   });
 });
 
@@ -202,7 +227,11 @@ describe('AssistantPanel', () => {
     await ready();
     const file = png();
     fireEvent.change(fileInput(), { target: { files: [file] } });
-    await waitFor(() => expect(screen.getByRole('img', { name: 'Lampiran 1' })).toHaveAttribute('src', `/api/stories/${SID}/uploads/up_1.png`));
+    await waitFor(() => expect(screen.getByRole('img', { name: 'Lampiran 1' })).toHaveAttribute('src', `/api/stories/${SID}/uploads/up_1.png?w=64`));
+    const chip = screen.getByRole('img', { name: 'Lampiran 1' });
+    expect(chip).toHaveAttribute('srcset', `/api/stories/${SID}/uploads/up_1.png?w=96 1.5x, /api/stories/${SID}/uploads/up_1.png?w=160 2x`);
+    expect(chip).toHaveAttribute('loading', 'lazy');
+    expect(chip).toHaveAttribute('decoding', 'async');
     const up = api.calls.find(c => c.url === `/api/stories/${SID}/uploads`)!;
     expect(up.raw).toBe(file);
     expect(up.headers?.['Content-Type']).toBe('image/png');
@@ -210,9 +239,15 @@ describe('AssistantPanel', () => {
     await sendText(user, 'Pakai ini untuk Jingga');
     expect(api.posts()[0]!.body).toEqual({ message: 'Pakai ini untuk Jingga', attachments: ['up_0000000000000001'] });
     // The bubble shows the image as a 64 px thumbnail that opens a bounded preview.
+    const thumb = within(screen.getByRole('button', { name: 'Lihat lampiran 1' })).getByRole('img');
+    expect(thumb).toHaveAttribute('src', `/api/stories/${SID}/uploads/up_1.png?w=64`);
+    expect(thumb).toHaveAttribute('srcset', `/api/stories/${SID}/uploads/up_1.png?w=96 1.5x, /api/stories/${SID}/uploads/up_1.png?w=160 2x`);
+    expect(thumb).toHaveAttribute('loading', 'lazy');
+    expect(thumb.className).toContain('object-cover');
     await user.click(screen.getByRole('button', { name: 'Lihat lampiran 1' }));
     const preview = await screen.findByRole('img', { name: 'Pratinjau lampiran' });
     expect(preview.className).toContain('max-h-[70vh]');
+    expect(preview).toHaveAttribute('src', `/api/stories/${SID}/uploads/up_1.png?w=1080`);
   });
 
   it('removes a picked image with ×', async () => {
@@ -402,5 +437,150 @@ describe('AssistantPanel', () => {
     expect(document.querySelectorAll('select, input[type=date], input[type=radio], input[type=checkbox]')).toHaveLength(0);
     expect(composer()).toHaveAttribute('placeholder', PLACEHOLDER);
     expect(screen.getByRole('button', { name: 'Kirim pesan' })).toBeDisabled();
+  });
+});
+
+describe('AssistantPanel review fixes', () => {
+  const order = () => Array.from(screen.getByRole('log').children).map(li => (li.textContent ?? '').replace(/^N\s*Asisten/, '').replace(/\s+/g, ' ').trim());
+
+  it('keeps the local blob preview until the sized thumbnail has loaded', async () => {
+    const created = vi.fn(() => 'blob:local-1');
+    const revoked = vi.fn();
+    const had = { create: URL.createObjectURL, revoke: URL.revokeObjectURL };
+    Object.assign(URL, { createObjectURL: created, revokeObjectURL: revoked });
+    try {
+      const api = fakeAssistantApi();
+      mount(api);
+      await ready();
+      fireEvent.change(fileInput(), { target: { files: [png()] } });
+      const sized = await screen.findByRole('img', { name: 'Lampiran 1' });
+      expect(sized).toHaveAttribute('src', `/api/stories/${SID}/uploads/up_1.png?w=64`);
+      const list = screen.getByRole('list', { name: 'Lampiran' });
+      expect(list.querySelector('img[src="blob:local-1"]')).not.toBeNull();
+      expect(revoked).not.toHaveBeenCalled();
+      fireEvent.load(sized);
+      await waitFor(() => expect(list.querySelector('img[src="blob:local-1"]')).toBeNull());
+      expect(revoked).toHaveBeenCalledWith('blob:local-1');
+    } finally {
+      Object.assign(URL, { createObjectURL: had.create, revokeObjectURL: had.revoke });
+    }
+  });
+
+  it('a send refused before the stream keeps its place: A, its error, then B and its reply', async () => {
+    let first = true;
+    const api = fakeAssistantApi({
+      refuse: () => {
+        if (!first) return undefined;
+        first = false;
+        return new Response(JSON.stringify({ error: { code: 'BUSY', message: 'Asisten masih menjawab pesan lain' } }), { status: 409 });
+      }
+    });
+    mount(api);
+    await ready();
+    const user = userEvent.setup();
+    await sendText(user, 'Pesan A');
+    expect(await screen.findByText('Asisten masih menjawab pesan lain')).toBeInTheDocument();
+    await sendText(user, 'Pesan B');
+    api.setTurns([turn({ id: 't_ub', role: 'user', text: 'Pesan B' }), turn({ id: 't_b', role: 'assistant', text: 'Balasan B' })]);
+    act(() => { api.streams[0]!.push(ev('turn', { id: 't_b' }) + ev('delta', { text: 'Balasan B' }) + ev('done', { rev: 2 })); api.streams[0]!.end(); });
+    await waitFor(() => expect(api.calls.filter(c => c.method === 'GET')).toHaveLength(2));
+    await waitFor(() => expect(order()).toEqual(['Pesan A', 'Asisten masih menjawab pesan lain Coba lagi', 'Pesan B', 'Balasan B']));
+  });
+
+  it('a turn stopped after the server named it shows once after the refresh', async () => {
+    const api = fakeAssistantApi();
+    mount(api);
+    await ready();
+    const user = userEvent.setup();
+    await sendText(user, 'Pesan A');
+    act(() => { api.streams[0]!.push(ev('turn', { id: 't_a' })); });
+    await user.click(await screen.findByRole('button', { name: 'Hentikan jawaban' }));
+    expect(await screen.findByText('Dihentikan.')).toBeInTheDocument();
+    await sendText(user, 'Pesan B');
+    api.setTurns([
+      turn({ id: 't_ua', role: 'user', text: 'Pesan A' }), turn({ id: 't_a', role: 'assistant', text: 'Dibatalkan.' }),
+      turn({ id: 't_ub', role: 'user', text: 'Pesan B' }), turn({ id: 't_b', role: 'assistant', text: 'Balasan B' })
+    ]);
+    act(() => { api.streams[1]!.push(ev('turn', { id: 't_b' }) + ev('delta', { text: 'Balasan B' }) + ev('done', { rev: 2 })); api.streams[1]!.end(); });
+    await waitFor(() => expect(api.calls.filter(c => c.method === 'GET')).toHaveLength(2));
+    await waitFor(() => expect(order()).toEqual(['Pesan A', 'Dihentikan.', 'Pesan B', 'Balasan B']));
+  });
+
+  it('Batalkan is disabled while a reply streams', async () => {
+    const api = fakeAssistantApi({ turns: [turn({ id: 't1', role: 'assistant', text: 'Selesai.', changes: [{ label: 'Shot 3 diubah', undoId: 'snap_a' }] })] });
+    mount(api);
+    const undo = await screen.findByRole('button', { name: 'Batalkan: Shot 3 diubah' });
+    expect(undo).toBeEnabled();
+    await sendText(userEvent.setup(), 'Ringkas');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Batalkan: Shot 3 diubah' })).toBeDisabled());
+    act(() => { api.streams[0]!.push(ev('turn', { id: 't_r' }) + ev('done', { rev: 2 })); api.streams[0]!.end(); });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Batalkan: Shot 3 diubah' })).toBeEnabled());
+  });
+
+  it('removing a chip while it uploads aborts the upload and ignores its result', async () => {
+    const api = fakeAssistantApi({ holdUploads: true });
+    mount(api);
+    await ready();
+    fireEvent.change(fileInput(), { target: { files: [png()] } });
+    await screen.findByRole('status', { name: 'Mengunggah ref.png' });
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Hapus lampiran 1' }));
+    const up = api.calls.find(c => c.url.endsWith('/uploads'))!;
+    expect(up.signal?.aborted).toBe(true);
+    await act(async () => { api.releaseUploads(500); await new Promise(r => setTimeout(r, 20)); });
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.queryByRole('list', { name: 'Lampiran' })).toBeNull();
+  });
+
+  it('not configured: checks again when the window regains focus', async () => {
+    const api = fakeAssistantApi({ configured: false });
+    mount(api);
+    await screen.findByRole('link', { name: 'Pengaturan › Provider' });
+    api.setConfigured(true);
+    act(() => { window.dispatchEvent(new Event('focus')); });
+    expect(await screen.findByRole('combobox', { name: 'Pesan untuk asisten' })).toBeInTheDocument();
+  });
+
+  it('not configured: checks again when the settings modal over the page closes', async () => {
+    const api = fakeAssistantApi({ configured: false });
+    const board = bibleBoard();
+    const story = { ...storyFor(board), id: SID, rev: 2 };
+    function Shell() {
+      const location = useLocation();
+      const navigate = useNavigate();
+      const bg = (location.state as { background?: Location } | null)?.background;
+      return (
+        <>
+          <Routes location={bg ?? location}>
+            <Route path="/cerita/:id" element={<AssistantPanel story={story} board={board} onChanged={() => undefined} />} />
+          </Routes>
+          {location.pathname.startsWith('/pengaturan') && <button type="button" onClick={() => navigate(bg!.pathname)}>Tutup pengaturan</button>}
+        </>
+      );
+    }
+    render(
+      <SessionContext.Provider value={{ user: { id: 'u1', email: 'a@x.io', isAdmin: true }, fetchImpl: api.fetchImpl, signOut: async () => undefined }}>
+        <MemoryRouter initialEntries={[`/cerita/${SID}`]}><Shell /></MemoryRouter>
+      </SessionContext.Provider>
+    );
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('link', { name: 'Pengaturan › Provider' }));
+    api.setConfigured(true);
+    await user.click(await screen.findByRole('button', { name: 'Tutup pengaturan' }));
+    expect(await screen.findByRole('combobox', { name: 'Pesan untuk asisten' })).toBeInTheDocument();
+  });
+
+  it('the log is aria-busy while streaming and step lines are not extra live regions', async () => {
+    const api = fakeAssistantApi({ turns: [turn({ id: 't0', role: 'assistant', text: 'Halo.' })] });
+    mount(api);
+    await ready();
+    await screen.findByText('Halo.');
+    expect(screen.getByRole('log')).not.toHaveAttribute('aria-busy');
+    await sendText(userEvent.setup(), 'Ubah shot 2');
+    act(() => { api.streams[0]!.push(ev('turn', { id: 't_s' }) + ev('step', { label: 'Mengubah shot 2' })); });
+    await screen.findByText('Mengubah shot 2…');
+    expect(screen.getByRole('log')).toHaveAttribute('aria-busy', 'true');
+    expect(within(screen.getByRole('log')).queryAllByRole('status')).toHaveLength(0);
+    act(() => { api.streams[0]!.push(ev('done', { rev: 2 })); api.streams[0]!.end(); });
+    await waitFor(() => expect(screen.getByRole('log')).not.toHaveAttribute('aria-busy'));
   });
 });

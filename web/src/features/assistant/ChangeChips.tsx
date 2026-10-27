@@ -8,7 +8,8 @@ import { Check, Loader2, Undo2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { TurnChange } from './assistantClient.js';
 
-export function ChangeChips(props: { changes: TurnChange[]; onUndo: (undoId: string) => Promise<string | undefined> }) {
+/** `busy`: a reply is streaming; undo waits until it is done (the turn may still be changing the board). */
+export function ChangeChips(props: { changes: TurnChange[]; busy?: boolean; onUndo: (undoId: string) => Promise<string | undefined> }) {
   const [busy, setBusy] = useState<string>();
   const [refused, setRefused] = useState<Record<string, string>>({});
   if (!props.changes.length) return null;
@@ -38,7 +39,7 @@ export function ChangeChips(props: { changes: TurnChange[]; onUndo: (undoId: str
             {c.undone
               ? <span className="shrink-0 text-[11.5px] text-muted-foreground">Dibatalkan</span>
               : lastOfGroup.has(i) && (
-                <button type="button" aria-label={groupSize(c.undoId) > 1 ? `Batalkan ${groupSize(c.undoId)} perubahan ini` : `Batalkan: ${c.label}`} disabled={busy === c.undoId} onClick={() => void undo(c.undoId)}
+                <button type="button" aria-label={groupSize(c.undoId) > 1 ? `Batalkan ${groupSize(c.undoId)} perubahan ini` : `Batalkan: ${c.label}`} disabled={busy === c.undoId || props.busy} onClick={() => void undo(c.undoId)}
                   className="inline-flex h-5 shrink-0 items-center gap-1 rounded-full px-1.5 text-[11.5px] text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring/60 disabled:opacity-60">
                   {busy === c.undoId && <Loader2 aria-hidden="true" className="size-3 animate-spin" />} {groupSize(c.undoId) > 1 ? 'Batalkan semua' : 'Batalkan'}
                 </button>

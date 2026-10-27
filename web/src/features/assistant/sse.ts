@@ -26,9 +26,14 @@ export function sseParser() {
     const text = data.join('\n');
     try { return { event, data: JSON.parse(text) }; } catch { return { event, data: text }; }
   };
+  // A chunk that ends in '\r' may be the first half of a CRLF: hold it until the next chunk.
+  let heldCr = false;
   return {
     push(chunk: string): SseEvent[] {
-      buffer += chunk.replace(/\r\n?/g, '\n');
+      let text = (heldCr ? '\r' : '') + chunk;
+      heldCr = text.endsWith('\r');
+      if (heldCr) text = text.slice(0, -1);
+      buffer += text.replace(/\r\n?/g, '\n');
       const out: SseEvent[] = [];
       let at: number;
       while ((at = buffer.indexOf('\n\n')) !== -1) {
@@ -41,8 +46,9 @@ export function sseParser() {
     },
     /** Whatever is left when the stream ends without a final blank line. */
     flush(): SseEvent[] {
-      const rest = buffer.trim();
+      const rest = (buffer + (heldCr ? '\n' : '')).trim();
       buffer = '';
+      heldCr = false;
       const parsed = rest ? parseBlock(rest) : undefined;
       return parsed ? [parsed] : [];
     }

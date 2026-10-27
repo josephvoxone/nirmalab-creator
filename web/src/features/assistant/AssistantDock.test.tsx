@@ -1,10 +1,12 @@
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { afterEach, describe, expect, it } from 'vitest';
+import { useState } from 'react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ProjectPage } from '../project/ProjectPage.js';
-import { fakeProjectApi, ID, mountProject } from '../project/testkit.js';
-import { OPEN_KEY } from './AssistantDock.js';
-import { memoryStorage, mockMatchMedia } from './testkit.js';
+import { bibleBoard, fakeProjectApi, ID, mountProject, storyFor } from '../project/testkit.js';
+import { AssistantColumn, OPEN_KEY, type AssistantDock } from './AssistantDock.js';
+import type { AssistantPanelProps } from './AssistantPanel.js';
+import { fakeAssistantApi, memoryStorage, mockMatchMedia, mountWith, SID } from './testkit.js';
 
 let restore: () => void = () => undefined;
 afterEach(() => restore());
@@ -92,5 +94,74 @@ describe('assistant on the project page', () => {
     expect(signal?.aborted).toBe(true);
     expect(await within(sheet).findByRole('button', { name: 'Kirim pesan' })).toBeInTheDocument();
     expect(screen.getByRole('dialog', { name: 'Asisten proyek' })).toBeInTheDocument();
+  });
+
+  it('lg+: the column is a fixed 380 px and the page widens with it; focus follows hide/show', async () => {
+    const media = mockMatchMedia(() => true);
+    const storage = memoryStorage();
+    restore = () => { media(); storage.restore(); };
+    mountProject(<ProjectPage pollMs={60_000} />, api().fetchImpl);
+    const column = await screen.findByRole('complementary', { name: 'Kolom asisten' });
+    expect(column).toHaveClass('w-[380px]', 'shrink-0');
+    const page = column.parentElement!;
+    expect(page).toHaveClass('max-w-[1520px]');
+    const user = userEvent.setup();
+    await user.click(await within(column).findByRole('button', { name: 'Sembunyikan asisten' }));
+    const show = screen.getByRole('button', { name: 'Tampilkan asisten' });
+    await waitFor(() => expect(show).toHaveFocus());
+    expect(page).toHaveClass('max-w-[1200px]');
+    await user.click(show);
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Sembunyikan asisten' })).toHaveFocus());
+    expect(page).toHaveClass('max-w-[1520px]');
+  });
+
+  it('below lg: opening the sheet puts the cursor in the composer', async () => {
+    restore = mockMatchMedia(() => false);
+    mountProject(<ProjectPage pollMs={60_000} />, api().fetchImpl);
+    await userEvent.setup().click(await screen.findByRole('button', { name: 'Asisten' }));
+    const sheet = await screen.findByRole('dialog', { name: 'Asisten proyek' });
+    const box = await within(sheet).findByRole('combobox', { name: 'Pesan untuk asisten' });
+    await waitFor(() => expect(box).toHaveFocus());
+  });
+});
+
+describe('assistant column', () => {
+  const dock = { wide: true, open: true, sheet: false, toggle: () => undefined, setSheet: () => undefined } as unknown as AssistantDock;
+  const board = bibleBoard();
+  const storyA = { ...storyFor(board), id: SID, rev: 2 };
+
+  it('state does not leak from one project to the next', async () => {
+    const fake = fakeAssistantApi();
+    function Switch() {
+      const [story, setStory] = useState(storyA);
+      return (
+        <>
+          <button type="button" onClick={() => setStory({ ...storyA, id: 'story_fedcba9876543210' })}>Proyek lain</button>
+          <AssistantColumn dock={dock} story={story} board={board} onChanged={() => undefined} />
+        </>
+      );
+    }
+    mountWith(<Switch />, fake.fetchImpl);
+    const user = userEvent.setup();
+    const box = await screen.findByRole('combobox', { name: 'Pesan untuk asisten' });
+    await user.type(box, 'draf untuk proyek A');
+    await user.click(screen.getByRole('button', { name: 'Proyek lain' }));
+    await waitFor(() => expect(screen.getByRole('combobox', { name: 'Pesan untuk asisten' })).toHaveValue(''));
+  });
+
+  it('a chunk that fails to load shows an inline error with Coba lagi; the page keeps working', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    let calls = 0;
+    const load = () => (++calls === 1
+      ? Promise.reject(new Error('Failed to fetch dynamically imported module'))
+      : Promise.resolve({ default: (p: AssistantPanelProps) => <p>panel siap {p.story.id}</p> }));
+    mountWith(<><p>halaman tetap</p><AssistantColumn dock={dock} story={storyA} board={board} onChanged={() => undefined} load={load} /></>, fakeAssistantApi().fetchImpl);
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('Asisten gagal dimuat');
+    expect(screen.getByText('halaman tetap')).toBeInTheDocument();
+    await userEvent.setup().click(within(alert).getByRole('button', { name: /Coba lagi/ }));
+    expect(await screen.findByText(`panel siap ${SID}`)).toBeInTheDocument();
+    expect(calls).toBe(2);
+    vi.restoreAllMocks();
   });
 });

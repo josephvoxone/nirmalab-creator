@@ -32,19 +32,29 @@ const localId = (p: string) => `local-${p}-${++seq}`;
 const isAbort = (e: unknown) => (e instanceof DOMException || e instanceof Error) && e.name === 'AbortError';
 
 /**
- * The stored history after a turn, keeping what the server does not have (yet): a turn refused
- * before it started, or one whose reply is still being saved. An optimistic user bubble is
- * dropped once the server holds the reply that follows it (the server saved the user turn too).
+ * The stored history after a turn, keeping what the server does not have: a turn refused before it
+ * started (a 409 before the stream), or one still being saved. Each such turn keeps its place: it
+ * goes right after the nearest earlier turn the server has (or first, when there is none), never
+ * to the end. Assistant turns match by the id from the `turn` event; an optimistic user bubble is
+ * dropped when the server holds the reply after it and, just before that reply, a user turn with
+ * the same words (the server saved this very message).
  */
 export function reconcile(current: Turn[], stored: Turn[]): Turn[] {
-  const ids = new Set(stored.map(t => t.id));
-  const out = [...stored];
+  const index = new Map(stored.map((t, i) => [t.id, i]));
+  const after = new Map<string | undefined, Turn[]>();
+  let anchor: string | undefined;
   current.forEach((t, i) => {
-    if (ids.has(t.id)) return;
+    if (index.has(t.id)) { anchor = t.id; return; }
     const next = current[i + 1];
-    if (t.role === 'user' && t.id.startsWith('local-') && next && ids.has(next.id)) return;
-    out.push(t);
+    const reply = next ? index.get(next.id) : undefined;
+    if (t.role === 'user' && reply !== undefined) {
+      const saved = stored[reply - 1];
+      if (saved?.role === 'user' && saved.text.trim() === t.text.trim()) return;
+    }
+    after.set(anchor, [...(after.get(anchor) ?? []), t]);
   });
+  const out = [...(after.get(undefined) ?? [])];
+  for (const t of stored) out.push(t, ...(after.get(t.id) ?? []));
   return out;
 }
 
@@ -58,6 +68,11 @@ export type AssistantPanelProps = {
   closeLabel?: string;
   /** `x` in the sheet (closes it), the panel icon in the column (hides it). */
   closeIcon?: 'x' | 'panel';
+  /** Put the cursor in the composer on mount (the sheet). */
+  autoFocus?: boolean;
+  /** Move focus to the close/hide button (the column was just shown), then call `onFocused`. */
+  focusClose?: boolean;
+  onFocused?: () => void;
 };
 
 function HistorySkeleton() {
@@ -91,6 +106,11 @@ export function AssistantPanel(props: AssistantPanelProps) {
   const abort = useRef<AbortController>(undefined);
   const running = useRef(false);
   const scroller = useRef<HTMLDivElement>(null);
+  const closeWrap = useRef<HTMLSpanElement>(null);
+  /** Uploads still wanted, by draft key; removing a chip aborts and forgets its upload. */
+  const uploads = useRef(new Map<string, AbortController>());
+  /** Local blob previews by draft key, revoked once the sized thumbnail shows (or the draft goes). */
+  const previews = useRef(new Map<string, string>());
   const nearBottom = useRef(true);
   const retries = useRef(new Map<string, SendBody & { echo: Pick<Turn, 'text' | 'attachments'> }>());
   const onChanged = useRef(props.onChanged);
@@ -111,6 +131,35 @@ export function AssistantPanel(props: AssistantPanelProps) {
     }
   }, [api, storyId]);
   useEffect(() => { void load(); }, [load]);
+
+  // Not configured: look again when the user comes back — the window regains focus, or the
+  // settings modal (opened over this page with `background`) closes and navigates here again.
+  useEffect(() => {
+    if (configured) return undefined;
+    const again = () => void load(true);
+    window.addEventListener('focus', again);
+    return () => window.removeEventListener('focus', again);
+  }, [configured, load]);
+  const seenKey = useRef(location.key);
+  useEffect(() => {
+    if (seenKey.current === location.key) return;
+    seenKey.current = location.key;
+    if (!configured) void load(true);
+  }, [location.key, configured, load]);
+
+  const dropPreview = (key: string) => {
+    const url = previews.current.get(key);
+    if (url) URL.revokeObjectURL?.(url);
+    previews.current.delete(key);
+  };
+  useEffect(() => {
+    const pending = uploads.current;
+    const blobs = previews.current;
+    return () => {
+      for (const c of pending.values()) c.abort();
+      for (const url of blobs.values()) URL.revokeObjectURL?.(url);
+    };
+  }, []);
 
   const triggers = useMemo(() => ({ ...mentionTriggers(storyId, props.board, props.story), '/': slashItems(props.board) }), [storyId, props.board, props.story]);
   const chips = useMemo(() => suggestions(props.board, props.story), [props.board, props.story]);
@@ -135,6 +184,15 @@ export function AssistantPanel(props: AssistantPanelProps) {
     setAway(false);
   };
   const focusComposer = () => requestAnimationFrame(() => (document.getElementById(COMPOSER_ID) as HTMLTextAreaElement | null)?.focus());
+  // On mount only: the sheet just opened (a later prop change must not steal the cursor).
+  const autoFocus = useRef(props.autoFocus);
+  useEffect(() => { if (autoFocus.current) focusComposer(); }, []);
+  const { focusClose, onFocused } = props;
+  useEffect(() => {
+    if (!focusClose) return;
+    closeWrap.current?.querySelector('button')?.focus();
+    onFocused?.();
+  }, [focusClose, onFocused]);
 
   const patchTurn = (id: string, fn: (t: Turn) => Turn) => setTurns(ts => ts?.map(t => (t.id === id ? fn(t) : t)));
   const patchLive = (id: string, fn: (l: LiveState) => LiveState) => setLive(l => ({ ...l, [id]: fn(l[id] ?? { steps: [], streaming: false }) }));
@@ -231,6 +289,7 @@ export function AssistantPanel(props: AssistantPanelProps) {
     // The server needs words with every message; an image on its own gets a plain request.
     const words = trimmed || 'Pakai gambar terlampir.';
     setText('');
+    for (const d of drafts) dropPreview(d.key);
     setDrafts([]);
     setProblem(undefined);
     focusComposer();
@@ -279,17 +338,40 @@ export function AssistantPanel(props: AssistantPanelProps) {
     for (const f of take) {
       const key = localId('f');
       const preview = typeof URL.createObjectURL === 'function' ? URL.createObjectURL(f) : undefined;
+      if (preview) previews.current.set(key, preview);
+      const controller = new AbortController();
+      uploads.current.set(key, controller);
       setDrafts(ds => [...ds, { key, name: f.name, status: 'uploading', ...(preview ? { preview } : {}) }]);
-      api.upload(storyId, f).then(
-        upload => setDrafts(ds => ds.map(d => (d.key === key ? { ...d, status: 'done', upload } : d))),
+      api.upload(storyId, f, controller.signal).then(
+        upload => {
+          if (!uploads.current.delete(key)) return;
+          setDrafts(ds => ds.map(d => (d.key === key ? { ...d, status: 'done', upload } : d)));
+        },
         error => {
+          // A chip removed meanwhile: its result (or the abort) no longer matters.
+          if (!uploads.current.delete(key)) return;
+          dropPreview(key);
           setDrafts(ds => ds.filter(d => d.key !== key));
           setProblem(`${f.name}: ${describeError(error)}`);
         }
-      ).finally(() => { if (preview) URL.revokeObjectURL?.(preview); });
+      );
     }
   };
-  const removeDraft = (key: string) => setDrafts(ds => ds.filter(d => d.key !== key));
+  const removeDraft = (key: string) => {
+    uploads.current.get(key)?.abort();
+    uploads.current.delete(key);
+    dropPreview(key);
+    setDrafts(ds => ds.filter(d => d.key !== key));
+  };
+  /** The sized thumbnail has loaded: swap the local preview out and free it. */
+  const thumbLoaded = (key: string) => {
+    dropPreview(key);
+    setDrafts(ds => ds.map(d => {
+      if (d.key !== key || !d.preview) return d;
+      const { preview: _gone, ...rest } = d;
+      return rest;
+    }));
+  };
 
   const hasFiles = (e: DragEvent) => Array.from(e.dataTransfer?.types ?? []).includes('Files');
   const dropProps = configured ? {
@@ -312,7 +394,7 @@ export function AssistantPanel(props: AssistantPanelProps) {
       <header className="flex h-10 shrink-0 items-center gap-2 border-b border-border/60 pr-1.5 pl-3">
         <h2 className="text-[13px] font-medium">Asisten proyek</h2>
         {props.onClose && (
-          <span className="ml-auto"><IconTip label={props.closeLabel ?? 'Sembunyikan asisten'} onClick={props.onClose}>{props.closeIcon === 'x' ? <X /> : <PanelRightClose />}</IconTip></span>
+          <span ref={closeWrap} className="ml-auto"><IconTip label={props.closeLabel ?? 'Sembunyikan asisten'} onClick={props.onClose}>{props.closeIcon === 'x' ? <X /> : <PanelRightClose />}</IconTip></span>
         )}
       </header>
 
@@ -357,7 +439,7 @@ export function AssistantPanel(props: AssistantPanelProps) {
       <div className="shrink-0 px-3 pt-1 pb-3">
         {configured ? (
           <Composer value={text} onChange={v => { setText(v); if (problem) setProblem(undefined); }} triggers={triggers} drafts={drafts}
-            onRemove={removeDraft} onFiles={addFiles} problem={problem} streaming={streaming} onSend={() => void send()} onStop={stop} />
+            onRemove={removeDraft} onLoaded={thumbLoaded} onFiles={addFiles} problem={problem} streaming={streaming} onSend={() => void send()} onStop={stop} />
         ) : (
           <p className="rounded-lg border border-border/70 px-3 py-2.5 text-[12.5px] text-muted-foreground">
             Asisten butuh model teks — atur di{' '}
