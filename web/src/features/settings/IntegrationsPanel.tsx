@@ -75,7 +75,7 @@ function CopyButton(props: { text: string; what: string }) {
 function CodeBlock(props: { label: string; text: string; what: string }) {
   return (
     <div className="flex flex-col gap-1.5">
-      <pre aria-label={props.label} className="glass-well max-h-64 overflow-auto rounded-md bg-muted px-3 py-2.5 font-mono text-[12px] leading-relaxed whitespace-pre text-foreground [scrollbar-width:thin]">
+      <pre aria-label={props.label} className="glass-well max-h-64 overflow-auto rounded-md bg-muted px-3 py-2.5 font-mono text-[12px] leading-relaxed whitespace-pre-wrap break-all text-foreground [scrollbar-width:thin]">
         <code>{props.text}</code>
       </pre>
       <div><CopyButton text={props.text} what={props.what} /></div>
