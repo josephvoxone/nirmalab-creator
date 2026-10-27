@@ -292,7 +292,10 @@ export class AxcelWorker {
       // Failover: an engine the user picked must not silently lose the work. When Axcel refuses for
       // good (quota, gate, moderation) the same prompt is queued again on Google Flow, which the
       // bridge renders unchanged — the app then shows one failed Axcel job and one live Flow job.
-      const failover = final && this.deps.failoverToFlow !== false ? await this.requeueOnFlow(job, message) : undefined;
+      // The last attempt counts as final too: `failJob` will mark the job failed, so the work must
+      // not disappear just because the engine kept answering "try again".
+      const exhausted = job.attempts + 1 >= job.maxAttempts;
+      const failover = (final || exhausted) && this.deps.failoverToFlow !== false ? await this.requeueOnFlow(job, message) : undefined;
       await this.deps.store.failJob(job.id, failover ? `${message} — dialihkan ke Google Flow (${failover})` : message, { final }).catch(() => undefined);
     }
   }

@@ -175,6 +175,19 @@ describe('AxcelWorker', () => {
     expect(client.collect).toHaveBeenCalledWith('j-remote', 'image', 'job_axcel_1', '/api/media/j.png?k=1');
   });
 
+  it('fails over to Google Flow on the last attempt even when the engine said "retry"', async () => {
+    const { state, store } = fakeStore([job({ kind: 'image', model: 'Nano Banana Pro', maxAttempts: 1 })]);
+    const client = {
+      generate: vi.fn(async () => { throw new AxcelError('Turnstile generate gagal', 502, false); }),
+      job: vi.fn(), collect: vi.fn(), upload: vi.fn()
+    } as unknown as AxcelClient;
+    const worker = new AxcelWorker({ store, client: async () => client, sleep: async () => undefined });
+    await worker.tick();
+    await worker.idle();
+    expect(state.fallback).toMatchObject({ prompt: 'nelayan menarik jaring saat fajar' });
+    expect(state.failed[0].error).toContain('dialihkan ke Google Flow');
+  });
+
   it('marks a refused job final instead of retrying it', async () => {
     const { state, store } = fakeStore([job({ kind: 'image', model: 'Nano Banana Pro' })]);
     const client = {
