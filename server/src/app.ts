@@ -13,6 +13,7 @@ import type { TextGenerator } from './stories/draft.js';
 import { assembleStory, imageSize, probeClip } from './stories/media.js';
 import { registerStoryRoutes } from './stories/routes.js';
 import { registerAssistantRoutes } from './assistant/routes.js';
+import { registerMcpRoutes } from './mcp/routes.js';
 import { CoverService } from './stories/covers.js';
 import { captionFor } from './stories/caption.js';
 import { MediaCache, type FfmpegRunner } from './media/images.js';
@@ -184,6 +185,8 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   });
   // Project assistant chat (SSE), history and undo: same text model and prices as the story actions.
   await registerAssistantRoutes(server, { userAuthStore, stories, textModel, price: actionPrice, ...(options.assistant ?? {}) });
+  // Remote MCP (`/mcp`, bearer personal tokens) + token routes: the same action layer as the chat.
+  await registerMcpRoutes(server, { userAuthStore, dataDir: options.dataDir, stories, generateText, textModel, price: actionPrice, version: options.version });
   await registerTrendRoutes(server, { userAuthStore, dataDir: options.dataDir, stories, env });
   const reconcileMs = options.stories?.reconcileMs ?? 5000;
   if (reconcileMs > 0) {
