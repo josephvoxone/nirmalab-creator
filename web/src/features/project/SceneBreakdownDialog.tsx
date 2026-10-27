@@ -11,6 +11,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Skeleton } from '@/components/ui/skeleton';
 import { ApiError } from '../../lib/api.js';
 import { useSession } from '../../lib/session.js';
+import { assistantApi } from '../assistant/assistantClient.js';
 import { Segmented } from '../../ui/controls.js';
 import { MentionTextarea } from '../../ui/MentionTextarea.js';
 import { describeError } from '../../ui/states.js';
@@ -46,7 +47,41 @@ function failureOf(e: unknown): Failure {
   return { message: describeError(e) };
 }
 
-export function SceneBreakdownDialog(props: { open: boolean; onOpenChange: (open: boolean) => void; board: Board; scene: Scene }) {
+export type BreakdownDone = { label: string; undoId: string };
+/** How long the result line with its Batalkan stays on the scene. */
+export const BREAKDOWN_UNDO_MS = 10_000;
+
+/** "Scene dipecah jadi 4 shot · Batalkan" for 10 s after a breakdown: the assistant's undo of that snapshot. */
+export function BreakdownResult(props: { done: BreakdownDone; onClose: () => void }) {
+  const p = useProject();
+  const { fetchImpl } = useSession();
+  const [busy, setBusy] = useState(false);
+  const [problem, setProblem] = useState<string>();
+  const { onClose } = props;
+  useEffect(() => { const t = setTimeout(onClose, BREAKDOWN_UNDO_MS); return () => clearTimeout(t); }, [props.done.undoId, onClose]);
+  const undo = async () => {
+    setBusy(true);
+    setProblem(undefined);
+    try {
+      await assistantApi(fetchImpl).undo(p.id, props.done.undoId);
+      p.reload();
+      onClose();
+    } catch (e) {
+      setProblem(describeError(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <p role="status" aria-label="Hasil pecah scene" className="flex flex-wrap items-center gap-2 rounded-md bg-muted px-2.5 py-1.5 text-[12.5px]">
+      <span>{props.done.label}</span>
+      <Button type="button" size="xs" variant="ghost" aria-label="Batalkan pecah scene" disabled={busy} onClick={() => void undo()}><RotateCcw /> Batalkan</Button>
+      {problem && <span role="alert" className="text-destructive">{problem}</span>}
+    </p>
+  );
+}
+
+export function SceneBreakdownDialog(props: { open: boolean; onOpenChange: (open: boolean) => void; board: Board; scene: Scene; onDone?: (done: BreakdownDone) => void }) {
   const p = useProject();
   const { fetchImpl } = useSession();
   const location = useLocation();
@@ -69,6 +104,7 @@ export function SceneBreakdownDialog(props: { open: boolean; onOpenChange: (open
     try {
       const r = await api.breakdown(p.id, scene.id, { count: Number(count), ...(brief.trim() ? { brief: brief.trim() } : {}), mode: effectiveMode });
       p.apply(r);
+      if (r.undoId) props.onDone?.({ label: r.label, undoId: r.undoId });
       props.onOpenChange(false);
       setBrief('');
     } catch (e) {

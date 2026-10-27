@@ -14,6 +14,7 @@ const breakdowns = (api: Api) => api.calls.filter(c => c.url.includes('/breakdow
 function breakdownRoute(holder: { api?: Api }, opts: { error?: { status: number; code: string; message: string }; gate?: Promise<void> } = {}): ExtraRoute {
   return async (call: Call, json) => {
     const m = new RegExp(`^/api/stories/${ID}/scenes/([^/]+)/breakdown$`).exec(call.url);
+    if (call.method === 'POST' && call.url === `/api/stories/${ID}/assistant/undo/u_1`) return json(200, { ok: true, rev: 9, attention: [] });
     if (!m || call.method !== 'POST') return compileRoute(call, json);
     await opts.gate;
     if (opts.error) return json(opts.error.status, { error: { code: opts.error.code, message: opts.error.message } });
@@ -81,6 +82,20 @@ describe('Scene board — "Pecah jadi shot (AI)"', () => {
     const grid = within(scenePanel()).getByRole('list', { name: /shot di scene/i });
     await waitFor(() => expect(within(grid).getAllByRole('listitem')).toHaveLength(5));
     await waitFor(() => expect(api.calls.filter(c => c.method === 'GET' && c.url === `/api/stories/${ID}`).length).toBeGreaterThan(gets));
+  });
+
+  it('after a breakdown the board says what happened and Batalkan undoes it (the returned undoId)', async () => {
+    const api = setup(bibleBoard());
+    mountProject(<ProjectPage pollMs={0} />, api.fetchImpl);
+    const dialog = await openDialog();
+    await userEvent.click(within(dialog).getByRole('button', { name: /pecah jadi 4 shot/i }));
+    const done = await within(scenePanel()).findByRole('status', { name: 'Hasil pecah scene' });
+    expect(done).toHaveTextContent('Scene dipecah jadi 4 shot');
+    const gets = api.calls.filter(c => c.method === 'GET' && c.url === `/api/stories/${ID}`).length;
+    await userEvent.click(within(done).getByRole('button', { name: 'Batalkan pecah scene' }));
+    await waitFor(() => expect(api.calls.some(c => c.method === 'POST' && c.url === `/api/stories/${ID}/assistant/undo/u_1`)).toBe(true));
+    await waitFor(() => expect(api.calls.filter(c => c.method === 'GET' && c.url === `/api/stories/${ID}`).length).toBeGreaterThan(gets));
+    await waitFor(() => expect(within(scenePanel()).queryByRole('status', { name: 'Hasil pecah scene' })).toBeNull());
   });
 
   it('defaults to "Ganti shot kosong" when the scene only has empty shots, and shows N skeleton rows while the AI works', async () => {

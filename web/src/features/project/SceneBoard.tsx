@@ -1,5 +1,5 @@
 /** Right column of the Scene tab: one scene's header (title, summary, location, cast, actions), preview and shots. */
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { ArrowDown, ArrowUp, Check, Clapperboard, Images, MoreHorizontal, Play, Plus, Sparkles, Trash2, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
@@ -10,7 +10,7 @@ import { SequencePlayer, type Clip } from './Player.js';
 import { SceneCastChips } from './SceneCast.js';
 import { castIn, renderCost } from './SceneHelpers.js';
 import { SceneShots, type ShotActions } from './SceneShots.js';
-import { SceneBreakdownDialog } from './SceneBreakdownDialog.js';
+import { BreakdownResult, SceneBreakdownDialog, type BreakdownDone } from './SceneBreakdownDialog.js';
 import { media } from './useProject.js';
 import { playerPosterWidth, poster, sized } from '../../lib/media.js';
 
@@ -94,7 +94,9 @@ export function SceneBoard(props: {
   const { board, story, scene, actions } = props;
   const [preview, setPreview] = useState(false);
   const [splitting, setSplitting] = useState(false);
-  useEffect(() => { setPreview(false); setSplitting(false); }, [scene.id]);
+  const [split, setSplit] = useState<BreakdownDone>();
+  const clearSplit = useCallback(() => setSplit(undefined), []);
+  useEffect(() => { setPreview(false); setSplitting(false); setSplit(undefined); }, [scene.id]);
   // The AI shot planner needs a bible (scene goal, anchors); legacy boards never see it.
   const canSplit = !!board.bible;
   const konsisten = story.mode === 'konsisten';
@@ -148,6 +150,7 @@ export function SceneBoard(props: {
           <SequencePlayer clips={sceneClips(props.projectId, story, scene, board.aspect)} label={`Preview scene ${scene.title}`} maxH={300} aspect={board.aspect} className="w-full" />
         </div>
       )}
+      {split && <BreakdownResult done={split} onClose={clearSplit} />}
       <div className="flex items-center justify-between text-[12px] text-muted-foreground">
         <span>{scene.shots.length} shot · ±{fmtDuration(sceneProgress(story, board, scene.id).seconds)}</span>
         {scene.shots.length > 0 && (
@@ -157,7 +160,7 @@ export function SceneBoard(props: {
       {scene.shots.length
         ? <SceneShots projectId={props.projectId} board={board} story={story} scene={scene} locked={props.locked} picked={props.picked} actions={actions} />
         : <EmptyShots scene={scene} locked={props.locked} onAdd={actions.addShot} onBreakdown={canSplit ? () => setSplitting(true) : undefined} />}
-      {canSplit && <SceneBreakdownDialog key={scene.id} open={splitting} onOpenChange={setSplitting} board={board} scene={scene} />}
+      {canSplit && <SceneBreakdownDialog key={scene.id} open={splitting} onOpenChange={setSplitting} board={board} scene={scene} onDone={setSplit} />}
     </section>
   );
 }
