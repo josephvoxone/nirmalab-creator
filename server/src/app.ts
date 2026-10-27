@@ -10,6 +10,7 @@ import { PublisherService, registerPublisherRoutes } from './publisher/index.js'
 import { FlowStore } from './flow/store.js';
 import { pollinationsText } from './generate/pollinations.js';
 import type { TextGenerator } from './stories/draft.js';
+import { draftTextGenerator } from './stories/draft-text.js';
 import { assembleStory, imageSize, probeClip } from './stories/media.js';
 import { registerStoryRoutes } from './stories/routes.js';
 import { registerAssistantRoutes } from './assistant/routes.js';
@@ -166,12 +167,14 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
     server.addHook('onClose', async () => stopWorker());
   }
 
-  const generateText: TextGenerator = options.stories?.generateText ?? (async (system, prompt) => (await pollinationsText(
+  // Drafts: the OpenCode Go text model when configured, else Pollinations (same generator for the session route and MCP).
+  const pollinationsDraft: TextGenerator = async (system, prompt, signal) => (await pollinationsText(
     fetch,
     { prompt, system, model: env.STORY_LLM_MODEL || 'openai', apiKey: env.OPENCREATOR_POLLINATIONS_API_KEY, maxTokens: 6000 },
     options.dataDir,
-    { timeoutMs: 120_000 }
-  )).text);
+    { timeoutMs: 120_000, ...(signal ? { signal } : {}) }
+  )).text;
+  const generateText: TextGenerator = options.stories?.generateText ?? draftTextGenerator(textModel, pollinationsDraft);
   const covers = new CoverService({ dataDir: options.dataDir, flow: flowStore, webDist: options.webDist });
   // OpenRouter prices for spending estimates (story actions and the assistant).
   const actionPrice = {

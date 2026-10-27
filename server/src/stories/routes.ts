@@ -1,10 +1,10 @@
-import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyBaseLogger, FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { createReadStream, existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { sendImage, sendPoster, type MediaCache } from '../media/images.js';
 import { requireAdmin, sessionUser } from '../auth/routes.js';
 import type { UserAuthStore } from '../auth/store.js';
-import { draftStoryboard, type TextGenerator } from './draft.js';
+import { DraftError, draftStoryboard, type TextGenerator } from './draft.js';
 import { CATALOG } from './looks.js';
 import type { CoverService } from './covers.js';
 import { StoryError, type StoryService } from './service.js';
@@ -21,6 +21,12 @@ function fail(reply: FastifyReply, error: unknown) {
   if (error instanceof StoryError) return reply.code(STATUS[error.code]).send({ error: { code: error.code, message: error.message } });
   const message = error instanceof Error ? error.message : String(error);
   return reply.code(503).send({ error: { code: 'STORY_FAILED', message } });
+}
+
+/** A draft that could not be written: the plain message (also what MCP create_project says); the detail goes to the log. */
+function failDraft(reply: FastifyReply, error: DraftError, log: FastifyBaseLogger) {
+  log.warn({ detail: error.message.slice(0, 2000) }, 'story draft failed');
+  return reply.code(503).send({ error: { code: 'STORY_FAILED', message: error.plain } });
 }
 
 function sendVideo(reply: FastifyReply, file: string, range: string | undefined) {
@@ -154,7 +160,10 @@ export async function registerStoryRoutes(
       }, options.generateText);
       const drafted = engine === undefined ? board : { ...board, engine: engine as Storyboard['engine'] };
       return reply.code(201).send({ story: await stories.create(drafted, { createdBy: user.id }) });
-    } catch (error) { return fail(reply, error); }
+    } catch (error) {
+      if (error instanceof DraftError) return failDraft(reply, error, request.log);
+      return fail(reply, error);
+    }
   });
 
   server.get<{ Params: { id: string } }>('/api/stories/:id', async (request, reply) => {

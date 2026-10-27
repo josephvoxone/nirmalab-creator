@@ -474,6 +474,21 @@ type Plan = { label: string; estimate: Estimate; payload?: Record<string, unknow
 const revOf = (ctx: ActionContext): { rev?: number } => (ctx.rev !== undefined ? { rev: ctx.rev } : {});
 
 /**
+ * The confirm rule for the in-app chat (the app's pending-call card is the gate). Shared by every
+ * spending tool's description; the MCP server swaps it for its own rule (see mcp/server.ts).
+ */
+export const CHAT_CONFIRM_RULE = 'The first call only returns the cost; the app then asks the user to confirm, and only a confirmed call queues anything (you cannot confirm it yourself).';
+
+/**
+ * The snapshot `undo_last` is about to restore (its chip gets marked undone afterwards), or
+ * undefined for any other action. Chat and MCP share it.
+ */
+export async function undoTarget(stories: StoryService, storyId: string, name: string): Promise<string | undefined> {
+  if (name !== 'undo_last') return undefined;
+  return (await stories.snapshots.list(storyId)).find(s => typeof s.revAfter === 'number')?.undoId;
+}
+
+/**
  * A spending action: `plan` validates and prices (no side effects: no file, no job, no write),
  * `execute` queues. Without `ctx.confirmed === true` (set by the caller, never by model input) the
  * plan is returned as `needsConfirm` and nothing is queued.
@@ -967,7 +982,7 @@ export const ACTIONS: Record<ActionName, Action> = {
   },
 
   make_sheet: spending({
-    description: 'Make (or remake) the character sheet of ONE character (konsisten projects): one image job for that character only. Uses the reference stored on the character with OpenRouter image engines. Free on Flow, but it queues a job. The first call only returns the cost; the app then asks the user to confirm, and only a confirmed call queues anything (you cannot confirm it yourself).',
+    description: `Make (or remake) the character sheet of ONE character (konsisten projects): one image job for that character only. Uses the reference stored on the character with OpenRouter image engines. Free on Flow, but it queues a job. ${CHAT_CONFIRM_RULE}`,
     schema: obj({ token: { type: 'string', description: 'Character TOKEN or name' }, reference: { type: 'string', description: 'Optional one-off reference: upload id (up_…) or media pointer' } }, ['token']),
     plan: async (ctx, storyId, input, record, board) => {
       if (record.mode !== 'konsisten') return fail('Lembar karakter hanya untuk mode konsisten.');
@@ -996,7 +1011,7 @@ export const ACTIONS: Record<ActionName, Action> = {
   }),
 
   redraw_frame: spending({
-    description: `Draw the keyframe of ONE shot again (konsisten projects). ${SHOT_DESCRIPTION_RULE} note: a short one-off English instruction for this take (no camera gear, no TOKENs); reference: an uploaded image id or media pointer, sent with OpenRouter image engines. Free on Flow, but it queues a job. The first call only returns the cost; the app then asks the user to confirm, and only a confirmed call queues anything (you cannot confirm it yourself).`,
+    description: `Draw the keyframe of ONE shot again (konsisten projects). ${SHOT_DESCRIPTION_RULE} note: a short one-off English instruction for this take (no camera gear, no TOKENs); reference: an uploaded image id or media pointer, sent with OpenRouter image engines. Free on Flow, but it queues a job. ${CHAT_CONFIRM_RULE}`,
     schema: obj({ shot: SHOT_REF, note: { type: 'string' }, reference: { type: 'string' } }, ['shot']),
     plan: async (ctx, storyId, input, record, board) => {
       if (record.mode !== 'konsisten') return fail('Keyframe hanya untuk mode konsisten.');
@@ -1030,7 +1045,7 @@ export const ACTIONS: Record<ActionName, Action> = {
   }),
 
   prepare: spending({
-    description: 'Make the character sheets and keyframes that are still missing (konsisten projects), for one scene or the whole project. Free on Flow, paid on OpenRouter image engines; it queues jobs. The first call only returns the cost; the app then asks the user to confirm, and only a confirmed call queues anything (you cannot confirm it yourself).',
+    description: `Make the character sheets and keyframes that are still missing (konsisten projects), for one scene or the whole project. Free on Flow, paid on OpenRouter image engines; it queues jobs. ${CHAT_CONFIRM_RULE}`,
     schema: obj({ scene: SCENE_REF }),
     plan: async (ctx, _storyId, input, record, board) => {
       if (record.mode !== 'konsisten') return fail('Keyframe hanya untuk mode konsisten.');
@@ -1053,7 +1068,7 @@ export const ACTIONS: Record<ActionName, Action> = {
   }),
 
   render: spending({
-    description: `Render video clips of one shot, one scene or every shot not done yet. ${SHOT_DESCRIPTION_RULE} Spends Flow credits (10 per clip) or OpenRouter money. The first call only returns the cost; the app then asks the user to confirm, and only a confirmed call queues anything (you cannot confirm it yourself).`,
+    description: `Render video clips of one shot, one scene or every shot not done yet. ${SHOT_DESCRIPTION_RULE} Spends Flow credits (10 per clip) or OpenRouter money. ${CHAT_CONFIRM_RULE}`,
     schema: obj({ shot: SHOT_REF, scene: SCENE_REF }),
     plan: async (ctx, _storyId, input, record, board) => {
       const shotTarget = ref(input, 'shot');
@@ -1093,7 +1108,7 @@ export const ACTIONS: Record<ActionName, Action> = {
   }),
 
   assemble: spending({
-    description: 'Assemble the final video from the finished clips (every shot must be done). Costs nothing but rebuilds the video. The first call only returns the cost; the app then asks the user to confirm, and only a confirmed call queues anything (you cannot confirm it yourself).',
+    description: `Assemble the final video from the finished clips (every shot must be done). Costs nothing but rebuilds the video. ${CHAT_CONFIRM_RULE}`,
     schema: obj({}),
     plan: async () => ({ label: 'Rakit video final (gratis)', estimate: { credits: 0 } }),
     execute: async (ctx, storyId) => {

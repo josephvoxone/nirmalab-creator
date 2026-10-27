@@ -13,11 +13,11 @@ import type { FastifyBaseLogger, FastifyInstance, FastifyReply, FastifyRequest }
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { CallToolRequestSchema, ListToolsRequestSchema, type CallToolResult, type Tool } from '@modelcontextprotocol/sdk/types.js';
-import { ACTION_NAMES, ACTIONS, runAction, type ActionContext, type ActionName, type ActionResult } from '../assistant/actions.js';
+import { ACTION_NAMES, ACTIONS, CHAT_CONFIRM_RULE, runAction, undoTarget, type ActionContext, type ActionName, type ActionResult } from '../assistant/actions.js';
 import { appendTurn, markUndone } from '../assistant/history.js';
 import { listSkills } from '../assistant/skills.js';
 import type { TextModel } from '../llm/opencode.js';
-import { draftStoryboard, type TextGenerator } from '../stories/draft.js';
+import { DraftError, draftStoryboard, type TextGenerator } from '../stories/draft.js';
 import { CATALOG } from '../stories/looks.js';
 import { StoryError, type StoryRecord, type StoryService } from '../stories/service.js';
 import type { McpTokenStore } from './tokens.js';
@@ -25,6 +25,8 @@ import type { McpTokenStore } from './tokens.js';
 export const STALE_REV_MESSAGE = 'Proyek sudah berubah — cek biaya lagi';
 export const RATE_LIMIT_MESSAGE = 'Terlalu banyak permintaan';
 export const RATE_LIMIT_PER_MINUTE = 60;
+export const BATCH_MESSAGE = 'Batch tidak didukung';
+export const CREATE_BUSY_MESSAGE = 'Masih membuat proyek — tunggu selesai';
 const MCP_BODY_LIMIT = 1024 * 1024;
 
 export const MCP_INSTRUCTIONS = [
@@ -45,10 +47,12 @@ export type McpDeps = {
   textModel?: TextModel;
   price?: ActionContext['price'];
   version?: string;
+  /** Keys (token ids) with a create_project in flight: one at a time per token. */
+  creating?: Set<string>;
 };
 
-/** Who is calling: the token owner, and the name shown in the project chat. */
-export type McpCaller = { userId: string; email: string; by: string };
+/** Who is calling: the token owner, and the name shown in the project chat (`tokenId` on /mcp). */
+export type McpCaller = { userId: string; email: string; by: string; tokenId?: string };
 
 const READ_ONLY = new Set<string>(['get_project', 'list_projects']);
 const SPENDING_NOTE = ' Spends credits or money: call once WITHOUT confirm to get the cost (needsConfirm, label, estimate, rev), show it to the user, and call again with the same arguments plus confirm: true and rev only after they agree.';
@@ -92,7 +96,8 @@ export function mcpTools(): Tool[] {
     };
     tools.push({
       name,
-      description: action.description + (action.spends ? SPENDING_NOTE : ''),
+      // The chat's confirm sentence ("you cannot confirm it yourself") is wrong here: the MCP client confirms.
+      description: action.spends ? `${action.description.replace(CHAT_CONFIRM_RULE, '').trim()}${SPENDING_NOTE}` : action.description,
       inputSchema: { ...schema, type: 'object', properties, required: ['project_id', ...(schema.required ?? [])] },
       ...(READ_ONLY.has(name) ? { annotations: { readOnlyHint: true } } : {})
     });
@@ -117,7 +122,7 @@ async function listProjects(deps: McpDeps): Promise<CallToolResult> {
 }
 
 /** Same path as `POST /api/stories/draft`: draftStoryboard with the app's text generator, then create. */
-async function createProject(deps: McpDeps, caller: McpCaller, args: Record<string, unknown>): Promise<CallToolResult> {
+async function createProject(deps: McpDeps, caller: McpCaller, args: Record<string, unknown>, signal?: AbortSignal): Promise<CallToolResult> {
   const premise = typeof args.premise === 'string' ? args.premise.trim() : '';
   if (premise.length < 5) return failure('Tulis premis cerita (min. 5 karakter)');
   const template = args.template ?? undefined;
@@ -126,14 +131,26 @@ async function createProject(deps: McpDeps, caller: McpCaller, args: Record<stri
   }
   const aspect = args.aspect ?? undefined;
   if (aspect !== undefined && aspect !== '9:16' && aspect !== '16:9') return failure('aspect harus "9:16" atau "16:9"');
-  const board = await draftStoryboard({
-    premise: premise.slice(0, 2000),
-    ...(template ? { template: template as string } : {}),
-    ...(aspect ? { aspect: aspect as '9:16' | '16:9' } : {})
-  }, deps.generateText);
-  const story = await deps.stories.create(board, { createdBy: caller.userId });
-  await appendTurn(deps.stories.storyDir(story.id), { role: 'assistant', text: `Proyek dibuat: ${story.title}`, source: 'mcp', by: caller.by });
-  return text({ project_id: story.id, title: story.title });
+  const key = caller.tokenId ?? caller.userId;
+  if (deps.creating?.has(key)) return failure(CREATE_BUSY_MESSAGE);
+  deps.creating?.add(key);
+  try {
+    const board = await draftStoryboard({
+      premise: premise.slice(0, 2000),
+      ...(template ? { template: template as string } : {}),
+      ...(aspect ? { aspect: aspect as '9:16' | '16:9' } : {})
+    }, deps.generateText, signal ? { signal } : {});
+    if (signal?.aborted) return failure('Dibatalkan.');
+    const story = await deps.stories.create(board, { createdBy: caller.userId });
+    await appendTurn(deps.stories.storyDir(story.id), { role: 'assistant', text: `Proyek dibuat: ${story.title}`, source: 'mcp', by: caller.by });
+    return text({ project_id: story.id, title: story.title });
+  } catch (error) {
+    // Same plain message as POST /api/stories/draft; the detail only goes to the log.
+    if (error instanceof DraftError) return failure(error.plain);
+    throw error;
+  } finally {
+    deps.creating?.delete(key);
+  }
 }
 
 async function runActionTool(deps: McpDeps, caller: McpCaller, name: ActionName, args: Record<string, unknown>, signal?: AbortSignal): Promise<CallToolResult> {
@@ -158,7 +175,7 @@ async function runActionTool(deps: McpDeps, caller: McpCaller, name: ActionName,
     ...(pinned !== undefined ? { rev: pinned } : {}),
     ...(signal ? { signal } : {})
   };
-  const undone = name === 'undo_last' ? (await deps.stories.snapshots.list(storyId)).find(s => typeof s.revAfter === 'number')?.undoId : undefined;
+  const undone = await undoTarget(deps.stories, storyId, name);
   const result: ActionResult = await runAction(ctx, storyId, name, input);
   const currentRev = async () => (await deps.stories.get(storyId).catch(() => undefined))?.rev ?? record.rev;
 
@@ -200,7 +217,7 @@ export function createMcpServer(deps: McpDeps, caller: McpCaller, log?: FastifyB
     const args = raw as Record<string, unknown>;
     try {
       if (name === 'list_projects') return await listProjects(deps);
-      if (name === 'create_project') return await createProject(deps, caller, args);
+      if (name === 'create_project') return await createProject(deps, caller, args, extra.signal);
       if ((ACTION_NAMES as readonly string[]).includes(name)) return await runActionTool(deps, caller, name as ActionName, args, extra.signal);
       return failure(`Tool "${name.slice(0, 40)}" tidak ada.`);
     } catch (error) {
@@ -242,8 +259,9 @@ export class RateLimiter {
 const bearer = (request: FastifyRequest) => /^Bearer\s+(\S+)\s*$/i.exec(request.headers.authorization ?? '')?.[1];
 
 /** `POST /mcp` (bearer token only — no session cookie, no CSRF), `GET|DELETE /mcp` → 405. */
-export function registerMcpEndpoint(server: FastifyInstance, deps: McpDeps): void {
+export function registerMcpEndpoint(server: FastifyInstance, baseDeps: McpDeps): void {
   const limiter = new RateLimiter();
+  const deps: McpDeps = { ...baseDeps, creating: baseDeps.creating ?? new Set<string>() };
   const callers = new WeakMap<FastifyRequest, McpCaller & { tokenId: string }>();
 
   server.post('/mcp', {
@@ -261,6 +279,8 @@ export function registerMcpEndpoint(server: FastifyInstance, deps: McpDeps): voi
   }, async (request, reply) => {
     const caller = callers.get(request)!;
     const body = request.body as { id?: unknown } | unknown[] | undefined;
+    // JSON-RPC batches (dropped from current MCP protocol versions) would run N calls on one rate-limit hit.
+    if (Array.isArray(body)) return rpcError(reply, 400, -32600, BATCH_MESSAGE);
     if (!limiter.take(caller.tokenId)) {
       return rpcError(reply, 429, -32000, RATE_LIMIT_MESSAGE, body && !Array.isArray(body) && typeof body === 'object' ? (body.id ?? null) : null);
     }

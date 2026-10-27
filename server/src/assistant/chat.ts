@@ -22,7 +22,7 @@ import { join } from 'node:path';
 import { StoryError, type StoryService } from '../stories/service.js';
 import type { Storyboard } from '../stories/storyboard.js';
 import { LlmError, type ChatMessage, type TextModel, type ToolCall } from '../llm/opencode.js';
-import { ACTION_NAMES, ACTIONS, BUSY_MESSAGE, runAction, toolSpecs, type ActionContext, type ActionResult, type Estimate } from './actions.js';
+import { ACTION_NAMES, ACTIONS, BUSY_MESSAGE, runAction, toolSpecs, undoTarget, type ActionContext, type ActionResult, type Estimate } from './actions.js';
 import { appendTurn, listTurns, markUndone, newTurnId, updateTurns, type Turn, type TurnAttachment, type TurnChange, type TurnPending } from './history.js';
 import { rangeText, resolveCharacter, resolveLocation, resolveScene, resolveShot, sceneIds, shotIds } from './resolve.js';
 import { skillsPrompt } from './skills.js';
@@ -368,7 +368,7 @@ async function runToolCall(
   const board = await deps.stories.readStoryboard(storyId);
   emit('step', { label: stepLabel(board, name, input) });
 
-  const undone = name === 'undo_last' ? (await deps.stories.snapshots.list(storyId)).find(s => typeof s.revAfter === 'number')?.undoId : undefined;
+  const undone = await undoTarget(deps.stories, storyId, name);
   const revBefore = ctx.turn.rev;
   let result: ActionResult;
   try {

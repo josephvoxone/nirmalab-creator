@@ -15,7 +15,19 @@ import { LOCATION_KEY, MAX_LOCATIONS, MAX_NARRATION_WORDS, MAX_SCENES, SCENE_ID,
 import { anchorIsGeneric, DEFAULT_RULES, validateBible, type Audience, type CharacterCard, type SceneCard, type StructureAct, type StructureBeat, type StoryBible } from '../bible/story.js';
 import type { DraftStoryboard, IntentShot, ShotIntent } from '../bible/intent.js';
 
-export type TextGenerator = (system: string, prompt: string) => Promise<string>;
+/** `signal`: the caller went away (MCP client disconnect) — stop the request. */
+export type TextGenerator = (system: string, prompt: string, signal?: AbortSignal) => Promise<string>;
+
+/** The draft could not be written (model unreachable, or every try broke the rules). */
+export const DRAFT_FAILED_MESSAGE = 'Draft cerita gagal dibuat — model teks tidak memberi storyboard yang valid. Coba lagi sebentar atau ubah premisnya.';
+export const DRAFT_CANCELLED_MESSAGE = 'Pembuatan draft dibatalkan.';
+/** `message` = the detail (for logs and tests); `plain` = what a user is shown (session route and MCP). */
+export class DraftError extends Error {
+  constructor(message: string, readonly plain: string = DRAFT_FAILED_MESSAGE) {
+    super(message);
+    this.name = 'DraftError';
+  }
+}
 
 export type DraftInput = {
   premise: string;
@@ -525,7 +537,8 @@ function polishCopy(board: DraftStoryboard): { board: DraftStoryboard; problems:
   };
 }
 
-export async function draftStoryboard(input: DraftInput, generate: TextGenerator): Promise<DraftStoryboard> {
+export async function draftStoryboard(input: DraftInput, generate: TextGenerator, opts: { signal?: AbortSignal } = {}): Promise<DraftStoryboard> {
+  const { signal } = opts;
   const template = CATALOG.templates.find(t => t.id === input.template);
   const useLook = !!template || !!input.look;
   const look = useLook ? resolveLook({ template: input.template, look: input.look }) : undefined;
@@ -554,16 +567,19 @@ export async function draftStoryboard(input: DraftInput, generate: TextGenerator
   let prompt = base;
   let problems: string[] = [];
   for (let attempt = 1; attempt <= 3; attempt++) {
+    if (signal?.aborted) throw new DraftError(DRAFT_CANCELLED_MESSAGE, DRAFT_CANCELLED_MESSAGE);
     let reply = '';
     try {
-      reply = await generate(SYSTEM, prompt);
+      reply = await generate(SYSTEM, prompt, signal);
       const polished = polishCopy(proseFix({ ...normalise(parseJsonBlock(reply), style), ...extra }));
       problems = [...polished.problems, ...validateStoryboard(polished.board)];
       if (!problems.length) return polished.board;
     } catch (error) {
+      if (signal?.aborted) throw new DraftError(DRAFT_CANCELLED_MESSAGE, DRAFT_CANCELLED_MESSAGE);
       problems = [`reply was not valid JSON (${error instanceof Error ? error.message : String(error)})`];
     }
     prompt = `${base}\n\nYour previous storyboard broke these rules — return the corrected full JSON:\n- ${problems.join('\n- ')}${reply ? `\n\nPrevious reply:\n${reply.slice(0, 6000)}` : ''}`;
   }
-  throw new Error(`Draft masih melanggar aturan setelah 3 percobaan: ${problems.join('; ')}`);
+  if (signal?.aborted) throw new DraftError(DRAFT_CANCELLED_MESSAGE, DRAFT_CANCELLED_MESSAGE);
+  throw new DraftError(`Draft masih melanggar aturan setelah 3 percobaan: ${problems.join('; ')}`);
 }

@@ -6,13 +6,16 @@ import { join } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import type { FastifyInstance } from 'fastify';
-import { afterEach, describe, expect, it } from 'vitest';
+import { writeFileSync, mkdirSync } from 'node:fs';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { buildApp } from '../src/app.js';
 import { UserAuthStore } from '../src/auth/store.js';
 import { FlowStore } from '../src/flow/store.js';
 import { LlmError, type TextModel } from '../src/llm/opencode.js';
 import { MAX_TOKENS_PER_USER, McpTokenStore, TOKEN_PATTERN } from '../src/mcp/tokens.js';
 import { STALE_REV_MESSAGE, RATE_LIMIT_MESSAGE } from '../src/mcp/server.js';
+import type { TextGenerator } from '../src/stories/draft.js';
+import { StoryService } from '../src/stories/service.js';
 import type { Storyboard } from '../src/stories/storyboard.js';
 import { bibleBoard } from './bible-board.js';
 
@@ -46,14 +49,14 @@ async function login(server: FastifyInstance, email: string, password: string) {
   return String(res.headers['set-cookie']).split(';')[0]!;
 }
 
-async function setup(opts: { listen?: boolean; board?: Storyboard } = {}) {
+async function setup(opts: { listen?: boolean; board?: Storyboard; generateText?: TextGenerator } = {}) {
   // A fresh admin email per app: login attempts are rate-limited per ip+email across the process.
   const email = `mcp-admin${++seq}@x.io`;
   const dataDir = mkdtempSync(join(tmpdir(), 'nc-mcp-'));
   const server = await buildApp({
     dataDir,
     env: { OPENCREATOR_ADMIN_EMAIL: email, OPENCREATOR_ADMIN_PASSWORD: 'admin-pass-1' },
-    stories: { reconcileMs: 0, probe: async () => ({ durationSec: 6, hasAudio: true }), assemble: async () => undefined, generateText: async () => JSON.stringify(draftBoard) },
+    stories: { reconcileMs: 0, probe: async () => ({ durationSec: 6, hasAudio: true }), assemble: async () => undefined, generateText: opts.generateText ?? (async () => JSON.stringify(draftBoard)) },
     providers: { workerMs: 0 },
     media: { cleanupMs: 0 },
     text: { model: offlineModel }
@@ -428,5 +431,148 @@ describe('/mcp (Streamable HTTP, bearer token)', () => {
     expect(RATE_LIMIT_MESSAGE).toBe('Terlalu banyak permintaan');
     // Per token: another token is unaffected.
     expect((await rpc(s, other.token)).status).toBe(200);
+  });
+  it('JSON-RPC batches are refused with 400 (they would bypass the rate limit); nothing runs', async () => {
+    const s = await setup();
+    const { token } = await s.createToken('batch');
+    const batch = Array.from({ length: 61 }, (_, i) => ({ jsonrpc: '2.0', id: i + 1, method: 'tools/list', params: {} }));
+    const res = await rpc(s, token, batch);
+    expect(res.status).toBe(400);
+    const body = await res.json() as { jsonrpc: string; id: unknown; error: { message: string } };
+    expect(body).toMatchObject({ jsonrpc: '2.0', id: null, error: { message: 'Batch tidak didukung' } });
+
+    // A batched tool call does not run either.
+    const before = readFileSync(s.boardFile, 'utf8');
+    const edit = await rpc(s, token, [{ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'edit_shot', arguments: { project_id: s.id, shot: 2, emotion: 'lega' } } }]);
+    expect(edit.status).toBe(400);
+    await edit.arrayBuffer();
+    expect(readFileSync(s.boardFile, 'utf8')).toBe(before);
+    expect(await s.history()).toEqual([]);
+  });
+
+  it('spending tool descriptions use the MCP confirm wording, not the in-app chat one', async () => {
+    const s = await setup();
+    const { token } = await s.createToken();
+    const client = await connect(s, token);
+    const { tools } = await client.listTools();
+    for (const tool of tools) expect(tool.description ?? '', tool.name).not.toMatch(/cannot confirm/i);
+    for (const name of ['make_sheet', 'redraw_frame', 'prepare', 'render', 'assemble']) {
+      const description = tools.find(t => t.name === name)!.description!;
+      expect(description, name).toMatch(/without confirm/i);
+      expect(description, name).toMatch(/confirm: ?true/);
+      expect(description, name).toMatch(/rev/);
+      expect(description, name).not.toMatch(/the app then asks the user/i);
+    }
+  });
+
+  it('create_project: a failed draft is a plain Indonesian error, not the generic tool failure', async () => {
+    const s = await setup({ generateText: async () => 'bukan json sama sekali' });
+    const { token } = await s.createToken();
+    const client = await connect(s, token);
+    const viaMcp = await call(client, 'create_project', { premise: 'Seekor kucing hilang di kampung' });
+    expect(viaMcp.isError).toBe(true);
+    expect(viaMcp.text).not.toBe('Gagal menjalankan tool — coba lagi.');
+    // The same message the session route answers with.
+    const viaSession = await s.server.inject({ method: 'POST', url: '/api/stories/draft', headers: { cookie: s.cookie }, payload: { premise: 'Seekor kucing hilang di kampung' } });
+    expect(viaSession.statusCode).toBe(503);
+    expect(viaMcp.text).toBe(viaSession.json().error.message);
+    expect(viaMcp.text).toMatch(/draft/i);
+    expect((await call(client, 'list_projects', {})).json).toHaveLength(1);
+  });
+
+  it('create_project: one at a time per token, and a disconnected client aborts the draft', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>(r => { release = r; });
+    const signals: Array<AbortSignal | undefined> = [];
+    const s = await setup({
+      generateText: async (_system, _prompt, signal) => {
+        signals.push(signal);
+        await Promise.race([gate, new Promise(r => signal?.addEventListener('abort', r, { once: true }))]);
+        return JSON.stringify(draftBoard);
+      }
+    });
+    const { token } = await s.createToken();
+    const client = await connect(s, token);
+
+    const first = call(client, 'create_project', { premise: 'Seekor kucing hilang di kampung' });
+    await vi.waitFor(() => expect(signals).toHaveLength(1));
+    const second = await call(client, 'create_project', { premise: 'Seekor anjing hilang di kota' });
+    expect(second.isError).toBe(true);
+    expect(second.text).toBe('Masih membuat proyek — tunggu selesai');
+    release();
+    expect((await first).isError).toBe(false);
+    // Free again once the first one finished.
+    expect((await call(client, 'create_project', { premise: 'Seekor burung pulang ke sarang' })).isError).toBe(false);
+    expect((await call(client, 'list_projects', {})).json).toHaveLength(3);
+
+    // A client that goes away: the generator's signal is aborted and no project is created.
+    signals.length = 0;
+    const slow = await setup({
+      generateText: async (_system, _prompt, signal) => {
+        signals.push(signal);
+        await new Promise(r => signal?.addEventListener('abort', r, { once: true }));
+        return JSON.stringify(draftBoard);
+      }
+    });
+    const slowToken = (await slow.createToken()).token;
+    const controller = new AbortController();
+    const pending = fetch(`${slow.base}/mcp`, {
+      method: 'POST', signal: controller.signal,
+      headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream', authorization: `Bearer ${slowToken}` },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'create_project', arguments: { premise: 'Seekor kucing hilang di kampung' } } })
+    }).catch(() => undefined);
+    await vi.waitFor(() => expect(signals).toHaveLength(1));
+    expect(signals[0]).toBeInstanceOf(AbortSignal);
+    controller.abort();
+    await pending;
+    await vi.waitFor(() => expect(signals[0]!.aborted).toBe(true));
+    await new Promise(r => setTimeout(r, 100));
+    expect((await slow.server.inject({ url: '/api/stories', headers: { cookie: slow.cookie } })).json().stories).toHaveLength(1);
+  });
+
+  it('a corrupt tokens.json fails closed: 401, never 500, logged once without its contents', async () => {
+    const s = await setup();
+    const { token } = await s.createToken('asli');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      mkdirSync(join(s.dataDir, 'mcp'), { recursive: true });
+      writeFileSync(join(s.dataDir, 'mcp', 'tokens.json'), '{"version":1,"tokens":[{"sha256":"RAHASIA');
+      for (let i = 0; i < 2; i++) {
+        const res = await rpc(s, token);
+        expect(res.status).toBe(401);
+        await res.arrayBuffer();
+      }
+      expect((await s.server.inject({ url: '/api/mcp/tokens', headers: { cookie: s.cookie } })).statusCode).toBe(200);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(JSON.stringify(warn.mock.calls)).not.toContain('RAHASIA');
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('confirmed spending re-checks the pinned rev under the story lock (edit lands between the check and the queue)', async () => {
+    const s = await setup();
+    const { token } = await s.createToken('Cursor');
+    const client = await connect(s, token);
+    const ask = await call(client, 'render', { project_id: s.id, scene: 1 });
+    expect(ask.json).toMatchObject({ needsConfirm: true, rev: 1 });
+
+    // Another edit bumps the rev after the MCP layer and the action planner read rev 1.
+    const original = StoryService.prototype.render;
+    const spy = vi.spyOn(StoryService.prototype, 'render').mockImplementation(async function (this: StoryService, id, options) {
+      const board = await this.readStoryboard(id);
+      board.shots[0]!.narration = 'Diubah di tengah jalan.';
+      await this.updateStoryboard(id, board);
+      return original.call(this, id, options);
+    });
+    try {
+      const go = await call(client, 'render', { project_id: s.id, scene: 1, confirm: true, rev: ask.json.rev });
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(go.isError).toBe(true);
+      expect(go.text).toBe(STALE_REV_MESSAGE);
+      expect(await s.flow.listJobs()).toHaveLength(0);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

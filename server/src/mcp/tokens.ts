@@ -52,15 +52,29 @@ const toPublic = (r: McpTokenRecord): PublicMcpToken => ({ id: r.id, name: r.nam
 export class McpTokenStore {
   readonly file: string;
   private readonly now: () => number;
+  private readonly warn: (message: string) => void;
+  private warnedCorrupt = false;
   private queue: Promise<unknown> = Promise.resolve();
 
-  constructor(dataDir: string, private readonly users: UserAuthStore, opts: { now?: () => number } = {}) {
+  constructor(dataDir: string, private readonly users: UserAuthStore, opts: { now?: () => number; warn?: (message: string) => void } = {}) {
     this.file = join(dataDir, 'mcp', 'tokens.json');
     this.now = opts.now ?? Date.now;
+    this.warn = opts.warn ?? (message => console.warn(message));
   }
 
+  /** A file that does not parse fails closed: no tokens (every bearer gets 401), logged once, never its contents. */
   private async read(): Promise<McpTokenRecord[]> {
-    const raw = (await readPrivateJsonFile(this.file)) as Partial<TokenFile> | undefined;
+    let raw: Partial<TokenFile> | undefined;
+    try {
+      raw = (await readPrivateJsonFile(this.file)) as Partial<TokenFile> | undefined;
+    } catch (error) {
+      if (!(error instanceof SyntaxError)) throw error;
+      if (!this.warnedCorrupt) {
+        this.warnedCorrupt = true;
+        this.warn(`mcp: ${this.file} is not valid JSON — every MCP token is refused until it is fixed or a new token is created`);
+      }
+      return [];
+    }
     return Array.isArray(raw?.tokens) ? raw.tokens.filter(t => t && typeof t.sha256 === 'string' && typeof t.id === 'string') : [];
   }
 
