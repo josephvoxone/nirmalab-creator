@@ -164,13 +164,13 @@ function VolumeSlider(props: { label: string; value: number; max: number; step: 
   return (
     <div className="flex items-center gap-2">
       <Volume2 className="size-3.5 text-muted-foreground" />
-      <Slider thumbLabel={props.label} className="w-36" min={0} max={props.max} step={props.step} value={[v]} disabled={props.disabled}
+      <div className="w-36 shrink-0 px-1.5"><Slider thumbLabel={props.label} min={0} max={props.max} step={props.step} value={[v]} disabled={props.disabled}
         onValueChange={value => {
           const n = r2(Array.isArray(value) ? value[0]! : (value as number));
           setV(n);
           clearTimeout(timer.current);
           timer.current = setTimeout(() => props.onCommit(n), COMMIT_MS);
-        }} />
+        }} /></div>
       <span className="w-10 text-[12px] tabular-nums">{Math.round(v * 100)}%</span>
     </div>
   );
