@@ -134,6 +134,13 @@ describe('promptFromIntent', () => {
     const nobody = { ...shot, intent: { ...shot.intent!, subject: 'the wet stones', action: 'glisten under the lamp', framing: undefined, move: undefined } };
     expect(promptFromIntent(board, nobody)).toBe('Medium shot, the camera stays still. the wet stones glisten under the lamp.');
   });
+
+  it('a name inside a longer name is not a second character ("Nadia" in "Nadia Sukses")', () => {
+    const board = bibleBoard();
+    board.bible!.characters[1]!.name = `${board.bible!.characters[0]!.name} Dewasa`;
+    const shot = { ...board.shots[1]!, intent: { ...board.shots[1]!.intent!, subject: `${board.bible!.characters[0]!.name} Dewasa`, framing: 'wide', move: 'static' } };
+    expect(promptFromIntent(board, shot)).toBe('Wide shot, the camera stays still. KAPAS lifts the woven basket off the wet stones.');
+  });
 });
 
 describe('updateStoryboard on bible boards', () => {

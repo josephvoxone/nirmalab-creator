@@ -89,6 +89,15 @@ describe('validateBible', () => {
     expect(errs(b => { b.characters[0]!.token = 'laras'; }).join()).toMatch(/token harus HURUF BESAR/);
   });
 
+  it('rejects a display name equal to, or a word-prefix of, another (Flow picks a character by name, falling back to a prefix match)', () => {
+    const twin = (name: string) => errs(b => { b.characters[1]!.name = name; }).join();
+    expect(twin(` ${valid().characters[0]!.name.toUpperCase()} `)).toMatch(/karakter KAPAS: nama "LARAS" bentrok dengan "Laras" \(LARAS\)/);
+    expect(twin('Laras Dewasa')).toMatch(/karakter KAPAS: nama "Laras Dewasa" bentrok dengan "Laras" \(LARAS\)/);
+    expect(errs(b => { b.characters[0]!.name = 'Kapas Kecil'; }).join()).toMatch(/karakter KAPAS: nama "Kapas" bentrok dengan "Kapas Kecil" \(LARAS\)/);
+    expect(twin('Larasati')).toBe('');            // a longer word is a different name
+    expect(twin('Dewi Laras')).toBe('');
+  });
+
   it('rejects malformed locations and bad rules, accepts absent rules', () => {
     expect(errs(b => { b.locations![0]!.key = 'pasar'; }).join()).toMatch(/lokasi pasar: key harus HURUF BESAR/);
     expect(errs(b => { b.locations![1]!.key = 'PASAR_IKAN'; }).join()).toMatch(/lokasi PASAR_IKAN: key ganda/);

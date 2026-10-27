@@ -34,6 +34,10 @@ what makes a shot look filmed instead of generated.
 9. **Every character who is visible is named by TOKEN in `subject` or `action`** ("YESUS kneels
    beside RAKA"), never only in `startState`/`endState` or as "the pair": the character's sheet is
    attached from subject and action only, so anyone else is drawn from words and looks different.
+10. **One person in two looks (poor and rich, child and adult) is two characters with two tokens and
+   two names that do not start with each other** ("Nadia Sederhana" / "Nadia Sukses", never "Nadia"
+   / "Nadia Sukses"): Flow picks a character by name with a prefix fallback, so a shared or prefix
+   name attaches the wrong outfit.
 
 ## Scene breakdown (when splitting a scene into shots)
 - Open with an establishing or orienting shot unless the previous shot already placed us.

@@ -314,12 +314,19 @@ export function promptFromIntent(board: Storyboard, shot: Shot): string {
   };
   for (const c of board.bible?.characters ?? []) add(c.token, c.name);
   for (const [token, spec] of Object.entries(board.characters ?? {})) add(token, member(token, spec).name);
-  const found: Array<{ token: string; at: number }> = [];
+  const found: Array<{ token: string; at: number; end: number }> = [];
   for (const [token, aliases] of names) {
-    const at = Math.min(...[...aliases].map(a => subject.search(new RegExp(`(^|[^\\p{L}\\p{N}_])${escapeRe(a)}(?![\\p{L}\\p{N}_])`, 'iu'))).filter(i => i >= 0));
-    if (Number.isFinite(at)) found.push({ token, at });
+    for (const a of aliases) {
+      for (const m of subject.matchAll(new RegExp(`(?<![\\p{L}\\p{N}_])${escapeRe(a)}(?![\\p{L}\\p{N}_])`, 'giu'))) {
+        found.push({ token, at: m.index!, end: m.index! + m[0].length });
+      }
+    }
   }
-  const who = found.length ? found.sort((a, b) => a.at - b.at).map(f => f.token).join(' and ') : subject;
+  // A name inside a longer name ("Nadia" in "Nadia Sukses") is part of that name, not a second character.
+  const kept = found.filter(f => !found.some(g => g.token !== f.token && g.at <= f.at && g.end >= f.end && g.end - g.at > f.end - f.at));
+  const first = new Map<string, number>();
+  for (const f of kept) first.set(f.token, Math.min(first.get(f.token) ?? Infinity, f.at));
+  const who = first.size ? [...first].sort((a, b) => a[1] - b[1]).map(([token]) => token).join(' and ') : subject;
   const action = (shot.intent?.action ?? '').trim().replace(/[.\s]+$/, '');
   const body = [who, action].filter(Boolean).join(' ');
   return `${framing}, ${move}.${body ? ` ${body}.` : ''}`.replace(/\s+/g, ' ').trim();

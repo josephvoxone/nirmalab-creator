@@ -76,6 +76,11 @@ export const MAX_BIBLE_SCENES = 20;
 const AUDIENCES: Audience[] = ['dewasa', 'anak', 'umum'];
 const ACTS: StructureAct[] = ['hook', 'setup', 'turn', 'payoff'];
 const TOKEN = /^[A-Z][A-Z0-9_]{1,30}$/;
+/** "nadia" is a word-prefix of "Nadia Sukses" (and of "Nadia"); not of "Nadiana". */
+const wordPrefix = (short: string, long: string): boolean => {
+  const a = short.toLowerCase(), b = long.toLowerCase();
+  return b === a || b.startsWith(`${a} `);
+};
 const LOCATION_KEY_RE = /^[A-Z][A-Z0-9_]{1,30}$/;
 const SCENE_ID = /^[a-z0-9][a-z0-9-]{0,40}$/;
 
@@ -152,12 +157,22 @@ export function validateBible(input: unknown): string[] {
   // Faceless / cepat stories legitimately have no cast: an empty list is valid.
   if (characters.length > MAX_CHARACTERS) errors.push(`terlalu banyak karakter (maks ${MAX_CHARACTERS})`);
   const tokens = new Set<string>();
+  const named: Array<{ token: string; name: string }> = [];
   for (const [i, c] of characters.entries()) {
     const token = text(c?.token) ? c.token : `#${i + 1}`;
     if (!TOKEN.test(c?.token ?? '')) errors.push(`karakter ${token}: token harus HURUF BESAR, angka atau garis bawah (mis. LARAS)`);
     else if (tokens.has(c.token)) errors.push(`karakter ${token}: token ganda`);
     else tokens.add(c.token);
     if (!text(c?.name)) errors.push(`karakter ${token}: name wajib diisi`);
+    else {
+      // Flow finds a character sheet by its display name, so a twin name attaches the wrong sheet
+      // (two phases of one person, e.g. poor and rich, need two names).
+      // Its picker also falls back to a prefix match, so "Nadia" and "Nadia Sukses" collide too.
+      const name = c.name.trim().replace(/\s+/g, ' ');
+      const clash = named.find(o => wordPrefix(o.name, name) || wordPrefix(name, o.name));
+      if (clash) errors.push(`karakter ${token}: nama "${name}" bentrok dengan "${clash.name}" (${clash.token}) — Flow memilih karakter lewat nama, jadi nama tidak boleh sama atau mengawali nama lain (mis. "Nadia Sederhana" dan "Nadia Sukses")`);
+      else named.push({ token, name });
+    }
     if (!text(c?.want)) errors.push(`karakter ${token}: want wajib diisi (apa yang ia kejar)`);
     if (!text(c?.need)) errors.push(`karakter ${token}: need wajib diisi (apa yang sebenarnya ia butuhkan)`);
     const anchors = (Array.isArray(c?.anchors) ? c.anchors : []).filter(text);
