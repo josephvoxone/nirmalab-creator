@@ -12,6 +12,7 @@ import { pollinationsText } from './generate/pollinations.js';
 import type { TextGenerator } from './stories/draft.js';
 import { assembleStory, imageSize, probeClip } from './stories/media.js';
 import { registerStoryRoutes } from './stories/routes.js';
+import { registerAssistantRoutes } from './assistant/routes.js';
 import { CoverService } from './stories/covers.js';
 import { captionFor } from './stories/caption.js';
 import { MediaCache, type FfmpegRunner } from './media/images.js';
@@ -169,15 +170,18 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
     { timeoutMs: 120_000 }
   )).text);
   const covers = new CoverService({ dataDir: options.dataDir, flow: flowStore, webDist: options.webDist });
+  // OpenRouter prices for spending estimates (story actions and the assistant).
+  const actionPrice = {
+    usdPerClip: async (model: string) => { try { return (await catalog.find('video', model))?.usdPerClip ?? null; } catch { return null; } },
+    usdPerImage: async (model: string) => { try { return (await catalog.find('image', model))?.usdPerImage ?? null; } catch { return null; } }
+  };
   await registerStoryRoutes(server, {
     userAuthStore, stories, generateText, covers, media,
     // Project actions (breakdown, sheets): the shared text model and OpenRouter prices for estimates.
-    textModel,
-    price: {
-      usdPerClip: async model => { try { return (await catalog.find('video', model))?.usdPerClip ?? null; } catch { return null; } },
-      usdPerImage: async model => { try { return (await catalog.find('image', model))?.usdPerImage ?? null; } catch { return null; } }
-    }
+    textModel, price: actionPrice
   });
+  // Project assistant chat (SSE), history and undo: same text model and prices as the story actions.
+  await registerAssistantRoutes(server, { userAuthStore, stories, textModel, price: actionPrice });
   await registerTrendRoutes(server, { userAuthStore, dataDir: options.dataDir, stories, env });
   const reconcileMs = options.stories?.reconcileMs ?? 5000;
   if (reconcileMs > 0) {

@@ -11,6 +11,7 @@
     "build": "tsc -p server/tsconfig.json && vite build --config web/vite.config.ts",
     "start": "node server/dist/main.js",
     "test": "vitest run",
+    "gen:skills": "node scripts/gen-assistant-skills.mjs",
     "typecheck": "tsc -p server/tsconfig.json --noEmit && tsc -p web/tsconfig.json --noEmit"
   },
   "dependencies": {
