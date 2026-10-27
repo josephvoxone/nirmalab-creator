@@ -390,7 +390,7 @@ async function runToolCall(
         createdAt: new Date().toISOString(), rev: await currentRev(deps.stories, storyId)
       };
       pending.push(entry);
-      emit('pending', { id: entry.id, label: entry.label, estimate: entry.estimate });
+      emit('pending', { id: entry.id, label: entry.label, estimate: entry.estimate, rev: entry.rev });
     }
     return CONFIRM_TOOL_TEXT;
   }

@@ -24,6 +24,8 @@ export type LiveState = {
 
 export type MessageListProps = {
   turns: Turn[];
+  /** Current project revision: a pending proposed at another one is no longer valid. */
+  rev?: number;
   live: Record<string, LiveState>;
   pendingState: Record<string, Partial<PendingView>>;
   skipped: Set<string>;
@@ -121,7 +123,7 @@ function AssistantMessage(props: MessageListProps & { turn: Turn }) {
         )}
         <ChangeChips changes={turn.changes ?? []} busy={props.busy} onUndo={props.onUndo} />
         {pendings.map(p => (
-          <PendingCard key={p.id} pending={p} disabled={props.busy} onRun={() => props.onRun(p.id, p.label)} onSkip={() => props.onSkip(p.id)} />
+          <PendingCard key={p.id} pending={p} currentRev={props.rev} disabled={props.busy} onRun={() => props.onRun(p.id, p.label)} onSkip={() => props.onSkip(p.id)} />
         ))}
       </div>
     </li>

@@ -12,7 +12,7 @@ import { postSse, type SseEvent } from './sse.js';
 export type Estimate = { credits?: number; usd?: number };
 export type TurnAttachment = { id: string; url: string; w: number; h: number };
 export type TurnChange = { label: string; undoId: string; undone?: boolean };
-export type TurnPending = { id: string; label: string; estimate: Estimate; createdAt?: string; used?: string; superseded?: boolean; name?: string };
+export type TurnPending = { id: string; label: string; estimate: Estimate; createdAt?: string; used?: string; superseded?: boolean; name?: string; rev?: number };
 export type Turn = {
   id: string;
   at: string;

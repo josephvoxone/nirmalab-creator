@@ -106,7 +106,7 @@ describe('Scene board — "Pecah jadi shot (AI)"', () => {
   });
 
   it('without a text model it says what to set up and links to Pengaturan › Provider', async () => {
-    const api = setup(bibleBoard(), { error: { status: 503, code: 'UNAVAILABLE', message: 'Model teks belum diatur — isi key di Pengaturan › Provider › Model teks.' } });
+    const api = setup(bibleBoard(), { error: { status: 400, code: 'NOT_CONFIGURED', message: 'Model teks belum diatur — isi key di Pengaturan › Provider › Model teks.' } });
     mountProject(<ProjectPage pollMs={0} />, api.fetchImpl);
     const dialog = await openDialog();
     await userEvent.click(within(dialog).getByRole('button', { name: /pecah jadi 4 shot/i }));

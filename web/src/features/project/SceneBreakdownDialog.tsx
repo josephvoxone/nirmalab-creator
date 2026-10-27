@@ -38,7 +38,7 @@ export function isEmptyShot(s: Shot, state?: ShotState): boolean {
 type Failure = { message: string; noModel?: boolean; needsBible?: boolean };
 
 function failureOf(e: unknown): Failure {
-  if (e instanceof ApiError && e.code === 'UNAVAILABLE' && /model teks/i.test(e.message)) return { message: 'Butuh model teks — atur di Pengaturan › Provider', noModel: true };
+  if (e instanceof ApiError && e.code === 'NOT_CONFIGURED') return { message: 'Butuh model teks — atur di Pengaturan › Provider', noModel: true };
   if (e instanceof ApiError && e.code === 'INVALID') {
     if (/belum punya tujuan/i.test(e.message)) return { message: 'Scene ini belum punya tujuan — isi dulu di tab Bible.', needsBible: true };
     if (/butuh bible|tab bible/i.test(e.message)) return { message: describeError(e), needsBible: true };

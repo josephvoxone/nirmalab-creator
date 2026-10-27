@@ -561,6 +561,8 @@ describe('the user approves exactly the cost that runs', () => {
     const evs = sse((await s.post({ message: 'render scene 1' })).body);
     const pending = named(evs, 'pending')[0]!;
     expect(pending.label).toMatch(/Render 2 klip/);
+    // The live event carries the revision it was proposed at, like the stored entry.
+    expect(pending.rev).toBe(1);
     // Shot 1 finished elsewhere meanwhile (no storyboard change, so rev stays): the plan is now 1 clip.
     const recordFile = join(s.dataDir, 'stories', s.id, 'story.json');
     const record = JSON.parse(readFileSync(recordFile, 'utf8')) as { rev?: number; shots: Array<{ id: string; status: string }> };

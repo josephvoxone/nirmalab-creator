@@ -240,7 +240,7 @@ export function AssistantPanel(props: AssistantPanelProps) {
         patchTurn(id, t => {
           const list = t.pending ?? [];
           const at = list.findIndex(x => x.id === p.id);
-          const entry: TurnPending = { id: p.id, label: p.label, estimate: p.estimate ?? {}, createdAt: new Date().toISOString(), ...(p.superseded ? { superseded: true } : {}) };
+          const entry: TurnPending = { id: p.id, label: p.label, estimate: p.estimate ?? {}, createdAt: new Date().toISOString(), ...(typeof p.rev === 'number' ? { rev: p.rev } : {}), ...(p.superseded ? { superseded: true } : {}) };
           return { ...t, pending: at === -1 ? [...list, entry] : list.map((x, i) => (i === at ? { ...x, ...entry } : x)) };
         });
       } else if (event === 'error') {
@@ -423,7 +423,7 @@ export function AssistantPanel(props: AssistantPanelProps) {
               )}
             </div>
           ) : (
-            <MessageList turns={turns} live={live} pendingState={pendingState} skipped={skipped} busy={streaming}
+            <MessageList turns={turns} rev={props.story.rev} live={live} pendingState={pendingState} skipped={skipped} busy={streaming}
               onUndo={undo} onRun={confirm} onSkip={id => setSkipped(s => new Set(s).add(id))} onRetry={retry} />
           )}
         </div>
