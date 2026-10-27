@@ -9,6 +9,7 @@ import { createPortal } from 'react-dom';
 import { Component, lazy, Suspense, useCallback, useEffect, useRef, useState, useSyncExternalStore, type ComponentType, type LazyExoticComponent, type ReactNode } from 'react';
 import { MessageSquare, PanelRight, RotateCcw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { cn } from '@/lib/utils';
 import { Sheet, SheetContent } from '@/components/ui/sheet';
 import { Skeleton } from '@/components/ui/skeleton';
 import { describeError } from '../../ui/states.js';
@@ -143,6 +144,93 @@ function PanelSlot(props: AssistantPanelProps & { load?: PanelLoader }) {
 
 type Shared = { dock: AssistantDock; story: Story; board: Board; onChanged: () => void; /** Tests: a loader that fails. */ load?: PanelLoader };
 
+export const WIDTH_KEY = 'nc.assistant.width';
+export const DEFAULT_WIDTH = 380;
+export const MIN_WIDTH = 320;
+const MAX_WIDTH = 760;
+/** The page keeps at least this much beside the panel (sidebar + a usable project view). */
+const PAGE_ROOM = 560;
+const STEP = 16;
+
+const maxWidth = () => Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, (typeof window === 'undefined' ? 1440 : window.innerWidth) - PAGE_ROOM));
+const clampWidth = (w: number) => Math.round(Math.min(maxWidth(), Math.max(MIN_WIDTH, w)));
+
+function readWidth(): number {
+  try {
+    const v = Number(window.localStorage.getItem(WIDTH_KEY));
+    if (Number.isFinite(v) && v > 0) return v;
+  } catch { /* storage blocked */ }
+  return DEFAULT_WIDTH;
+}
+
+function writeWidth(w: number) {
+  try { window.localStorage.setItem(WIDTH_KEY, String(w)); } catch { /* not remembered, still works */ }
+}
+
+/** Panel width: remembered, clamped to what the window leaves (re-clamped when the window resizes). */
+function usePanelWidth() {
+  const [stored, setStored] = useState(readWidth);
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const onResize = () => setTick(t => t + 1);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+  /** `save: false` while dragging (state only); the drag's end, keys and reset are remembered. */
+  const set = useCallback((w: number, save = true) => { const next = clampWidth(w); setStored(next); if (save) writeWidth(next); }, []);
+  return { width: clampWidth(stored), set };
+}
+
+/**
+ * The panel's left edge: drag to resize (pointer), ← → / Home / End from the keyboard, double-click
+ * back to the default. A thin line that brightens on hover/drag, a wider invisible hit area.
+ */
+function ResizeHandle(props: { width: number; onWidth: (w: number, save?: boolean) => void }) {
+  const { width, onWidth } = props;
+  const [dragging, setDragging] = useState(false);
+  const start = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.button > 0) return; // primary button / touch / pen only
+    e.preventDefault();
+    const x0 = e.clientX;
+    const w0 = width;
+    setDragging(true);
+    const body = document.body.style;
+    const before = { cursor: body.cursor, userSelect: body.userSelect };
+    body.cursor = 'col-resize';
+    body.userSelect = 'none';
+    // The panel is on the right: moving the edge left (smaller x) makes it wider.
+    const move = (ev: MouseEvent) => onWidth(w0 + (x0 - ev.clientX), false);
+    const end = (ev: MouseEvent) => {
+      onWidth(w0 + (x0 - ev.clientX));
+      setDragging(false);
+      body.cursor = before.cursor;
+      body.userSelect = before.userSelect;
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', end);
+      window.removeEventListener('pointercancel', end);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', end);
+    window.addEventListener('pointercancel', end);
+  };
+  const onKey = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    const next = e.key === 'ArrowLeft' ? width + STEP : e.key === 'ArrowRight' ? width - STEP : e.key === 'Home' ? MIN_WIDTH : e.key === 'End' ? maxWidth() : undefined;
+    if (next === undefined) return;
+    e.preventDefault();
+    onWidth(next);
+  };
+  return (
+    <div role="separator" aria-orientation="vertical" aria-label="Ubah lebar asisten" tabIndex={0}
+      aria-valuenow={width} aria-valuemin={MIN_WIDTH} aria-valuemax={maxWidth()}
+      title="Geser untuk mengubah lebar · klik dua kali untuk ukuran awal"
+      onPointerDown={start} onKeyDown={onKey} onDoubleClick={() => onWidth(DEFAULT_WIDTH)}
+      className="group absolute inset-y-0 -left-1.5 z-10 w-3 cursor-col-resize touch-none outline-none">
+      <span aria-hidden="true" className={cn('absolute inset-y-0 left-[5px] w-0.5 rounded-full transition-colors duration-150',
+        dragging ? 'bg-foreground/60' : 'bg-transparent group-hover:bg-foreground/35 group-focus-visible:bg-foreground/50')} />
+    </div>
+  );
+}
+
 /** True when the shell has the right column: the page then keeps its normal width (the column is not inside it). */
 export function useDockedInShell(): boolean {
   return !!useShellSlot(RIGHT_PANEL_ID);
@@ -156,14 +244,16 @@ export function useDockedInShell(): boolean {
 export function AssistantColumn(props: Shared) {
   const { dock } = props;
   const slot = useShellSlot(RIGHT_PANEL_ID);
+  const { width, set: setWidth } = usePanelWidth();
   const [shown, setShown] = useState(dock.open);
   if (dock.open && !shown) setShown(true);
   if (!dock.wide || !shown) return null;
   const panel = (
-    <aside hidden={!dock.open} aria-label="Kolom asisten"
+    <aside hidden={!dock.open} aria-label="Kolom asisten" style={slot ? { width } : undefined}
       className={slot
-        ? 'flex h-svh w-[380px] shrink-0 flex-col overflow-hidden border-l bg-sidebar animate-in fade-in-0 slide-in-from-right-6 duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]'
+        ? 'relative flex h-svh shrink-0 flex-col border-l bg-sidebar animate-in fade-in-0 slide-in-from-right-6 duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]'
         : 'glass-panel sticky top-2 flex h-[calc(100svh-4rem)] w-[380px] shrink-0 flex-col overflow-hidden rounded-xl'}>
+      {slot && <ResizeHandle width={width} onWidth={setWidth} />}
       {/* Keyed by project: drafts, history and streams never carry over to another project. */}
       <PanelSlot key={props.story.id} load={props.load} story={props.story} board={props.board} onChanged={props.onChanged} docked={!!slot}
         onClose={dock.toggle} closeLabel="Sembunyikan asisten" focusClose={dock.open && dock.focus === 'hide'} onFocused={dock.clearFocus} />

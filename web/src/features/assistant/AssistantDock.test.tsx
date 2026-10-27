@@ -1,11 +1,11 @@
-import { screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ProjectPage } from '../project/ProjectPage.js';
 import { Layout } from '../../shell/Layout.js';
 import { bibleBoard, fakeProjectApi, ID, mountProject, storyFor } from '../project/testkit.js';
-import { AssistantColumn, OPEN_KEY, type AssistantDock } from './AssistantDock.js';
+import { AssistantColumn, MIN_WIDTH, OPEN_KEY, WIDTH_KEY, type AssistantDock } from './AssistantDock.js';
 import type { AssistantPanelProps } from './AssistantPanel.js';
 import { fakeAssistantApi, memoryStorage, mockMatchMedia, mountWith, SID } from './testkit.js';
 
@@ -72,6 +72,60 @@ describe('assistant on the project page', () => {
     await userEvent.setup().click(within(column).getByRole('button', { name: 'Sembunyikan asisten' }));
     const show = await screen.findByRole('button', { name: 'Tampilkan asisten' });
     expect(within(main.querySelector('header')!).getByRole('button', { name: 'Tampilkan asisten' })).toBe(show);
+  });
+
+  // jsdom has no PointerEvent: a MouseEvent of type pointerdown carries clientX to React's handler.
+  const down = (el: Element, clientX: number) => fireEvent(el, new MouseEvent('pointerdown', { clientX, button: 0, bubbles: true, cancelable: true }));
+
+  it('the docked panel resizes from its left edge: drag, keyboard, double-click reset; width is clamped and remembered', async () => {
+    const media = mockMatchMedia(() => true);
+    const storage = memoryStorage();
+    restore = () => { media(); storage.restore(); };
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1440 });
+    const first = mountProject(<Layout title="Proyek"><ProjectPage pollMs={60_000} /></Layout>, api().fetchImpl);
+    const column = await screen.findByRole('complementary', { name: 'Kolom asisten' });
+    const handle = within(column).getByRole('separator', { name: 'Ubah lebar asisten' });
+    expect(handle).toHaveAttribute('aria-orientation', 'vertical');
+    expect(handle).toHaveAttribute('aria-valuenow', '380');
+    expect(column).toHaveStyle({ width: '380px' });
+
+    // Drag the left edge 100 px to the left: the panel grows by 100.
+    down(handle, 1060);
+    fireEvent(window, new MouseEvent('pointermove', { clientX: 960 }));
+    fireEvent(window, new MouseEvent('pointerup', { clientX: 960 }));
+    expect(column).toHaveStyle({ width: '480px' });
+    expect(storage.store.getItem(WIDTH_KEY)).toBe('480');
+
+    // Keyboard: ← widens, → narrows, Home = narrowest, End = widest the window allows.
+    handle.focus();
+    await userEvent.keyboard('{ArrowLeft}');
+    expect(handle).toHaveAttribute('aria-valuenow', '496');
+    await userEvent.keyboard('{Home}');
+    expect(handle).toHaveAttribute('aria-valuenow', String(MIN_WIDTH));
+    await userEvent.keyboard('{ArrowRight}');
+    expect(handle).toHaveAttribute('aria-valuenow', String(MIN_WIDTH));
+    await userEvent.keyboard('{End}');
+    const widest = Number(handle.getAttribute('aria-valuemax'));
+    expect(widest).toBeLessThanOrEqual(1440 - 560);
+    expect(handle).toHaveAttribute('aria-valuenow', String(widest));
+
+    // A drag past the limits stops at them.
+    down(handle, 500);
+    fireEvent(window, new MouseEvent('pointermove', { clientX: 1430 }));
+    fireEvent(window, new MouseEvent('pointerup', { clientX: 1430 }));
+    expect(handle).toHaveAttribute('aria-valuenow', String(MIN_WIDTH));
+
+    // Remembered on the next visit; a double-click puts it back to the default.
+    down(handle, 1100);
+    fireEvent(window, new MouseEvent('pointermove', { clientX: 1000 }));
+    fireEvent(window, new MouseEvent('pointerup', { clientX: 1000 }));
+    const saved = storage.store.getItem(WIDTH_KEY);
+    first.unmount();
+    mountProject(<Layout title="Proyek"><ProjectPage pollMs={60_000} /></Layout>, api().fetchImpl);
+    const again = await screen.findByRole('complementary', { name: 'Kolom asisten' });
+    expect(again).toHaveStyle({ width: `${saved}px` });
+    fireEvent.doubleClick(within(again).getByRole('separator', { name: 'Ubah lebar asisten' }));
+    expect(again).toHaveStyle({ width: '380px' });
   });
 
   it('a blocked localStorage still lets the column open and close', async () => {
