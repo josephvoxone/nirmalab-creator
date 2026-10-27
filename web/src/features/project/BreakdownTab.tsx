@@ -2,6 +2,10 @@
  * Breakdown: the film's bible — who (characters), where (locations) and how it looks (style).
  * Everything here feeds every shot: a character's look becomes its reference sheet, a
  * location's look becomes the "Setting:" of every shot in the scenes that use it.
+ *
+ * Bible boards: this tab is the one character editor (bible cards: anchors, want/need/arc, sheet,
+ * reference — see CharacterCard) and location edits land on both sides (bible lookdev + board look).
+ * Legacy boards keep the {name, look} editor.
  */
 import { useCallback, useMemo, useState, type ReactNode } from 'react';
 import { MapPin, Pencil, Plus, Trash2, UserRound } from 'lucide-react';
@@ -22,6 +26,7 @@ import { LookChips } from '../stories/LookChips.js';
 import '../stories/studio.css';
 import { media, useProject } from './useProject.js';
 import type { Board, CharacterSpec } from './model.js';
+import { CharacterCard, cardsOf, withCard } from './CharacterCard.js';
 
 const TOKEN_RE = /^[A-Z][A-Z0-9_]{1,30}$/;
 const tokenOf = (name: string) => name.normalize('NFKD').replace(/[^A-Za-z0-9]+/g, '_').replace(/^_+|_+$/g, '').toUpperCase().slice(0, 30);
@@ -29,7 +34,7 @@ const titleCase = (t: string) => t.toLowerCase().split('_').map(w => w.charAt(0)
 const asSpec = (token: string, s: CharacterSpec) => (typeof s === 'string' ? { name: titleCase(token), look: s } : { name: s.name || titleCase(token), look: s.look });
 const uses = (b: Board, token: string) => {
   const re = new RegExp(`\\b${token}\\b`);
-  const shots = b.shots.filter(s => re.test(s.prompt));
+  const shots = b.shots.filter(s => [s.prompt, s.intent?.subject, s.intent?.action].some(t => typeof t === 'string' && re.test(t)));
   const scenes = (b.scenes ?? []).filter(sc => sc.shots.some(id => shots.some(s => s.id === id)));
   return { shots, scenes };
 };
@@ -93,14 +98,19 @@ function Entry(props: {
   );
 }
 
-function AddForm(props: { kind: 'karakter' | 'lokasi'; onAdd: (name: string, look: string) => Promise<boolean>; onCancel: () => void }) {
+function AddForm(props: { kind: 'karakter' | 'lokasi'; anchors?: boolean; onAdd: (name: string, look: string) => Promise<boolean>; onCancel: () => void }) {
   const [name, setName] = useState('');
   const [look, setLook] = useState('');
   return (
     <div className="flex flex-col gap-1.5 rounded-md border border-dashed p-2.5">
       <input aria-label={`Nama ${props.kind}`} placeholder={props.kind === 'karakter' ? 'mis. Bu Sari' : 'mis. Pasar Ikan'} className={inputClass} value={name} onChange={e => setName(e.target.value)} />
-      <textarea aria-label="Deskripsi visual baru (English)" placeholder={props.kind === 'karakter' ? 'age, face, hair, outfit, one signature prop' : 'place, time of day, materials, weather'}
-        className={`${textareaClass} min-h-16`} value={look} onChange={e => setLook(e.target.value)} />
+      {props.anchors ? (
+        <input aria-label="Anchor visual baru" placeholder="Fakta yang bisa dilihat, pisahkan dengan koma: mis. rambut kepang, kebaya hijau lumut"
+          className={inputClass} value={look} onChange={e => setLook(e.target.value)} />
+      ) : (
+        <textarea aria-label="Deskripsi visual baru (English)" placeholder={props.kind === 'karakter' ? 'age, face, hair, outfit, one signature prop' : 'place, time of day, materials, weather'}
+          className={`${textareaClass} min-h-16`} value={look} onChange={e => setLook(e.target.value)} />
+      )}
       <div className="flex gap-1.5">
         <Button size="sm" disabled={!tokenOf(name) || !look.trim()} onClick={() => void props.onAdd(name.trim(), look.trim()).then(ok => ok && props.onCancel())}>Tambah</Button>
         <Button size="sm" variant="ghost" onClick={props.onCancel}>Batal</Button>
@@ -172,8 +182,26 @@ export function BreakdownTab() {
   const locked = ['casting', 'framing', 'rendering', 'assembling'].includes(story.status);
   const castState = new Map((story.cast ?? []).map(c => [c.token, c]));
 
+  const bible = !!board.bible;
+  const cards = bible ? cardsOf(board) : [];
   const characters = Object.entries(board.characters ?? {}).map(([token, spec]) => ({ token, ...asSpec(token, spec), ...uses(board, token) }));
-  const locations = Object.entries(board.locations ?? {}).map(([key, l]) => ({ key, ...l, scenes: (board.scenes ?? []).filter(s => s.location === key) }));
+  const lookdev = (key: string) => {
+    const raw = (board.bible as { locations?: Array<{ key?: unknown; lookdev?: unknown }> } | undefined)?.locations;
+    const card = Array.isArray(raw) ? raw.find(l => l?.key === key) : undefined;
+    return typeof card?.lookdev === 'string' && card.lookdev.trim() ? card.lookdev : undefined;
+  };
+  const locations = Object.entries(board.locations ?? {}).map(([key, l]) => ({ key, ...l, look: lookdev(key) ?? l.look, scenes: (board.scenes ?? []).filter(s => s.location === key) }));
+  /** Bible boards: a location is written on both sides at once (bible lookdev = board look), so nothing is left to mirror. */
+  const withLocation = (b: Board, key: string, next: { name: string; look: string } | null): Board => {
+    const locs = { ...b.locations };
+    if (next) locs[key] = next; else delete locs[key];
+    if (!b.bible) return { ...b, locations: locs };
+    const raw = (b.bible as Record<string, unknown>);
+    const cards = Array.isArray(raw.locations) ? (raw.locations as Array<Record<string, unknown>>) : [];
+    const card = next ? { ...(cards.find(c => c.key === key) ?? {}), key, name: next.name, lookdev: next.look } : null;
+    const list = card ? (cards.some(c => c.key === key) ? cards.map(c => (c.key === key ? card : c)) : [...cards, card]) : cards.filter(c => c.key !== key);
+    return { ...b, locations: locs, bible: { ...raw, locations: list } };
+  };
 
   const saveCharacter = (token: string, name: string, look: string) => p.save({ ...board, characters: { ...board.characters, [token]: { name, look } } });
   const addCharacter = async (name: string, look: string) => {
@@ -182,18 +210,38 @@ export function BreakdownTab() {
     return p.save({ ...board, characters: { ...board.characters, [token]: { name, look } } });
   };
   const removeCharacter = (token: string) => { const c = { ...board.characters }; delete c[token]; void p.save({ ...board, characters: c }); };
-  const saveLocation = (key: string, name: string, look: string) => p.save({ ...board, locations: { ...board.locations, [key]: { name, look } } });
+  const addCard = async (name: string, anchorText: string) => {
+    const token = tokenOf(name);
+    if (!TOKEN_RE.test(token) || cards.some(c => c.token === token) || board.characters?.[token]) return false;
+    const anchors = anchorText.split(',').map(a => a.trim()).filter(Boolean);
+    return p.save(withCard(board, token, { token, name, anchors, want: '', need: '', arc: '' }));
+  };
+  const saveLocation = (key: string, name: string, look: string) => p.save(withLocation(board, key, { name, look }));
   const addLocation = async (name: string, look: string) => {
     const key = tokenOf(name);
     if (!TOKEN_RE.test(key) || board.locations?.[key]) return false;
-    return p.save({ ...board, locations: { ...board.locations, [key]: { name, look } } });
+    return p.save(withLocation(board, key, { name, look }));
   };
   const removeLocation = (key: string) => {
-    const l = { ...board.locations };
-    delete l[key];
-    void p.save({ ...board, locations: l, scenes: (board.scenes ?? []).map(s => (s.location === key ? { ...s, location: undefined } : s)) });
+    const b = withLocation(board, key, null);
+    void p.save({ ...b, scenes: (board.scenes ?? []).map(s => (s.location === key ? { ...s, location: undefined } : s)) });
     setDoomed(undefined);
   };
+
+  const bibleCast = cards.length === 0 ? (
+    <p className="text-[12.5px] text-muted-foreground">Belum ada karakter. Cerita faceless boleh tanpa karakter; untuk tokoh berulang, tambahkan di sini lalu sebut dengan @ di subjek shot.</p>
+  ) : (
+    <ul className="flex flex-col">
+      {cards.map(c => {
+        const used = uses(board, c.token).shots.length;
+        return (
+          <CharacterCard key={c.token} card={c} engine={engineOf(board)} locked={locked}
+            deleteBlocked={used ? `Dipakai di ${used} shot — ganti subjek shot itu dulu` : undefined}
+            onDelete={() => void p.save(withCard(board, c.token, null))} />
+        );
+      })}
+    </ul>
+  );
 
   return (
     <div className="flex flex-col gap-3">
@@ -204,8 +252,8 @@ export function BreakdownTab() {
       <div className="grid gap-3 lg:grid-cols-2">
         <Section id="bd-cast" title="Karakter" hint="Satu lembar referensi per karakter menjaga wajah dan kostum sama di semua shot."
           action={<Button size="sm" variant="glass" disabled={locked || adding === 'karakter'} onClick={() => setAdding('karakter')}><Plus /> Tambah karakter</Button>}>
-          {adding === 'karakter' && <AddForm kind="karakter" onAdd={addCharacter} onCancel={() => setAdding(undefined)} />}
-          {characters.length === 0 ? (
+          {adding === 'karakter' && <AddForm kind="karakter" anchors={bible} onAdd={bible ? addCard : addCharacter} onCancel={() => setAdding(undefined)} />}
+          {bible ? bibleCast : characters.length === 0 ? (
             <p className="text-[12.5px] text-muted-foreground">Belum ada karakter. Cerita faceless boleh tanpa karakter; untuk tokoh berulang, tambahkan di sini lalu tulis TOKEN-nya (mis. <code>BU_SARI</code>) di prompt shot.</p>
           ) : (
             <ul className="flex flex-col">
@@ -222,6 +270,9 @@ export function BreakdownTab() {
               })}
             </ul>
           )}
+          {bible && story.mode === 'konsisten' && !isOpenRouter(engineOf(board).image) && cards.length > 0 && (
+            <p className="text-[11.5px] text-muted-foreground">Referensi dipakai mesin OpenRouter; Flow memakai sheet yang dibuat.</p>
+          )}
         </Section>
 
         <Section id="bd-loc" title="Lokasi" hint="Setting yang sama untuk semua shot dalam scene yang memakainya."
@@ -233,7 +284,7 @@ export function BreakdownTab() {
             <ul className="flex flex-col">
               {locations.map(l => (
                 <Entry key={l.key} name={l.name} look={l.look} icon={<MapPin />} locked={locked}
-                  meta={l.scenes.length ? `Dipakai di scene: ${l.scenes.map(s => s.title).join(', ')}` : 'Belum dipakai scene mana pun'}
+                  meta={`${l.scenes.length ? `Dipakai di scene: ${l.scenes.map(s => s.title).join(', ')}` : 'Belum dipakai scene mana pun'} · key ${l.key}`}
                   onSave={(name, look) => saveLocation(l.key, name, look)} onDelete={() => setDoomed(l.key)} />
               ))}
             </ul>

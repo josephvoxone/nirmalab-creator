@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { CATALOG } from '../stories/testCatalog.js';
 import type { Board } from './model.js';
 import { ShotSheet } from './ShotSheet.js';
-import { BOARD, fakeProjectApi, ID, mountProject, storyFor } from './testkit.js';
+import { BOARD, bibleBoard, compileRoute, fakeProjectApi, ID, mountProject, storyFor } from './testkit.js';
 import { ProjectProvider, useProjectState } from './useProject.js';
 
 type Api = ReturnType<typeof fakeProjectApi>;
@@ -186,5 +186,109 @@ describe('ShotSheet', () => {
     expect(within(sheet).getByRole('switch', { name: /tanpa narasi/i })).toHaveAttribute('aria-disabled', 'true');
     for (const name of [/^simpan$/i, /gambar ulang/i, /render shot ini/i, /^hapus$/i]) expect(within(sheet).getByRole('button', { name })).toBeDisabled();
     expect(document.querySelectorAll('select, input[type=date], input[type=radio], input[type=checkbox]:not([aria-hidden=true])').length).toBe(0);
+  });
+});
+
+describe('ShotSheet — bible boards (intent)', () => {
+  const compiles = (api: Api) => api.calls.filter(c => c.url.endsWith('/compile-shot'));
+  const bibleApi = () => fakeProjectApi({ board: bibleBoard(), extra: compileRoute });
+
+  it('edits the intent fields and shows the compiled prompt read-only instead of a prompt textarea', async () => {
+    const api = bibleApi();
+    const sheet = await open(api);
+    for (const name of ['Subjek', 'Aksi']) expect(within(sheet).getByRole('combobox', { name })).toBeInTheDocument();
+    for (const name of ['Keadaan awal', 'Keadaan akhir', 'Emosi', 'Narasi']) expect(within(sheet).getByRole('textbox', { name })).toBeInTheDocument();
+    expect(within(sheet).getByRole('combobox', { name: 'Subjek' })).toHaveValue('JINGGA');
+    expect(within(sheet).getByRole('combobox', { name: 'Aksi' })).toHaveValue('sits by the gate');
+    expect(within(sheet).getByRole('combobox', { name: 'Framing' })).toHaveTextContent('Medium');
+    expect(within(sheet).getByRole('combobox', { name: 'Gerak kamera' })).toHaveTextContent('Static');
+    expect(within(sheet).getByText('4/12')).toBeInTheDocument();
+    expect(within(sheet).queryByRole('textbox', { name: /prompt \(english\)/i })).toBeNull();
+    expect(within(sheet).getByRole('radiogroup', { name: 'Suara' })).toBeInTheDocument();
+    await userEvent.click(within(sheet).getByRole('button', { name: /prompt yang dikirim/i }));
+    const sent = await within(sheet).findByRole('region', { name: 'Prompt yang dikirim' });
+    expect(await within(sent).findByText('medium · JINGGA sits by the gate, tail curled around the paws → ears up toward the road.')).toBeInTheDocument();
+    expect(within(sent).queryByRole('textbox')).toBeNull();
+    expect(compiles(api)[0]!.body!.shot).toMatchObject({ id: '01-pagar', intent: { subject: 'JINGGA', action: 'sits by the gate' } });
+    expect(document.querySelectorAll('select, input[type=date], input[type=radio], input[type=checkbox]')).toHaveLength(0);
+  });
+
+  it('debounces the preview (one compile after a burst of typing) and lists issues without blocking the save', async () => {
+    const api = bibleApi();
+    const sheet = await open(api);
+    await waitFor(() => expect(compiles(api)).toHaveLength(1));
+    const action = within(sheet).getByRole('combobox', { name: 'Aksi' });
+    await userEvent.type(action, ' quietly');
+    await waitFor(() => expect(compiles(api)).toHaveLength(2));
+    expect(compiles(api)[1]!.body!.shot).toMatchObject({ intent: { action: 'sits by the gate quietly' } });
+    await new Promise(r => setTimeout(r, 600));
+    expect(compiles(api)).toHaveLength(2);
+
+    await userEvent.clear(action);
+    const issues = await within(sheet).findByRole('list', { name: 'Masalah prompt' });
+    expect(issues).toHaveTextContent('mandatory slot action is empty');
+    const save = within(sheet).getByRole('button', { name: /^simpan$/i });
+    expect(save).toBeEnabled();
+    await userEvent.click(save);
+    const shot = (await lastPut(api)).shots[1]!;
+    expect(shot.intent).toMatchObject({ subject: 'JINGGA', action: '', startState: 'tail curled around the paws' });
+  });
+
+  it('saves intent edits (mention in Subjek, framing, emotion, Tanpa suara) and leaves the prompt to the server', async () => {
+    const api = bibleApi();
+    const sheet = await open(api);
+    const subject = within(sheet).getByRole('combobox', { name: 'Subjek' });
+    await userEvent.clear(subject);
+    await userEvent.type(subject, '@Bi');
+    expect(within(screen.getByRole('listbox')).getByRole('option', { name: /bima/i })).toBeInTheDocument();
+    await userEvent.keyboard('{Enter}');
+    expect(subject).toHaveValue('BIMA ');
+    expect(screen.getByRole('dialog', { name: /01-pagar$/ })).toBeInTheDocument();
+    await userEvent.click(within(sheet).getByRole('combobox', { name: 'Framing' }));
+    await userEvent.click(await screen.findByRole('option', { name: 'Close-up' }));
+    const emotion = within(sheet).getByRole('textbox', { name: 'Emosi' });
+    await userEvent.clear(emotion);
+    await userEvent.type(emotion, 'lega');
+    await userEvent.click(within(sheet).getByRole('radio', { name: 'Tanpa suara' }));
+    await userEvent.click(within(sheet).getByRole('button', { name: /^simpan$/i }));
+    const shot = (await lastPut(api)).shots[1]!;
+    expect(shot.intent).toEqual({ subject: 'BIMA', action: 'sits by the gate', startState: 'tail curled around the paws', endState: 'ears up toward the road', emotion: 'lega', framing: 'close-up', move: 'static' });
+    expect(shot.silent).toBe(true);
+    expect(shot.prompt).toBe(BOARD.shots[1]!.prompt);
+  });
+
+  it('a prose shot on a bible board keeps its prompt and offers "Ubah ke niat"; all four slots are needed to save', async () => {
+    const api = bibleApi();
+    const sheet = await open(api, '00-pembuka');
+    expect(within(sheet).getByRole('textbox', { name: /prompt \(english\)/i })).toHaveValue(BOARD.shots[0]!.prompt);
+    expect(within(sheet).queryByRole('combobox', { name: 'Subjek' })).toBeNull();
+    await userEvent.click(within(sheet).getByRole('button', { name: /ubah ke niat/i }));
+    expect(within(sheet).queryByRole('textbox', { name: /prompt \(english\)/i })).toBeNull();
+    const subject = within(sheet).getByRole('combobox', { name: 'Subjek' });
+    expect(subject).toHaveValue('');
+    expect(within(sheet).getByRole('combobox', { name: 'Framing' })).toHaveTextContent('Wide');
+    const save = within(sheet).getByRole('button', { name: /^simpan$/i });
+    expect(save).toBeDisabled();
+    expect(sheet).toHaveTextContent(/wajib diisi: subjek, aksi, keadaan awal dan akhir/i);
+    await userEvent.type(subject, 'a street');
+    await userEvent.type(within(sheet).getByRole('combobox', { name: 'Aksi' }), 'fades');
+    await userEvent.type(within(sheet).getByRole('textbox', { name: 'Keadaan awal' }), 'sun up');
+    expect(save).toBeDisabled();
+    await userEvent.type(within(sheet).getByRole('textbox', { name: 'Keadaan akhir' }), 'lamps lit');
+    expect(save).toBeEnabled();
+    await userEvent.click(save);
+    const shot = (await lastPut(api)).shots[0]!;
+    expect(shot.intent).toEqual({ subject: 'a street', action: 'fades', startState: 'sun up', endState: 'lamps lit', framing: 'wide', move: 'static' });
+    expect(shot.silent).toBe(true);
+  });
+
+  it('legacy boards keep the prompt textarea and have no "Ubah ke niat"', async () => {
+    const api = fakeProjectApi({ extra: compileRoute });
+    const sheet = await open(api);
+    expect(within(sheet).getByRole('textbox', { name: /prompt \(english\)/i })).toBeInTheDocument();
+    expect(within(sheet).queryByRole('button', { name: /ubah ke niat/i })).toBeNull();
+    expect(within(sheet).queryByRole('combobox', { name: 'Subjek' })).toBeNull();
+    expect(within(sheet).queryByRole('button', { name: /prompt yang dikirim/i })).toBeNull();
+    expect(compiles(api)).toHaveLength(0);
   });
 });

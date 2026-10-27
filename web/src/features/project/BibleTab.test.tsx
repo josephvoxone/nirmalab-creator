@@ -43,13 +43,10 @@ describe('Bible tab', () => {
     expect(acts[0]).toHaveTextContent(/truk pindah pergi/i);
     expect(acts[3]).toHaveTextContent(/memanggil namanya/i);
 
+    // Characters have one editor (Breakdown); the bible only points there.
     const cast = screen.getByRole('region', { name: /^karakter$/i });
-    const jingga = within(cast).getByRole('listitem', { name: 'Jingga' });
-    expect(jingga).toHaveTextContent(/bulu oranye belang/);
-    expect(jingga).toHaveTextContent(/kalung kulit merah pudar/);
-    expect(jingga).toHaveTextContent(/menunggu pemiliknya kembali/);
-    expect(jingga).toHaveTextContent(/berani mengikuti orang baru/);
-    expect(jingga).toHaveTextContent(/berani bergerak/i);
+    expect(within(cast).queryByRole('listitem')).toBeNull();
+    expect(cast).toHaveTextContent(/1 karakter/);
 
     const scenes = within(screen.getByRole('region', { name: /tujuan scene/i })).getAllByRole('listitem');
     expect(scenes[0]).toHaveTextContent(/Menunggu/);
@@ -75,17 +72,32 @@ describe('Bible tab', () => {
     expect(await screen.findByRole('region', { name: /^struktur$/i })).toBeInTheDocument();
   });
 
-  it('edits an anchor inline and saves the whole board with the new anchor', async () => {
-    const api = await open();
+  it('has no character editor: "Kelola karakter di Breakdown" switches to the Breakdown tab', async () => {
+    await open();
     const cast = screen.getByRole('region', { name: /^karakter$/i });
-    await userEvent.click(within(cast).getByRole('button', { name: /ubah anchor 2/i }));
-    const field = within(cast).getByRole('textbox', { name: /anchor 2/i });
-    await userEvent.clear(field);
-    await userEvent.type(field, 'kalung kulit merah pudar bertali emas{Enter}');
-    await waitFor(() => expect(lastBoard(api)?.bible?.characters?.[0]?.anchors)
-      .toEqual(['bulu oranye belang', 'kalung kulit merah pudar bertali emas']));
-    expect(lastBoard(api)!.shots).toHaveLength(BOARD.shots.length);
-    expect(lastBoard(api)!.title).toBe(BOARD.title);
+    expect(within(cast).queryByRole('button', { name: /anchor/i })).toBeNull();
+    await userEvent.click(within(cast).getByRole('link', { name: 'Kelola karakter di Breakdown' }));
+    expect(await screen.findByRole('tab', { name: /breakdown/i, selected: true })).toBeInTheDocument();
+    expect(await screen.findByRole('listitem', { name: 'Jingga' })).toHaveTextContent('JINGGA');
+  });
+
+  it('an edit keeps every bible field this tab does not show (locations, references, scene locations)', async () => {
+    const full = {
+      ...BIBLE,
+      characters: [{ ...BIBLE.characters[0]!, reference: 'uploads/up_0123456789abcdef.png', sheet: 'm1' }],
+      locations: [{ key: 'PAGAR', name: 'Pagar rumah', lookdev: 'a weathered wooden gate' }],
+      scenes: [{ ...BIBLE.scenes[0]!, location: 'PAGAR', stateIn: 'sendiri' }]
+    };
+    const api = fakeProjectApi({ board: { ...BOARD, bible: full } });
+    mountProject(<ProjectPage pollMs={0} />, api.fetchImpl, { path: `/cerita/${ID}?tab=bible` });
+    const story = await screen.findByRole('region', { name: /^cerita$/i });
+    await userEvent.click(within(story).getByRole('button', { name: /ubah tema/i }));
+    await userEvent.type(within(story).getByRole('textbox', { name: /^tema$/i }), ' dan pulang{Enter}');
+    await waitFor(() => expect(lastBoard(api)?.bible?.theme).toMatch(/dan pulang$/));
+    const sent = lastBoard(api)!.bible;
+    expect(sent.characters).toEqual(full.characters);
+    expect(sent.locations).toEqual(full.locations);
+    expect(sent.scenes[0]).toEqual(full.scenes[0]);
   });
 
   it('edits the goal of one act and the goal of one scene', async () => {

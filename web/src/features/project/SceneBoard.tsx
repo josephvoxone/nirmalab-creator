@@ -1,6 +1,6 @@
 /** Right column of the Scene tab: one scene's header (title, summary, location, cast, actions), preview and shots. */
 import { useEffect, useState } from 'react';
-import { ArrowDown, ArrowUp, Check, Clapperboard, Images, MoreHorizontal, Play, Plus, Trash2, X } from 'lucide-react';
+import { ArrowDown, ArrowUp, Check, Clapperboard, Images, MoreHorizontal, Play, Plus, Sparkles, Trash2, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Choice } from '../../ui/controls.js';
@@ -10,6 +10,7 @@ import { SequencePlayer, type Clip } from './Player.js';
 import { SceneCastChips } from './SceneCast.js';
 import { castIn, renderCost } from './SceneHelpers.js';
 import { SceneShots, type ShotActions } from './SceneShots.js';
+import { SceneBreakdownDialog } from './SceneBreakdownDialog.js';
 import { media } from './useProject.js';
 import { playerPosterWidth, poster, sized } from '../../lib/media.js';
 
@@ -74,11 +75,14 @@ function Header(props: { board: Board; scene: Scene; index: number; locked: bool
 }
 
 /** An empty scene: say why, offer the one action, and the drag alternative (drop a shot on this scene in the list). */
-function EmptyShots(props: { scene: Scene; locked: boolean; onAdd: () => void }) {
+function EmptyShots(props: { scene: Scene; locked: boolean; onAdd: () => void; onBreakdown?: () => void }) {
   return (
     <div className="flex flex-col items-center gap-1.5 rounded-md border border-dashed px-4 py-6 text-center">
       <p className="text-[13px] font-medium">Scene ini belum punya shot</p>
-      <Button type="button" size="sm" variant="glass" aria-label="Tambah shot" disabled={props.locked} onClick={props.onAdd}><Plus /> Shot</Button>
+      <div className="flex flex-wrap justify-center gap-1.5">
+        <Button type="button" size="sm" variant="glass" aria-label="Tambah shot" disabled={props.locked} onClick={props.onAdd}><Plus /> Shot</Button>
+        {props.onBreakdown && <Button type="button" size="sm" variant="ghost" disabled={props.locked} onClick={props.onBreakdown}><Sparkles /> Pecah jadi shot (AI)</Button>}
+      </div>
       <p className="text-[12px] text-muted-foreground">atau seret shot dari scene lain ke “{props.scene.title}” di daftar scene</p>
     </div>
   );
@@ -89,7 +93,10 @@ export function SceneBoard(props: {
 }) {
   const { board, story, scene, actions } = props;
   const [preview, setPreview] = useState(false);
-  useEffect(() => setPreview(false), [scene.id]);
+  const [splitting, setSplitting] = useState(false);
+  useEffect(() => { setPreview(false); setSplitting(false); }, [scene.id]);
+  // The AI shot planner needs a bible (scene goal, anchors); legacy boards never see it.
+  const canSplit = !!board.bible;
   const konsisten = story.mode === 'konsisten';
   const cost = renderCost(story, board, scene.id);
   // Keyframes still to make in this scene (sheets come with them); none left → no keyframe action.
@@ -121,6 +128,12 @@ export function SceneBoard(props: {
               <MoreHorizontal />
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-60">
+              {canSplit && (
+                <>
+                  <DropdownMenuItem onClick={() => setSplitting(true)}><Sparkles /> Pecah jadi shot (AI)</DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                </>
+              )}
               <DropdownMenuItem disabled={props.index === 0} onClick={() => actions.moveScene(props.index - 1)}><ArrowUp /> Naik</DropdownMenuItem>
               <DropdownMenuItem disabled={props.index >= count - 1} onClick={() => actions.moveScene(props.index + 1)}><ArrowDown /> Turun</DropdownMenuItem>
               <DropdownMenuSeparator />
@@ -143,7 +156,8 @@ export function SceneBoard(props: {
       </div>
       {scene.shots.length
         ? <SceneShots projectId={props.projectId} board={board} story={story} scene={scene} locked={props.locked} picked={props.picked} actions={actions} />
-        : <EmptyShots scene={scene} locked={props.locked} onAdd={actions.addShot} />}
+        : <EmptyShots scene={scene} locked={props.locked} onAdd={actions.addShot} onBreakdown={canSplit ? () => setSplitting(true) : undefined} />}
+      {canSplit && <SceneBreakdownDialog key={scene.id} open={splitting} onOpenChange={setSplitting} board={board} scene={scene} />}
     </section>
   );
 }

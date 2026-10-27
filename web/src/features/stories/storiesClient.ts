@@ -39,7 +39,25 @@ export type Story = {
   /** Shots that block assembly, with the message to show (server gate, spec §4.4). */
   gate?: { message: string; shots: GateBlocker[] };
   events: Array<{ atMs: number; message: string }>;
+  /** Storyboard revision (+1 per change). Sent back with PUT; a mismatch answers 409 STALE. */
+  rev?: number;
 };
+
+/** POST compile-shot: the prompts the server would send for this shot (nothing saved). */
+export type CompiledPreview = { imagePrompt: string; videoPrompt: string; issues: string[]; warnings: string[] };
+export type BreakdownMode = 'replace' | 'append';
+/** An action answer: either done (label + new state) or a cost the user has to confirm first. */
+export type SheetAnswer = { needsConfirm?: boolean; label: string; estimate?: { credits?: number; usd?: number }; story?: Story };
+export type Upload = { id: string; url: string; w: number; h: number; bytes: number };
+/** Image references the server accepts (checked again by its magic bytes). */
+export const UPLOAD_TYPES = ['image/png', 'image/jpeg', 'image/webp'] as const;
+export const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
+/** Client-side check before anything is sent; same words as the server. */
+export function uploadProblem(file: { type: string; size: number }): string | undefined {
+  if (!(UPLOAD_TYPES as readonly string[]).includes(file.type)) return 'File harus gambar PNG, JPEG atau WebP.';
+  if (file.size > MAX_UPLOAD_BYTES) return 'Gambar terlalu besar — maksimal 10 MB.';
+  return undefined;
+}
 export type StoryboardShot = { id: string; prompt: string; narration?: string; silent?: boolean; reuse?: { jobId: string; start?: number } };
 export type Storyboard = { title: string; shots: StoryboardShot[]; [key: string]: unknown };
 
@@ -75,7 +93,15 @@ export function storiesApi(fetchImpl: FetchLike) {
     castUrl: (id: string, token: string) => `/api/stories/${id}/cast/${token}/image`,
     draft: (input: { premise: string; shots: number; style?: string; template?: string; look?: Record<string, string>; mode?: string; aspect?: string; engine?: import('../providers/providersClient.js').EngineSet }) => requestJson<{ story: Story }>(fetchImpl, '/api/stories/draft', post(input)),
     create: (storyboard: Storyboard) => requestJson<{ story: Story }>(fetchImpl, '/api/stories', post({ storyboard })),
-    update: (id: string, storyboard: Storyboard) => requestJson<{ story: Story }>(fetchImpl, `/api/stories/${id}`, put({ storyboard })),
+    update: (id: string, storyboard: Storyboard, rev?: number) => requestJson<{ story: Story }>(fetchImpl, `/api/stories/${id}`, put(rev === undefined ? { storyboard } : { storyboard, rev })),
+    compileShot: (id: string, shot: StoryboardShot & Record<string, unknown>) => requestJson<CompiledPreview>(fetchImpl, `/api/stories/${id}/compile-shot`, post({ shot })),
+    breakdown: (id: string, sceneId: string, body: { count: number; brief?: string; mode?: BreakdownMode }) =>
+      requestJson<{ label: string; changed: boolean; undoId?: string; story: Story; storyboard: Storyboard }>(fetchImpl, `/api/stories/${id}/scenes/${encodeURIComponent(sceneId)}/breakdown`, post(body)),
+    makeSheet: (id: string, token: string, confirm: boolean) => requestJson<SheetAnswer>(fetchImpl, `/api/stories/${id}/cast/${token}/sheet`, post(confirm ? { confirm: true } : {})),
+    /** Raw image body (no multipart): the Content-Type names the format. */
+    upload: (id: string, file: Blob) => requestJson<Upload>(fetchImpl, `/api/stories/${id}/uploads`, { method: 'POST', body: file, headers: { 'Content-Type': file.type } }),
+    /** `uploads/up_….png` on a card → the URL that serves it. */
+    uploadUrl: (id: string, rel: string) => `/api/stories/${id}/uploads/${rel.replace(/^uploads\//, '')}`,
     render: (id: string, force: boolean, scope: { scene?: string; shot?: string } = {}) => requestJson<{ story: Story }>(fetchImpl, `/api/stories/${id}/render`, post({ force, ...scope })),
     retry: (id: string) => requestJson<{ story: Story }>(fetchImpl, `/api/stories/${id}/retry`, post({})),
     repairShot: (id: string, shotId: string) => requestJson<{ story: Story }>(fetchImpl, `/api/stories/${id}/shots/${shotId}/repair`, post({})),

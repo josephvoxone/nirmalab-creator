@@ -2,14 +2,17 @@
  * Proyek › Bible: the story design the shots are compiled from (spec §4.2/§4.6). Free-form draft —
  * every field saves as you commit it; what is still empty is listed as a warning, not a block.
  * A board without `bible` explains what the bible is in one line and offers "Buat bible".
+ * Characters are edited only in Breakdown (one source); this tab links there. A save merges into
+ * the stored bible, so fields this tab does not show (locations, references, scene locations) stay.
  */
 import { useState, type KeyboardEvent, type ReactNode } from 'react';
-import { AlertTriangle, Pencil, Plus, X } from 'lucide-react';
-import { Button } from '@/components/ui/button';
+import { Link } from 'react-router-dom';
+import { AlertTriangle, ArrowRight, Pencil, Plus } from 'lucide-react';
+import { Button, buttonVariants } from '@/components/ui/button';
 import { Segmented, inputClass, textareaClass } from '../../ui/controls.js';
 import { Skel } from '../../ui/states.js';
 import { useProject } from './useProject.js';
-import { ACTS, AUDIENCES, bibleWarnings, readBible, seedBible, type Audience, type BibleCharacter, type StoryBible } from '../bible/story.js';
+import { ACTS, AUDIENCES, bibleWarnings, readBible, seedBible, type Audience, type StoryBible } from '../bible/story.js';
 
 const Section = (props: { id: string; title: string; hint: string; children: ReactNode; action?: ReactNode }) => (
   <section aria-label={props.title} className="glass-panel flex flex-col gap-2 rounded-lg p-3">
@@ -73,70 +76,29 @@ function Inline(props: {
   );
 }
 
-/** Visual anchors as a list of facts: click to edit, × to remove, + to add. */
-function Anchors(props: { owner: string; anchors: string[]; onChange: (next: string[]) => void }) {
-  const [editing, setEditing] = useState<number>();
-  const [draft, setDraft] = useState('');
-  const start = (i: number) => { setDraft(props.anchors[i] ?? ''); setEditing(i); };
-  const commit = () => {
-    if (editing === undefined) return;
-    const next = [...props.anchors];
-    const value = draft.trim();
-    if (value) next[editing] = value; else next.splice(editing, 1);
-    setEditing(undefined);
-    if (next.join('\n') !== props.anchors.join('\n')) props.onChange(next);
-  };
-  const add = () => { setDraft(''); setEditing(props.anchors.length); };
-  return (
-    <div className="flex flex-col gap-1">
-      <span className="text-[11.5px] text-muted-foreground">Anchor visual (fakta yang bisa dilihat)</span>
-      <ul aria-label={`Anchor ${props.owner}`} className="flex flex-wrap items-center gap-1">
-        {props.anchors.map((anchor, i) => (
-          <li key={`${anchor}-${i}`} className="flex h-6 items-center gap-0.5 rounded-md bg-muted pr-0.5 pl-2 text-[12px]">
-            {editing === i ? (
-              <input autoFocus aria-label={`Anchor ${i + 1}`} placeholder="mis. kalung kulit merah pudar" value={draft} maxLength={160}
-                onChange={e => setDraft(e.target.value)} onKeyDown={e => {
-                  if (e.key === 'Enter') { e.preventDefault(); commit(); }
-                  if (e.key === 'Escape') { e.preventDefault(); setEditing(undefined); }
-                }} onBlur={commit} className={`${inputClass} h-5.5 w-44 px-1 text-[12px]`} />
-            ) : (
-              <>
-                <button type="button" aria-label={`Ubah anchor ${i + 1}`} onClick={() => start(i)}
-                  className="max-w-56 truncate outline-none hover:underline focus-visible:underline">{anchor}</button>
-                <Button size="icon-xs" variant="ghost" aria-label={`Hapus anchor ${i + 1}`}
-                  onClick={() => props.onChange(props.anchors.filter((_, j) => j !== i))}><X /></Button>
-              </>
-            )}
-          </li>
-        ))}
-        {editing === props.anchors.length && (
-          <li className="flex h-6 items-center">
-            <input autoFocus aria-label={`Anchor ${props.anchors.length + 1}`} placeholder="mis. tinggi 160 cm, rambut kepang"
-              value={draft} maxLength={160} onChange={e => setDraft(e.target.value)}
-              onKeyDown={e => {
-                if (e.key === 'Enter') { e.preventDefault(); commit(); }
-                if (e.key === 'Escape') { e.preventDefault(); setEditing(undefined); }
-              }} onBlur={commit} className={`${inputClass} h-5.5 w-52 px-1 text-[12px]`} />
-          </li>
-        )}
-        {props.anchors.length === 0 && editing === undefined && (
-          <li className="text-[12px] text-muted-foreground italic">Belum ada anchor — tambahkan satu ciri yang bisa dilihat.</li>
-        )}
-        <li>
-          <Button size="icon-xs" variant="ghost" aria-label={`Tambah anchor ${props.owner}`} onClick={add}><Plus /></Button>
-        </li>
-      </ul>
-    </div>
-  );
-}
-
 const moved = (bible: StoryBible, patch: Partial<StoryBible>): StoryBible => ({ ...bible, ...patch });
+
+type Raw = Record<string, unknown>;
+/**
+ * The stored bible with this tab's fields written over it: story, structure and scene goals. Characters,
+ * locations, rules and unknown keys are kept as stored, and each scene card keeps its location/states.
+ */
+export function mergeBible(stored: unknown, next: StoryBible): Raw {
+  if (!stored || typeof stored !== 'object') return next as unknown as Raw;
+  const raw = stored as Raw;
+  const scenes = Array.isArray(raw.scenes) ? (raw.scenes as Raw[]) : [];
+  return {
+    ...raw,
+    logline: next.logline, theme: next.theme, tone: next.tone, audience: next.audience, structure: next.structure,
+    scenes: next.scenes.map(s => ({ ...(scenes.find(c => c?.id === s.id) ?? {}), id: s.id, title: s.title, goal: s.goal }))
+  };
+}
 
 export function BibleTab() {
   const p = useProject();
   const { board } = p;
-  // Initialised once: this tab is the only editor of `bible`, and a refused save must keep the text.
-  const [bible, setBible] = useState<StoryBible | undefined>(() => readBible(board?.bible));
+  // The text of a save that was refused stays on screen until the board changes for another reason.
+  const [held, setHeld] = useState<{ from: unknown; bible: StoryBible }>();
 
   if (!board) {
     return (
@@ -146,13 +108,10 @@ export function BibleTab() {
     );
   }
 
+  const bible = held && held.from === board.bible ? held.bible : readBible(board.bible);
   const commit = (next: StoryBible) => {
-    setBible(next);
-    void p.save({ ...board, bible: next });
-  };
-  const characterAt = (i: number, patch: Partial<BibleCharacter>) => {
-    if (!bible) return;
-    commit(moved(bible, { characters: bible.characters.map((c, j) => (j === i ? { ...c, ...patch } : c)) }));
+    setHeld({ from: board.bible, bible: next });
+    void p.save({ ...board, bible: mergeBible(board.bible, next) });
   };
 
   if (!bible) {
@@ -223,26 +182,14 @@ export function BibleTab() {
       </div>
 
       <Section id="bible-cast" title="Karakter" hint="Anchor = fakta visual yang menjaga wajah dan kostum sama di semua shot.">
-        {bible.characters.length === 0 ? (
-          <p className="text-[12.5px] text-muted-foreground">Belum ada karakter. Tambahkan karakter di tab Breakdown dulu, lalu buka bible ini lagi.</p>
-        ) : (
-          <ul className="flex flex-col">
-            {bible.characters.map((c, i) => (
-              <li key={c.token} aria-label={c.name} className="flex flex-col gap-1.5 border-b border-border/60 py-2 last:border-b-0">
-                <div className="flex items-center gap-2">
-                  <b className="text-[13px] font-medium">{c.name}</b>
-                  <span className="text-[11px] text-muted-foreground">{c.token}</span>
-                </div>
-                <Anchors owner={c.name} anchors={c.anchors} onChange={anchors => characterAt(i, { anchors })} />
-                <div className="grid gap-1.5 sm:grid-cols-3">
-                  <Inline label="Want" value={c.want} placeholder="yang ia kejar" onSave={want => characterAt(i, { want })} />
-                  <Inline label="Need" value={c.need} placeholder="yang ia butuhkan" onSave={need => characterAt(i, { need })} />
-                  <Inline label="Arc" value={c.arc} placeholder="dari … jadi …" onSave={arc => characterAt(i, { arc })} />
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
+        <div className="flex flex-wrap items-center gap-2">
+          <p className="min-w-0 flex-1 text-[12.5px] text-muted-foreground">
+            {bible.characters.length
+              ? `${bible.characters.length} karakter (${bible.characters.map(c => c.name).join(', ')}). Anchor, want/need/arc, sheet dan referensi diatur di Breakdown.`
+              : 'Belum ada karakter. Tambahkan di Breakdown — anchor, want/need/arc, sheet dan referensi diatur di sana.'}
+          </p>
+          <Link to="?tab=breakdown" replace className={buttonVariants({ size: 'sm', variant: 'glass' })}>Kelola karakter di Breakdown <ArrowRight /></Link>
+        </div>
       </Section>
 
       <Section id="bible-scenes" title="Tujuan scene" hint="Tiap scene punya satu tujuan cerita; shot di dalamnya hanya alat mencapainya.">

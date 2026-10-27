@@ -7,7 +7,9 @@ import type { ShotState, Story, StoryboardShot, TakeState } from '../stories/sto
 
 export type Location = { name: string; look: string };
 export type Scene = { id: string; title: string; summary?: string; location?: string; shots: string[] };
-export type Shot = StoryboardShot & { transition?: string };
+/** Bible boards: what the shot must do; the server compiles the prompt from it (framing/move = catalog ids). */
+export type ShotIntent = { subject: string; action: string; startState: string; endState: string; emotion?: string; framing?: string; move?: string; [key: string]: unknown };
+export type Shot = StoryboardShot & { transition?: string; intent?: ShotIntent; startFrame?: string };
 export type CharacterSpec = string | { name: string; look: string };
 export type Board = {
   title: string;
@@ -32,6 +34,13 @@ export const SECONDS_PER_SHOT = 6;
 export function fmtDuration(seconds: number): string {
   const s = Math.round(seconds);
   return s < 60 ? `${s} dtk` : `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')} mnt`;
+}
+
+/** Intent skeleton of a new bible shot: the first character as subject, the rest for the user (spec goal 4). */
+export function intentSkeleton(b: Board): ShotIntent {
+  const cards = (b.bible as { characters?: Array<{ token?: unknown }> } | undefined)?.characters;
+  const first = Array.isArray(cards) ? cards.find(c => typeof c?.token === 'string')?.token as string | undefined : undefined;
+  return { subject: first ?? Object.keys(b.characters ?? {})[0] ?? '', action: '', startState: '', endState: '' };
 }
 
 const clone = (b: Board): Board => ({ ...b, shots: b.shots.map(s => ({ ...s })), scenes: (b.scenes ?? []).map(s => ({ ...s, shots: [...s.shots] })) });
@@ -123,12 +132,13 @@ export function splitSceneAfter(input: Board, shotId: string, title: string): Bo
   return normalizeScenes(b);
 }
 
-export function addShot(input: Board, sceneId: string, afterShotId?: string): Board {
+/** A new shot; `init` overrides the placeholder (bible boards pass an intent skeleton so it is compiled, not prose). */
+export function addShot(input: Board, sceneId: string, afterShotId?: string, init: Partial<Shot> = {}): Board {
   const b = normalizeScenes(input);
   const scene = b.scenes!.find(s => s.id === sceneId);
   if (!scene) return b;
   const id = uniqueId(b.shots.map(s => s.id), `shot-${b.shots.length + 1}`);
-  b.shots.push({ id, prompt: 'Medium shot, the camera stays still. ', narration: 'Tulis narasi singkat di sini.' });
+  b.shots.push({ id, prompt: 'Medium shot, the camera stays still. ', narration: 'Tulis narasi singkat di sini.', ...init });
   const at = afterShotId ? scene.shots.indexOf(afterShotId) + 1 : scene.shots.length;
   scene.shots.splice(at > 0 ? at : scene.shots.length, 0, id);
   return normalizeScenes(b);

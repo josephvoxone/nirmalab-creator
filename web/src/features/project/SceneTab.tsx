@@ -15,7 +15,7 @@ import {
 import { useSession } from '../../lib/session.js';
 import { useCatalog } from '../stories/catalog.js';
 import { STATUS_LABEL, isActive, storiesApi } from '../stories/storiesClient.js';
-import { addScene, addShot, duplicateShot, moveScene, moveShot, removeScene, removeShot, sceneOf, splitSceneAfter, type Board } from './model.js';
+import { addScene, addShot, duplicateShot, intentSkeleton, moveScene, moveShot, removeScene, removeShot, sceneOf, splitSceneAfter, type Board } from './model.js';
 import { SceneBoard, type SceneActions } from './SceneBoard.js';
 import { dragEndBoard, parseDragId } from './SceneHelpers.js';
 import { SceneList } from './SceneList.js';
@@ -67,7 +67,8 @@ export function SceneTab() {
     move: (id, sceneId, to) => save(moveShot(board, id, sceneId, to)),
     remove: id => setDoomed({ kind: 'shot', id }),
     addShot: () => {
-      const next = addShot(board, scene.id);
+      // Bible boards: a new shot starts as an intent skeleton, so its prompt is compiled from the bible.
+      const next = addShot(board, scene.id, undefined, board.bible ? { intent: intentSkeleton(board) } : {});
       const id = newId(board.shots.map(s => s.id), next.shots.map(s => s.id));
       save(next);
       if (id) openShot(id);

@@ -90,9 +90,14 @@ function Title(props: { p: Project }) {
 }
 
 function Banners(props: { p: Project }) {
-  const { error, budget, stale, story } = props.p;
+  const { error, budget, stale, story, notice } = props.p;
   return (
     <>
+      {notice && (
+        <p role="status" className="flex items-center gap-1.5 rounded-md bg-muted px-3 py-2 text-[12.5px]">
+          <RefreshCw aria-hidden="true" className="size-3.5 text-muted-foreground" /> {notice}
+        </p>
+      )}
       {budget && (
         <div role="alert" className="flex flex-wrap items-center gap-2 rounded-md bg-(--brand-muted) px-3 py-2 text-[12.5px]">
           <span className="min-w-0 flex-1">Kredit Flow tidak cukup: {budget.message}</span>

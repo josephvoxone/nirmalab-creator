@@ -29,6 +29,44 @@ export const BOARD: Board = normalizeScenes({
 
 const take = (status: string, extra: Record<string, unknown> = {}) => ({ status, attempts: 0, ...extra });
 
+/** The bible of BOARD: two characters with anchors, both locations, a goal per scene. */
+export const BIBLE = {
+  logline: 'Kucing oranye menunggu pemiliknya pulang.', theme: 'kesetiaan', tone: 'hangat', audience: 'umum',
+  structure: [{ act: 'hook', goal: 'Jingga sendirian' }, { act: 'setup', goal: 'menunggu' }, { act: 'turn', goal: 'hujan' }, { act: 'payoff', goal: 'Bima pulang' }],
+  characters: [
+    { token: 'JINGGA', name: 'Jingga', anchors: ['bulu oranye belang', 'kalung kulit merah pudar'], want: 'menunggu pemiliknya', need: 'berani pergi', arc: 'dari diam jadi bergerak' },
+    { token: 'BIMA', name: 'Bima', anchors: ['seragam sekolah biru'], want: 'pulang', need: 'dimaafkan', arc: 'dari ragu jadi yakin' }
+  ],
+  locations: [
+    { key: 'PAGAR', name: 'Pagar rumah', lookdev: 'a weathered wooden gate in a quiet village at dusk' },
+    { key: 'JALAN', name: 'Jalan desa', lookdev: 'a dusty village road lined with banana trees' }
+  ],
+  scenes: [{ id: 'menunggu', title: 'Menunggu', goal: 'Kesetiaan Jingga', location: 'PAGAR' }, { id: 'pulang', title: 'Pulang', goal: 'Bima kembali', location: 'JALAN' }]
+};
+
+/** BOARD with a bible: shots 01 and 03 carry an intent, 00 and 02 are still prose. */
+export function bibleBoard(): Board {
+  return normalizeScenes({
+    ...BOARD,
+    bible: BIBLE,
+    shots: BOARD.shots.map(s => {
+      if (s.id === '01-pagar') return { ...s, intent: { subject: 'JINGGA', action: 'sits by the gate', startState: 'tail curled around the paws', endState: 'ears up toward the road', emotion: 'sabar', framing: 'medium', move: 'static' } };
+      if (s.id === '03-peluk') return { ...s, intent: { subject: 'BIMA', action: 'hugs JINGGA', startState: 'arms open', endState: 'cat held close', framing: 'close-up' } };
+      return s;
+    })
+  });
+}
+
+/** compile-shot like the server: prompts from the intent, a mandatory-slot issue for each empty slot. */
+export const compileRoute: ExtraRoute = (call, json) => {
+  if (!call.url.endsWith('/compile-shot')) return undefined;
+  const shot = call.body?.shot as { id: string; intent?: Record<string, string> };
+  const i = shot.intent ?? {};
+  const issues = ['subject', 'action', 'startState', 'endState'].filter(k => !i[k]?.trim()).map(k => `shot ${shot.id}: mandatory slot ${k} is empty`);
+  if (issues.length) return json(200, { imagePrompt: '', videoPrompt: '', issues, warnings: [] });
+  return json(200, { imagePrompt: `Keyframe: ${i.subject} ${i.startState}.`, videoPrompt: `${i.framing ?? 'medium'} · ${i.subject} ${i.action}, ${i.startState} → ${i.endState}.`, issues: [], warnings: [] });
+};
+
 export function storyFor(board: Board, frames: string[] = [], clips: string[] = [], over: Partial<Story> = {}): Story {
   return {
     id: ID, title: board.title, status: 'review', mode: 'konsisten', createdAtMs: 1, updatedAtMs: 2, events: [{ atMs: 2, message: 'Keyframe siap untuk direview' }],
@@ -38,9 +76,15 @@ export function storyFor(board: Board, frames: string[] = [], clips: string[] = 
   } as Story;
 }
 
-export type Call = { method: string; url: string; body?: Record<string, unknown> };
+export type Call = { method: string; url: string; body?: Record<string, unknown>; raw?: unknown; headers?: Record<string, string> };
 
-export function fakeProjectApi(opts: { board?: Board; story?: Story; fail?: Partial<Record<'get' | 'put' | 'render' | 'prepare' | 'assemble', { status: number; message: string; code?: string }>> } = {}) {
+/** A route the test answers itself (compile-shot, breakdown, uploads…); `undefined` falls through to the fake. */
+export type ExtraRoute = (call: Call, json: (status: number, body: unknown) => Response) => Response | Promise<Response | undefined> | undefined;
+
+export function fakeProjectApi(opts: {
+  board?: Board; story?: Story; fail?: Partial<Record<'get' | 'put' | 'render' | 'prepare' | 'assemble', { status: number; message: string; code?: string }>>;
+  extra?: ExtraRoute;
+} = {}) {
   let board = opts.board ?? BOARD;
   let story = opts.story ?? storyFor(board);
   const calls: Call[] = [];
@@ -51,13 +95,21 @@ export function fakeProjectApi(opts: { board?: Board; story?: Story; fail?: Part
   };
   const fetchImpl = vi.fn(async (url: string, init?: RequestInit) => {
     const method = init?.method ?? 'GET';
-    const body = init?.body ? JSON.parse(String(init.body)) : undefined;
-    calls.push({ method, url, body });
+    const body = typeof init?.body === 'string' ? JSON.parse(init.body) : undefined;
+    const call: Call = { method, url, body, raw: init?.body, headers: init?.headers as Record<string, string> | undefined };
+    calls.push(call);
+    const own = await opts.extra?.(call, json);
+    if (own) return own;
     if (url === '/api/stories/catalog') return json(200, { catalog: CATALOG, covers: {} });
     if (url === '/api/stories') return json(200, { stories: [story] });
     if (url === `/api/stories/${ID}` && method === 'GET') return failWith('get') ?? json(200, { story, storyboard: board });
     if (url === `/api/stories/${ID}` && method === 'PUT') {
       const f = failWith('put'); if (f) return f;
+      // Revisions like the server: a client that sends the rev it read gets 409 STALE on a mismatch.
+      if (body.rev !== undefined && story.rev !== undefined && body.rev !== story.rev) {
+        return json(409, { error: { code: 'STALE', message: 'Proyek baru diubah di tempat lain — muat ulang.' } });
+      }
+      if (story.rev !== undefined) story = { ...story, rev: story.rev + 1 };
       board = normalizeScenes(body.storyboard);
       const old = new Map(story.shots.map(s => [s.id, s]));
       const wasOrder = story.shots.map(s => s.id).join();
