@@ -4,6 +4,7 @@
  */
 import type { Story } from '../stories/storiesClient.js';
 import { stageOf, type Board } from './model.js';
+import { elapsedLabel } from './SceneHelpers.js';
 
 export type NextStep =
   | { kind: 'working'; label: string }
@@ -16,7 +17,14 @@ const WORKING: Record<string, string> = { casting: 'Membuat karakter', framing: 
 export function nextStep(story: Story, board: Board): NextStep {
   const done = story.shots.filter(s => s.status === 'done').length;
   if (['casting', 'framing', 'rendering', 'assembling'].includes(story.status)) {
-    return { kind: 'working', label: story.status === 'rendering' ? `Merender ${done}/${story.shots.length}` : WORKING[story.status]! };
+    if (story.status !== 'rendering') return { kind: 'working', label: WORKING[story.status]! };
+    // "Merender 1/3 · 4 mnt" — the clip counter alone looks frozen on a long take.
+    const running = story.shots.filter(s => s.status === 'queued');
+    const started = running.map(s => s.jobStartedAtMs).filter((ms): ms is number => typeof ms === 'number');
+    const span = started.length ? elapsedLabel(Date.now() - Math.min(...started)) : '';
+    const waiting = running.every(s => s.jobPhase === 'queued');
+    const head = waiting ? `Menunggu bridge ${done}/${story.shots.length}` : `Merender ${done}/${story.shots.length}`;
+    return { kind: 'working', label: span && span !== 'baru mulai' ? `${head} · ${span}` : head };
   }
   if (story.status === 'failed') return { kind: 'retry', label: 'Ulangi yang gagal' };
   if (!board.shots.length) return { kind: 'none', label: 'Tambah shot dulu' };

@@ -75,6 +75,11 @@ export type ShotState = {
   attempts: number;
   jobId?: string;
   promptHash?: string;
+  /** Live phase of `jobId` from the flow queue: `queued` (waiting for the bridge) or `running`. */
+  jobPhase?: 'queued' | 'running';
+  /** When the flow queue picked the job up — the UI turns this into "merender 3 mnt". */
+  jobStartedAtMs?: number;
+  /** Render cost/time hint: how many times this shot was submitted. */
   durationSec?: number;
   lastError?: string;
   error?: string;
@@ -719,6 +724,10 @@ export class StoryService {
         if ((await this.rejectTake(state, 'Job Flow hilang')) === 'requeue') await this.queueShot(record, board, state.id);
         changed = true;
         continue;
+      }
+      if (job.status === 'queued' || job.status === 'running') {
+        state.jobPhase = job.status;
+        state.jobStartedAtMs = job.startedAtMs ?? job.createdAtMs;
       }
       if (job.status === 'failed') {
         if ((await this.rejectTake(state, job.error ?? 'Flow gagal')) === 'requeue') await this.queueShot(record, board, state.id);

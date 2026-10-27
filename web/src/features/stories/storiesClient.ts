@@ -16,6 +16,10 @@ export type ShotAudit = {
 };
 export type ShotState = {
   id: string; frame?: TakeState; status: 'pending' | 'queued' | 'done' | 'failed'; attempts: number; jobId?: string; lastError?: string; error?: string; durationSec?: number;
+  /** Live phase of `jobId` in the flow queue: `queued` = bridge belum ambil, `running` = sedang dirender. */
+  jobPhase?: 'queued' | 'running';
+  /** Kapan antrean Flow mengambil job ini (ms) — dipakai untuk menulis "merender 3 mnt". */
+  jobStartedAtMs?: number;
   audit?: ShotAudit;
   /** The shot must be repaired or approved before the video is assembled. */
   needsReview?: boolean;

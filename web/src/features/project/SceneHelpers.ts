@@ -82,11 +82,30 @@ export const TONE_TEXT: Record<Tone, string> = {
   success: 'text-(--success)', brand: 'text-(--brand)', working: 'text-foreground', danger: 'text-destructive', muted: 'text-muted-foreground'
 };
 
-/** One status per shot card: the clip wins over the keyframe once it has started. */
-export function shotStatus(story: Story, shotId: string): { label: string; tone: Tone } {
+/** "baru mulai" / "3 mnt" / "1 j 12 mnt" — how long a render has been running, never a fake %. */
+export function elapsedLabel(ms: number): string {
+  if (!Number.isFinite(ms) || ms <= 0) return 'baru mulai';
+  const mins = Math.floor(ms / 60_000);
+  if (mins < 1) return 'baru mulai';
+  if (mins < 60) return `${mins} mnt`;
+  const hours = Math.floor(mins / 60);
+  return `${hours} j ${mins % 60} mnt`;
+}
+
+/**
+ * One status per shot card: the clip wins over the keyframe once it has started.
+ * A queued shot says whether the bridge has picked it up yet (`jobPhase`) and for how long,
+ * because "Merender" alone cannot tell a healthy 2-minute render from a stuck one.
+ */
+export function shotStatus(story: Story, shotId: string, now = Date.now()): { label: string; tone: Tone } {
   const s = story.shots.find(x => x.id === shotId);
   if (s?.status === 'done') return { label: 'Klip siap', tone: 'success' };
-  if (s?.status === 'queued') return { label: 'Merender', tone: 'working' };
+  if (s?.status === 'queued') {
+    const span = s.jobStartedAtMs ? elapsedLabel(now - s.jobStartedAtMs) : '';
+    if (s.jobPhase === 'running') return { label: span ? `Merender · ${span}` : 'Merender', tone: 'working' };
+    if (s.jobPhase === 'queued') return { label: 'Menunggu bridge', tone: 'working' };
+    return { label: 'Merender', tone: 'working' };
+  }
   if (s?.status === 'failed') return { label: 'Render gagal', tone: 'danger' };
   const f = s?.frame;
   if (f?.status === 'queued') return { label: 'Menggambar keyframe', tone: 'working' };

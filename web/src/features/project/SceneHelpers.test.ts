@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { castIn, castInText, dragEndBoard, dragId, renderCost, sceneTone, shotStatus, snippet, wordCount } from './SceneHelpers.js';
+import { castIn, castInText, dragEndBoard, dragId, elapsedLabel, renderCost, sceneTone, shotStatus, snippet, wordCount } from './SceneHelpers.js';
 import { sceneProgress } from './model.js';
 import { BOARD, storyFor } from './testkit.js';
 
@@ -67,5 +67,16 @@ describe('scene helpers', () => {
     expect(tone(storyFor(BOARD), 'menunggu')).toBe('Keyframe siap');
     expect(tone(storyFor(BOARD, ['pending', 'pending']), 'menunggu')).toBe('Belum mulai');
     expect(sceneTone(sceneProgress(storyFor(BOARD), { ...BOARD, scenes: [{ id: 'kosong', title: 'K', shots: [] }] }, 'kosong')).label).toBe('Belum ada shot');
+  });
+
+  it('says whether the bridge picked the shot up and for how long it has been rendering', () => {
+    const now = 1_800_000_000_000;
+    const shot = (extra: Record<string, unknown>) => shotStatus(storyFor(BOARD, [], [], { mode: 'cepat', shots: [{ id: '00-pembuka', status: 'queued', attempts: 0, ...extra }] }), '00-pembuka', now).label;
+    expect(shot({ jobPhase: 'queued' })).toBe('Menunggu bridge');
+    expect(shot({ jobPhase: 'running', jobStartedAtMs: now - 30_000 })).toBe('Merender · baru mulai');
+    expect(shot({ jobPhase: 'running', jobStartedAtMs: now - 3 * 60_000 })).toBe('Merender · 3 mnt');
+    expect(shot({ jobPhase: 'running', jobStartedAtMs: now - 72 * 60_000 })).toBe('Merender · 1 j 12 mnt');
+    expect(shot({})).toBe('Merender');
+    expect([elapsedLabel(0), elapsedLabel(-5), elapsedLabel(59_000), elapsedLabel(60_000), elapsedLabel(3_600_000)]).toEqual(['baru mulai', 'baru mulai', 'baru mulai', '1 mnt', '1 j 0 mnt']);
   });
 });
