@@ -11,7 +11,7 @@ import { ProjectProvider, useProjectState } from './useProject.js';
 type Api = ReturnType<typeof fakeProjectApi>;
 const puts = (api: Api) => api.calls.filter(c => c.method === 'PUT');
 const gets = (api: Api) => api.calls.filter(c => c.method === 'GET' && c.url === `/api/stories/${ID}`);
-const BANNER = 'Proyek baru diubah asisten — dimuat ulang';
+const BANNER = 'Proyek baru diubah di tempat lain — dimuat ulang';
 
 /** What the assistant does between the tab's read and its save: a new revision with other content. */
 function assistantEdits(api: Api, title = 'Judul dari asisten') {

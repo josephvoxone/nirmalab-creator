@@ -12,7 +12,7 @@ import { normalizeScenes, type Board } from './model.js';
 
 export type RenderScope = { scene?: string; shot?: string };
 
-export const STALE_NOTICE = 'Proyek baru diubah asisten — dimuat ulang';
+export const STALE_NOTICE = 'Proyek baru diubah di tempat lain — dimuat ulang';
 export const STALE_NOTICE_MS = 6000;
 
 export type Project = {

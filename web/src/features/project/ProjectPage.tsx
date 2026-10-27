@@ -15,6 +15,7 @@ import { BibleTab } from './BibleTab.js';
 import { BreakdownTab } from './BreakdownTab.js';
 import { TimelineTab } from './TimelineTab.js';
 import { ResultTab } from './ResultTab.js';
+import { useSession } from '../../lib/session.js';
 import { AssistantColumn, AssistantSheet, AssistantToggle, useAssistantDock } from '../assistant/AssistantDock.js';
 
 const TABS = [
@@ -149,6 +150,8 @@ export function ProjectPage(props: { pollMs?: number }) {
   const tab = (TABS.find(t => t.id === params.get('tab'))?.id ?? 'scene') as TabId;
   const choose = (t: TabId) => setParams(prev => { const n = new URLSearchParams(prev); n.set('tab', t); return n; }, { replace: true });
   const dock = useAssistantDock();
+  // The assistant (chat, MCP, uploads) is admin-only on the server: members get no panel at all.
+  const assistant = useSession().user.isAdmin;
 
   if (p.loadError && !p.story) {
     const missing = p.loadError instanceof ApiError && p.loadError.status === 404;
@@ -173,7 +176,7 @@ export function ProjectPage(props: { pollMs?: number }) {
   }
 
   const counts: Partial<Record<TabId, number>> = { scene: p.board.scenes?.length ?? 1 };
-  const columnShown = dock.wide && dock.open;
+  const columnShown = assistant && dock.wide && dock.open;
   return (
     <ProjectProvider value={p}>
       {/* With the assistant column beside them the tabs keep about the same ~1100 px (the shell's
@@ -186,7 +189,7 @@ export function ProjectPage(props: { pollMs?: number }) {
               {p.board.logline && <p className="text-[12.5px] text-muted-foreground">{p.board.logline}</p>}
             </div>
             <PrimaryAction p={p} />
-            <AssistantToggle dock={dock} />
+            {assistant && <AssistantToggle dock={dock} />}
           </div>
           <div className="flex flex-wrap items-center gap-3 border-b pb-2">
             <StageBar p={p} />
@@ -211,9 +214,9 @@ export function ProjectPage(props: { pollMs?: number }) {
             {tab === 'aktivitas' && <Activity p={p} />}
           </div>
         </div>
-        <AssistantColumn dock={dock} story={p.story} board={p.board} onChanged={p.reload} />
+        {assistant && <AssistantColumn dock={dock} story={p.story} board={p.board} onChanged={p.reload} />}
       </div>
-      <AssistantSheet dock={dock} story={p.story} board={p.board} onChanged={p.reload} />
+      {assistant && <AssistantSheet dock={dock} story={p.story} board={p.board} onChanged={p.reload} />}
     </ProjectProvider>
   );
 }

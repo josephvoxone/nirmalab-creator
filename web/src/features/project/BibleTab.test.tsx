@@ -154,7 +154,7 @@ describe('Bible tab', () => {
     const theme = within(story).getByRole('textbox', { name: /^tema$/i });
     await userEvent.clear(theme);
     await userEvent.type(theme, 'Kesetiaan yang sabar{Enter}');
-    expect(await screen.findByText('Proyek baru diubah asisten — dimuat ulang')).toBeInTheDocument();
+    expect(await screen.findByText('Proyek baru diubah di tempat lain — dimuat ulang')).toBeInTheDocument();
     await waitFor(() => expect(within(story).getByText('Logline dari asisten')).toBeInTheDocument());
     // Still there after the fresh board arrived, with a note.
     expect(within(story).getByRole('textbox', { name: /^tema$/i })).toHaveValue('Kesetiaan yang sabar');

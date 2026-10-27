@@ -42,6 +42,18 @@ describe('assistant on the project page', () => {
     expect(storage.store.getItem(OPEN_KEY)).toBe('1');
   });
 
+  it('members (not admin) get no assistant: no column, no button, no request to the admin-only chat', async () => {
+    const media = mockMatchMedia(() => true);
+    const storage = memoryStorage();
+    restore = () => { media(); storage.restore(); };
+    const fake = api();
+    mountProject(<ProjectPage pollMs={60_000} />, fake.fetchImpl, { isAdmin: false });
+    expect(await screen.findByRole('tabpanel')).toBeInTheDocument();
+    expect(screen.queryByRole('complementary', { name: 'Kolom asisten' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /asisten/i })).toBeNull();
+    expect(fake.calls.some(c => c.url.includes('/assistant'))).toBe(false);
+  });
+
   it('a blocked localStorage still lets the column open and close', async () => {
     const media = mockMatchMedia(() => true);
     const storage = memoryStorage({ blocked: true });
