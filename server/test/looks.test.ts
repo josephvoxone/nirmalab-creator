@@ -9,7 +9,7 @@ const ids = <T extends { id: string }>(xs: T[]) => xs.map(x => x.id);
 
 const FAMILY_IDS = ['film-real', 'painterly', 'cel-anime', 'clay', 'docu', 'noir'];
 // Every variant the picker offers; `clay` is the clay base (claymation) and `docu` the docu one.
-const NAMED_VARIANTS = ['storybook', 'papercut', 'wayang', 'comic', 'anime-2d', 'pixar-3d', 'lowpoly', 'clay', 'docu', 'cinematic-drama', 'noir'];
+const NAMED_VARIANTS = ['storybook', 'papercut', 'wayang', 'alkitab', 'comic', 'anime-2d', 'pixar-3d', 'lowpoly', 'clay', 'docu', 'cinematic-drama', 'noir'];
 
 describe('looks catalog', () => {
   it('is complete enough to pick from like a studio', () => {

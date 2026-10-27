@@ -51,7 +51,7 @@ describe('six look families', () => {
   });
 
   it('keeps the named variants of spec §9.1, every one resolvable to its family', () => {
-    expect(byId('painterly').variants.map(v => v.id)).toEqual(['storybook', 'papercut', 'wayang']);
+    expect(byId('painterly').variants.map(v => v.id)).toEqual(['storybook', 'papercut', 'wayang', 'alkitab']);
     expect(byId('cel-anime').variants.map(v => v.id)).toEqual(['comic', 'anime-2d']);
     expect(byId('clay').variants.map(v => v.id)).toEqual(['pixar-3d', 'lowpoly']);
     expect(byId('film-real').variants.map(v => v.id)).toEqual(['docu', 'cinematic-drama']);
@@ -73,6 +73,17 @@ describe('six look families', () => {
         else expect(look).toBe(family);
       }
     }
+  });
+
+  it('a variant may pin its own composition (alkitab: a full-bleed page with fixed headroom); the others keep the family composition byte for byte', () => {
+    const alkitab = byId('painterly:alkitab');
+    expect(alkitab.label).toBe('Alkitab bergambar');
+    expect(alkitab.styleSentence).toContain('a full-bleed painting that fills the frame edge to edge with no blank paper border');
+    expect(alkitab.styleSentence).not.toContain('open wash of plain paper');
+    expect(alkitab.composition.headroom).toBe('the same clear headroom above every head');
+    // Existing storybook boards: their style sentence (part of every frame/clip hash) is unchanged.
+    expect(byId('painterly:storybook').styleSentence).toContain('a centred composition framing, a generous painted sky above the heads, an open wash of plain paper at the edges');
+    expect(byId('painterly:storybook').composition).toBe(byId('painterly').composition);
   });
 
   it('resolves an id collision between a family and a variant deterministically: family wins, "family:variant" is explicit', () => {

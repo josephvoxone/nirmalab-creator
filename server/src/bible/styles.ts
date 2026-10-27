@@ -23,7 +23,11 @@ export type PaletteAnchor = { name: string; hex: string; use: PaletteRole };
 export type StyleLight = { key: string; fill: string; rim: string; temp: string; bestHours: string[] };
 
 /** A named look inside a family: same grammar, its own signature. */
-export type StyleVariant = { id: string; label: string; extra: string };
+export type StyleVariant = {
+  id: string; label: string; extra: string;
+  /** Pins the variant's own framing (e.g. a full-bleed page); absent = the family composition. */
+  composition?: Partial<StyleBible['composition']>;
+};
 
 export type StyleBible = {
   id: LookId;
@@ -168,7 +172,11 @@ const DEFINITIONS: FamilyDef[] = [
     variants: [
       { id: 'storybook', label: 'Storybook', extra: 'gouache washes, soft pencil underdrawing and rounded shapes for a children book' },
       { id: 'papercut', label: 'Papercut', extra: 'layered cut-paper diorama with soft drop shadows between the layers' },
-      { id: 'wayang', label: 'Wayang', extra: 'Javanese wayang and batik ornament, flat ornate profiles and warm earthy pigment' }
+      { id: 'wayang', label: 'Wayang', extra: 'Javanese wayang and batik ornament, flat ornate profiles and warm earthy pigment' },
+      // Epic Bible stories: one fixed full-bleed page, so every frame is framed the same way
+      // (the family's "open wash of paper" margin wanders from shot to shot).
+      { id: 'alkitab', label: 'Alkitab bergambar', extra: 'rich gouache with oil-glaze depth like a classic illustrated Bible, luminous golden light, detailed painted backgrounds and an epic sense of scale',
+        composition: { rule: 'thirds', headroom: 'the same clear headroom above every head', negativeSpace: 'a full-bleed painting that fills the frame edge to edge with no blank paper border' } }
     ]
   },
   {
@@ -328,7 +336,7 @@ export function lookById(id: string): StyleBible | undefined {
     if (family && variantId === family.id) return family;
     const variant = family?.variants.find(v => v.id === variantId);
     if (!family || !variant) return undefined;
-    const look: StyleBible = { ...family, variant: variant.id, label: variant.label };
+    const look: StyleBible = { ...family, variant: variant.id, label: variant.label, ...(variant.composition ? { composition: { ...family.composition, ...variant.composition } } : {}) };
     return { ...look, styleSentence: compileStyleSentence(look) };
   }
   const family = familyOf(raw);
@@ -349,6 +357,7 @@ export const LEGACY_STYLE_MAP: Record<string, { family: LookId; variant: string 
   storybook: { family: 'painterly', variant: 'storybook' },
   papercut: { family: 'painterly', variant: 'papercut' },
   wayang: { family: 'painterly', variant: 'wayang' },
+  alkitab: { family: 'painterly', variant: 'alkitab' },
   comic: { family: 'cel-anime', variant: 'comic' },
   'anime-2d': { family: 'cel-anime', variant: 'anime-2d' },
   'pixar-3d': { family: 'clay', variant: 'pixar-3d' },
