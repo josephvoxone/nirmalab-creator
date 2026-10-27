@@ -20,6 +20,8 @@ export type TurnPending = {
   rev?: number;
   /** Set when it was run (or claimed for running); a second use is refused. */
   used?: string;
+  /** A later change in the same turn moved the board after this proposal: its confirm is refused. */
+  superseded?: boolean;
 };
 export type Turn = {
   id: string;

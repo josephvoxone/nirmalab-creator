@@ -55,8 +55,8 @@ export function settingsApi(fetchImpl: FetchLike) {
 
 /** Model teks (OpenCode Go) — mirrors server/src/llm/config.ts `TEXT_MODELS`. */
 export const TEXT_MODELS = [
-  { value: 'glm-5.3', label: 'glm-5.3', hint: 'andal untuk aksi' },
-  { value: 'glm-5.3-flash', label: 'glm-5.3-flash', hint: 'cepat' },
+  { value: 'glm-5.3-flash', label: 'glm-5.3-flash', hint: 'cepat · default' },
+  { value: 'glm-5.3', label: 'glm-5.3', hint: 'lebih teliti, lebih lambat' },
   { value: 'beam-free', label: 'beam-free', hint: 'gratis' },
   { value: 'deepseek-v4-pro', label: 'deepseek-v4-pro', hint: 'alternatif' }
 ] as const;

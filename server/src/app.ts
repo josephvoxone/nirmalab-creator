@@ -49,6 +49,8 @@ export type AppOptions = {
     /** OpenRouter worker interval; 0 disables. Default 5 s. */
     workerMs?: number;
   };
+  /** Project assistant limits (tests): whole-turn deadline and SSE heartbeat interval. */
+  assistant?: { totalMs?: number; heartbeatMs?: number };
   text?: {
     /** fetch used for OpenCode Go calls (tests inject a fake; never a real key in tests). Default: providers.fetch. */
     fetch?: typeof fetch;
@@ -181,7 +183,7 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
     textModel, price: actionPrice
   });
   // Project assistant chat (SSE), history and undo: same text model and prices as the story actions.
-  await registerAssistantRoutes(server, { userAuthStore, stories, textModel, price: actionPrice });
+  await registerAssistantRoutes(server, { userAuthStore, stories, textModel, price: actionPrice, ...(options.assistant ?? {}) });
   await registerTrendRoutes(server, { userAuthStore, dataDir: options.dataDir, stories, env });
   const reconcileMs = options.stories?.reconcileMs ?? 5000;
   if (reconcileMs > 0) {

@@ -3,7 +3,9 @@
  * - `GET  /api/stories/:id/assistant` → `{ turns, configured }`
  * - `POST /api/stories/:id/assistant` `{ message, attachments?, confirm?, rev? }` → text/event-stream
  * - `POST /api/stories/:id/assistant/undo/:undoId` `{ rev? }` → `{ ok, rev, attention }` or 409/404
- * One turn in flight per story: a second POST (or an undo) meanwhile answers 409.
+ * One assistant operation per story: a second POST, or an undo, while a turn runs answers 409 —
+ * and a POST while an undo runs too. While a turn streams, `: ping` comment lines keep proxies from
+ * closing the connection (every 15 s).
  */
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { requireAdmin } from '../auth/routes.js';
@@ -12,7 +14,7 @@ import type { TextModel } from '../llm/opencode.js';
 import { StoryError, type StoryService } from '../stories/service.js';
 import { BUSY_MESSAGE, UNDO_STALE_MESSAGE, type ActionContext } from './actions.js';
 import {
-  AssistantError, MAX_MESSAGE_CHARS, TURN_BUSY_MESSAGE, claimPending, resolveAttachments, runPending, runTurn,
+  AssistantError, HEARTBEAT_MS, MAX_MESSAGE_CHARS, TURN_BUSY_MESSAGE, confirmPending, resolveAttachments, runPending, runTurn, startHeartbeat,
   type AssistantDeps, type Emit
 } from './chat.js';
 import { listTurns, markUndone } from './history.js';
@@ -21,7 +23,13 @@ const send = (reply: FastifyReply, status: number, code: string, message: string
 
 export async function registerAssistantRoutes(
   server: FastifyInstance,
-  options: { userAuthStore: UserAuthStore; stories: StoryService; textModel?: TextModel; price?: ActionContext['price']; totalMs?: number }
+  options: {
+    userAuthStore: UserAuthStore; stories: StoryService; textModel?: TextModel; price?: ActionContext['price'];
+    /** Whole-turn limit (tests); default 90 s. */
+    totalMs?: number;
+    /** SSE keep-alive interval (tests); default 15 s. */
+    heartbeatMs?: number;
+  }
 ): Promise<void> {
   const { userAuthStore: auth, stories } = options;
   const deps: AssistantDeps = {
@@ -30,7 +38,7 @@ export async function registerAssistantRoutes(
     ...(options.price ? { price: options.price } : {}),
     ...(options.totalMs ? { totalMs: options.totalMs } : {})
   };
-  /** Stories with a turn (or a confirmed run) in flight. */
+  /** Stories with a turn, a confirmed run or an undo in flight. */
   const inFlight = new Set<string>();
 
   const exists = async (id: string) => {
@@ -58,7 +66,8 @@ export async function registerAssistantRoutes(
       let start: (emit: Emit, signal: AbortSignal) => Promise<void>;
       if (body.confirm !== undefined && body.confirm !== null) {
         if (typeof body.confirm !== 'string' || !body.confirm) return send(reply, 400, 'INVALID', 'confirm harus id persetujuan');
-        const pending = await claimPending(stories, id, body.confirm, clientRev);
+        // Claim + re-plan (409 when the cost moved) before the stream; the run is pinned to the approved rev.
+        const pending = await confirmPending(deps, { storyId: id, userId: user.id, pendingId: body.confirm, ...(clientRev !== undefined ? { clientRev } : {}) });
         start = emit => runPending(deps, { storyId: id, userId: user.id, pending }, emit);
       } else {
         const message = typeof body.message === 'string' ? body.message.trim() : '';
@@ -68,35 +77,37 @@ export async function registerAssistantRoutes(
         start = (emit, signal) => runTurn(deps, { storyId: id, userId: user.id, message, attachments, signal }, emit);
       }
 
-      // From here on the answer is a stream; errors become `error` events.
+      // From here on the answer is a stream; every failure becomes `error` + `done`, never a throw.
       streaming = true;
       reply.hijack();
       const res = reply.raw;
-      res.writeHead(200, {
-        'content-type': 'text/event-stream; charset=utf-8',
-        'cache-control': 'no-cache, no-transform',
-        connection: 'keep-alive',
-        'x-accel-buffering': 'no',
-        'x-content-type-options': 'nosniff'
-      });
+      const write = (chunk: string) => { if (!res.writableEnded && !res.destroyed) res.write(chunk); };
+      const emit: Emit = (event, data) => write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
       const controller = new AbortController();
-      res.on('close', () => { if (!res.writableEnded) controller.abort(); });
-      const emit: Emit = (event, data) => {
-        if (!res.writableEnded && !res.destroyed) res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
-      };
+      let stopHeartbeat: () => void = () => undefined;
       try {
+        res.writeHead(200, {
+          'content-type': 'text/event-stream; charset=utf-8',
+          'cache-control': 'no-cache, no-transform',
+          connection: 'keep-alive',
+          'x-accel-buffering': 'no',
+          'x-content-type-options': 'nosniff'
+        });
+        res.on('close', () => { if (!res.writableEnded) controller.abort(); });
+        stopHeartbeat = startHeartbeat(write, options.heartbeatMs ?? HEARTBEAT_MS);
         await start(emit, controller.signal);
       } catch (error) {
         request.log.warn({ err: error }, 'assistant turn failed');
         emit('error', { message: 'Asisten gagal — coba lagi.' });
         emit('done', { rev: (await stories.get(id).catch(() => undefined))?.rev ?? 0 });
       } finally {
-        res.end();
+        stopHeartbeat();
+        if (!res.writableEnded) res.end();
       }
       return undefined;
     } catch (error) {
-      if (streaming) throw error;
-      if (error instanceof AssistantError) return send(reply, error.status, error.code, error.message);
+      // Only reached before the stream started (a hijacked reply never gets here: see above).
+      if (!streaming && error instanceof AssistantError) return send(reply, error.status, error.code, error.message);
       throw error;
     } finally {
       inFlight.delete(id);
@@ -109,17 +120,22 @@ export async function registerAssistantRoutes(
     const record = await stories.get(id).catch(() => undefined);
     if (!record) return send(reply, 404, 'NOT_FOUND', 'Story not found');
     if (inFlight.has(id)) return send(reply, 409, 'BUSY', TURN_BUSY_MESSAGE);
-    const rev = typeof request.body?.rev === 'number' ? request.body.rev : record.rev;
-    let outcome;
+    inFlight.add(id);
     try {
-      outcome = await stories.restoreSnapshot(id, undoId, rev);
-    } catch (error) {
-      if (error instanceof StoryError && error.code === 'BUSY') return send(reply, 409, 'BUSY', BUSY_MESSAGE);
-      throw error;
+      const rev = typeof request.body?.rev === 'number' ? request.body.rev : record.rev;
+      let outcome;
+      try {
+        outcome = await stories.restoreSnapshot(id, undoId, rev);
+      } catch (error) {
+        if (error instanceof StoryError && error.code === 'BUSY') return send(reply, 409, 'BUSY', BUSY_MESSAGE);
+        throw error;
+      }
+      if (outcome.result === 'stale') return send(reply, 409, 'STALE', UNDO_STALE_MESSAGE);
+      if (outcome.result === 'missing') return send(reply, 404, 'NOT_FOUND', 'Perubahan itu sudah tidak bisa dibatalkan.');
+      await markUndone(stories.storyDir(id), undoId);
+      return { ok: true, rev: (await stories.get(id))?.rev ?? rev + 1, attention: outcome.attention };
+    } finally {
+      inFlight.delete(id);
     }
-    if (outcome.result === 'stale') return send(reply, 409, 'STALE', UNDO_STALE_MESSAGE);
-    if (outcome.result === 'missing') return send(reply, 404, 'NOT_FOUND', 'Perubahan itu sudah tidak bisa dibatalkan.');
-    await markUndone(stories.storyDir(id), undoId);
-    return { ok: true, rev: (await stories.get(id))?.rev ?? rev + 1, attention: outcome.attention };
   });
 }

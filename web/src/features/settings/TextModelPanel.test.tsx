@@ -68,15 +68,20 @@ describe('Pengaturan › Provider › Model teks', () => {
 
   it('picks the model from a Choice with hints and saves it', async () => {
     const user = userEvent.setup();
-    const f = fake({ state: { configured: true, keyHint: '••••abcd', model: 'glm-5.3' } });
+    const f = fake({ state: { configured: true, keyHint: '••••abcd', model: 'glm-5.3-flash' } });
     open(f);
     await user.click(await within(region()).findByRole('combobox', { name: 'Model' }));
-    expect(await screen.findByRole('option', { name: /^glm-5\.3 ?andal untuk aksi/i })).toBeInTheDocument();
+    const flash = await screen.findByRole('option', { name: /^glm-5\.3-flash ?cepat · default/i });
+    expect(flash).toBeInTheDocument();
     expect(screen.getByRole('option', { name: /^beam-free ?gratis/i })).toBeInTheDocument();
     expect(screen.getByRole('option', { name: /^deepseek-v4-pro ?alternatif/i })).toBeInTheDocument();
-    await user.click(screen.getByRole('option', { name: /^glm-5\.3-flash ?cepat/i }));
-    await waitFor(() => expect(f.puts).toEqual([{ model: 'glm-5.3-flash' }]));
-    await waitFor(() => expect(within(region()).getByRole('combobox', { name: 'Model' })).toHaveTextContent('glm-5.3-flash'));
+    // Fast default first, then the slower, more careful one.
+    const order = screen.getAllByRole('option').map(o => o.textContent ?? '');
+    expect(order).toHaveLength(4);
+    [/^glm-5\.3-flash ?cepat · default/, /^glm-5\.3 ?lebih teliti, lebih lambat/, /^beam-free ?gratis/, /^deepseek-v4-pro ?alternatif/].forEach((re, i) => expect(order[i]).toMatch(re));
+    await user.click(screen.getByRole('option', { name: /^glm-5\.3 ?lebih teliti, lebih lambat/i }));
+    await waitFor(() => expect(f.puts).toEqual([{ model: 'glm-5.3' }]));
+    await waitFor(() => expect(within(region()).getByRole('combobox', { name: 'Model' }).textContent).toMatch(/glm-5\.3(?!-flash)/));
   });
 
   it('Tes shows the model and time, or the plain error', async () => {

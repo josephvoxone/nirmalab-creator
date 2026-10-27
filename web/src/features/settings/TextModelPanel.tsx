@@ -64,7 +64,7 @@ export function TextModelPanel() {
     <section aria-labelledby="prov-text" className="flex flex-col gap-3 border-b pb-5 last:border-b-0 last:pb-0">
       <div className="flex min-w-0 flex-col gap-0.5">
         <h2 id="prov-text" className="text-[14px] font-medium text-foreground">Model teks</h2>
-        <p className="text-[12.5px] text-muted-foreground">Dipakai asisten proyek. Langganan OpenCode Go; kalau model pilihan sibuk, otomatis pindah ke glm-5.3-flash lalu beam-free.</p>
+        <p className="text-[12.5px] text-muted-foreground">Dipakai asisten proyek. Langganan OpenCode Go; kalau model pilihan sibuk, otomatis pindah ke model berikutnya (glm-5.3-flash → glm-5.3 → beam-free).</p>
       </div>
       {loadError !== undefined && !state ? (
         <div role="alert" className="flex items-center gap-3 rounded-md bg-destructive/10 px-3 py-2 text-[12.5px] text-destructive">

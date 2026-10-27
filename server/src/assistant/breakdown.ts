@@ -8,7 +8,7 @@
 import { ShotCompileError, type ShotIntent } from '../bible/compiler.js';
 import { rulesOf } from '../bible/story.js';
 import type { ChatMessage, TextModel } from '../llm/opencode.js';
-import { CATALOG } from '../stories/looks.js';
+import { cameraId, FRAMING_IDS, MOVE_IDS } from './camera.js';
 import { bibleSceneFor, compileBoardShot, normalizeScenes, promptFromIntent, type Shot, type Storyboard } from '../stories/storyboard.js';
 import { lintCopy } from '../text/lint.js';
 
@@ -70,9 +70,6 @@ const clip = (text: string | undefined, max: number) => {
   const t = (text ?? '').replace(/\s+/g, ' ').trim();
   return t.length > max ? `${t.slice(0, max - 1)}…` : t;
 };
-
-const FRAMING_IDS = CATALOG.framings.map(f => f.id);
-const MOVE_IDS = CATALOG.moves.map(m => m.id);
 
 /** One line describing an existing shot for continuity. */
 function describe(board: Storyboard, shot: Shot, n: number): string {
@@ -168,10 +165,11 @@ function check(board: Storyboard, sceneId: string, count: number, mode: Breakdow
     const o = item as Record<string, unknown>;
     const intent: ShotIntent = { subject: str(o.subject), action: str(o.action), startState: str(o.startState), endState: str(o.endState) };
     if (str(o.emotion)) intent.emotion = str(o.emotion);
-    const framing = str(o.framing).toLowerCase();
-    const move = str(o.move).toLowerCase();
-    if (framing) { if (FRAMING_IDS.includes(framing)) intent.framing = framing; else issues.push(`${at}: framing "${framing}" is not one of ${FRAMING_IDS.join(', ')}`); }
-    if (move) { if (MOVE_IDS.includes(move)) intent.move = move; else issues.push(`${at}: move "${move}" is not one of ${MOVE_IDS.join(', ')}`); }
+    // Catalog ids only (shared validator with edit_shot/add_shot); a wrong one is fed back, never silently replaced.
+    const framing = str(o.framing);
+    const move = str(o.move);
+    if (framing) { const id = cameraId('framing', framing); if (id) intent.framing = id; else issues.push(`${at}: framing "${clip(framing, 40)}" is not one of ${FRAMING_IDS.join(', ')}`); }
+    if (move) { const id = cameraId('move', move); if (id) intent.move = id; else issues.push(`${at}: move "${clip(move, 40)}" is not one of ${MOVE_IDS.join(', ')}`); }
     const silent = o.silent === true;
     const narration = silent ? '' : str(o.narration);
     if (!silent) for (const problem of lintCopy(narration, { kind: 'narration' })) issues.push(`${at}: ${problem}`);

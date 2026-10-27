@@ -189,6 +189,11 @@ function clipTake(shot: ShotState): ShotState {
   return clip;
 }
 
+/** A spending call approved on revision `rev` runs only on that revision (checked under the story lock). */
+function checkRev(record: StoryRecord, rev: number | undefined): void {
+  if (rev !== undefined && rev !== record.rev) throw new StoryError('STALE', STALE_MESSAGE);
+}
+
 export class StoryService {
   private locks = new Map<string, Promise<unknown>>();
   private readonly root: string;
@@ -610,13 +615,15 @@ export class StoryService {
   }
 
   /** Queue clips for one shot / one scene / everything not done. Budget counts only the run. */
-  async render(id: string, options: { force?: boolean; scene?: string; shot?: string } = {}): Promise<StoryRecord> {
+  /** `rev`: only on this storyboard revision (checked under the lock; another → STALE). */
+  async render(id: string, options: { force?: boolean; scene?: string; shot?: string; rev?: number } = {}): Promise<StoryRecord> {
     return this.startRender(id, options);
   }
 
-  private async startRender(id: string, options: { force?: boolean; scene?: string; shot?: string; shots?: string[] }): Promise<StoryRecord> {
+  private async startRender(id: string, options: { force?: boolean; scene?: string; shot?: string; shots?: string[]; rev?: number }): Promise<StoryRecord> {
     return this.withLock(id, async () => {
       const record = await this.require(id);
+      checkRev(record, options.rev);
       if (record.status === 'assembling') throw new StoryError('BUSY', 'Story sedang dirakit');
       if (record.status === 'casting' || record.status === 'framing') throw new StoryError('BUSY', 'Keyframe sedang dibuat; tunggu selesai dulu');
       const board = await this.readStoryboard(id);
@@ -803,9 +810,10 @@ export class StoryService {
   }
 
   /** Rebuild final.mp4 from the current order. Needs every shot done; free (no Flow). */
-  async assemble(id: string): Promise<StoryRecord> {
+  async assemble(id: string, opts: { rev?: number } = {}): Promise<StoryRecord> {
     return this.withLock(id, async () => {
       const record = await this.require(id);
+      checkRev(record, opts.rev);
       if (BUSY_STATUSES.includes(record.status)) throw new StoryError('BUSY', 'Story sedang diproses');
       if (!record.shots.every(s => s.status === 'done')) throw new StoryError('INVALID', 'Semua shot harus selesai sebelum video dirakit');
       // Audit gate (spec §4.4): a shot under 70 or flagged for review blocks the cut until fixed or approved.
@@ -860,7 +868,7 @@ export class StoryService {
   // ------------------------------------------------------------------ konsisten: cast + keyframes
 
   /** Character sheets the run needs, then the run's keyframes. Free in Flow; ends idle (review) for the user to approve. */
-  async prepare(id: string, options: { scene?: string } = {}): Promise<StoryRecord> {
+  async prepare(id: string, options: { scene?: string; rev?: number } = {}): Promise<StoryRecord> {
     return this.startPrep(id, options);
   }
 
@@ -869,9 +877,10 @@ export class StoryService {
    * A done sheet is made again (its take goes to the archive). `opts.reference` = an upload of this
    * story (`uploads/…`) sent with this job on OpenRouter; without it the bible card's reference is used.
    */
-  async makeSheet(id: string, token: string, opts: { reference?: string } = {}): Promise<StoryRecord> {
+  async makeSheet(id: string, token: string, opts: { reference?: string; rev?: number } = {}): Promise<StoryRecord> {
     return this.withLock(id, async () => {
       const record = await this.require(id);
+      checkRev(record, opts.rev);
       if (record.mode !== 'konsisten') throw new StoryError('INVALID', 'Lembar karakter hanya untuk mode konsisten');
       if (BUSY_STATUSES.includes(record.status)) throw new StoryError('BUSY', 'Story sedang diproses; tunggu selesai atau gagal dulu');
       const board = await this.readStoryboard(id);
@@ -898,9 +907,10 @@ export class StoryService {
     return (record.cast ?? []).filter(c => tokens.has(c.token));
   }
 
-  private async startPrep(id: string, options: { scene?: string; shots?: string[] }): Promise<StoryRecord> {
+  private async startPrep(id: string, options: { scene?: string; shots?: string[]; rev?: number }): Promise<StoryRecord> {
     return this.withLock(id, async () => {
       const record = await this.require(id);
+      checkRev(record, options.rev);
       if (record.mode !== 'konsisten') throw new StoryError('INVALID', 'Keyframe hanya untuk mode konsisten');
       if (BUSY_STATUSES.includes(record.status)) throw new StoryError('BUSY', 'Story sedang diproses');
       const board = await this.readStoryboard(id);
@@ -927,9 +937,10 @@ export class StoryService {
    * the frame hash does not change); `opts.reference` (`uploads/…`) is sent as an extra image
    * reference with OpenRouter image engines.
    */
-  async redrawFrame(id: string, shotId: string, prompt?: string, opts: { note?: string; reference?: string } = {}): Promise<StoryRecord> {
+  async redrawFrame(id: string, shotId: string, prompt?: string, opts: { note?: string; reference?: string; rev?: number } = {}): Promise<StoryRecord> {
     return this.withLock(id, async () => {
       const record = await this.require(id);
+      checkRev(record, opts.rev);
       if (!['review', 'failed', 'draft', 'done'].includes(record.status)) throw new StoryError('BUSY', 'Story sedang diproses');
       const board = await this.readStoryboard(id);
       const shot = board.shots.find(s => s.id === shotId);

@@ -6,7 +6,7 @@ The film must look like one film. These rules keep characters and places the sam
 - A character is identified by its TOKEN (caps, e.g. `LARAS`) and its **anchors**: 2–4 visible facts
   (silhouette, hair, one garment with colour, one prop). Anchors are evidence, not adjectives:
   "red batik scarf, short black bob, bamboo walking stick" — not "beautiful, graceful".
-- Never change a character's anchors as a side effect of another request. Changing anchors re-draws
+- Keep a character's anchors verbatim; never change them as a side effect of another request. Changing anchors re-draws
   the character sheet and every keyframe with that character; say so and ask first.
 - Narration speaks the character's name ("Laras"), never the TOKEN.
 - In konsisten projects the character sheet is the visual truth: keyframes copy it. If a user uploads

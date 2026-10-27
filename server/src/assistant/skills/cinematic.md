@@ -20,8 +20,10 @@ what makes a shot look filmed instead of generated.
    the same thing → merge or drop one.
 5. **One camera move per shot**, using a catalog id: `static`, `push-in`, `pull-back`, `pan-left`,
    `pan-right`, `tilt-up`, `tilt-down`, `tracking`, `follow`, `truck-left`, `truck-right`,
-   `arc-left`, `arc-right`, `orbit`, `rise`, `lower`, `zoom-in`, `zoom-out`, `crash-zoom`. Prefer
-   `static` or `push-in` for emotion; save `crash-zoom` and `orbit` for one moment per film.
+   `arc-left`, `arc-right`, `orbit`, `rise`, `lower`, `zoom-in`, `zoom-out`, `crash-zoom`,
+   `dolly-zoom`, `whip-pan`, `handheld`, `rack-focus`, `pov`, `aerial-reveal`. No other ids. Prefer
+   `static` or `push-in` for emotion; save `crash-zoom`, `dolly-zoom`, `whip-pan` and `orbit` for one
+   moment per film.
 6. **Framing has a reason** (catalog ids: `extreme-wide`, `wide`, `full`, `medium`, `medium-close`,
    `close-up`, `extreme-close`, `over-shoulder`, `low-angle`, `high-angle`, `overhead`, `dutch`):
    wide to place us, medium for action, close-up for a decision or a feeling, extreme-close for the

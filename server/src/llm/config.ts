@@ -6,10 +6,14 @@ import { join } from 'node:path';
 import { readPrivateJsonFile, writePrivateJsonFile } from '../lib/private-json-file.js';
 import { ProviderInputError } from '../providers/config.js';
 
-/** Models the settings offer; the first three are the fallback chain (see `TEXT_CHAIN`). */
-export const TEXT_MODELS = ['glm-5.3', 'glm-5.3-flash', 'beam-free', 'deepseek-v4-pro'] as const;
+/**
+ * Models the settings offer; the first three are the fallback chain (see `TEXT_CHAIN`). The fast
+ * flash model leads: in a real probe glm-5.3 took 29 s for a one-shot edit and 54 s for a scene
+ * breakdown, glm-5.3-flash 5 s for the same edit at equal quality.
+ */
+export const TEXT_MODELS = ['glm-5.3-flash', 'glm-5.3', 'beam-free', 'deepseek-v4-pro'] as const;
 export type TextModelId = (typeof TEXT_MODELS)[number];
-export const DEFAULT_TEXT_MODEL: TextModelId = 'glm-5.3';
+export const DEFAULT_TEXT_MODEL: TextModelId = 'glm-5.3-flash';
 export const isTextModel = (value: unknown): value is TextModelId => typeof value === 'string' && (TEXT_MODELS as readonly string[]).includes(value);
 
 export type TextModelView = { configured: boolean; keyHint?: string; model: TextModelId };

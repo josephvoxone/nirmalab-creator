@@ -28,6 +28,7 @@ import {
   CREDITS_PER_SHOT, LOCATION_KEY, MAX_SCENES, compileBoardShot, normalizeScenes, promptFromIntent, sceneOf, shotCast,
   validateStoryboard, type Engine, type Scene, type Shot, type Storyboard
 } from '../stories/storyboard.js';
+import { cameraId, cameraIds, FRAMING_IDS, MOVE_IDS, type CameraKind } from './camera.js';
 import { BreakdownError, MAX_BREAKDOWN, MIN_BREAKDOWN, breakdownScene, defaultMode, withSceneShots, type BreakdownMode } from './breakdown.js';
 import { planReference, rangeText, resolveCharacter, resolveLocation, resolveScene, resolveShot, sceneNumber, shotNumber, type Ref } from './resolve.js';
 import { removeUpload, writePlanned, type PlannedUpload } from './uploads.js';
@@ -54,6 +55,14 @@ export type ActionContext = {
   confirmed?: boolean;
   /** OpenRouter price lookup for estimates (null/absent = unknown price). */
   price?: { usdPerClip(model: string): Promise<number | null>; usdPerImage?(model: string): Promise<number | null> };
+  /** The caller's turn ends (deadline or client gone): slow work (the breakdown model call) stops, nothing is written after. */
+  signal?: AbortSignal;
+  /**
+   * The storyboard revision the user approved a spending call on. When set, a confirmed spending
+   * call runs only on that revision: checked before running and again under the story lock by the
+   * service call that queues the jobs (anything else → STALE, nothing queued).
+   */
+  rev?: number;
 };
 
 export type ActionErrorCode = 'INVALID' | 'NOT_FOUND' | 'BUSY' | 'BUDGET' | 'STALE' | 'UNAVAILABLE' | 'FAILED';
@@ -136,22 +145,13 @@ function strings(input: ActionInput, key: string, opts: { max: number; each: num
 const shotOf = (board: Storyboard, r: Ref) => { const x = resolveShot(board, r); return 'error' in x ? bad(x.error) : x; };
 const sceneRef = (board: Storyboard, r: Ref) => { const x = resolveScene(board, r); return 'error' in x ? bad(x.error) : x; };
 
-const FRAMING_IDS = CATALOG.framings.map(f => f.id);
-const MOVE_IDS = CATALOG.moves.map(m => m.id);
 const TOKEN = /^[A-Z][A-Z0-9_]{1,20}$/;
 
-function framingId(input: ActionInput): string | undefined {
-  const v = str(input, 'framing', { max: 40 });
+/** A catalog framing/move id from the input (shared validator, see camera.ts); anything else is a plain error listing the ids. */
+function camera(input: ActionInput, kind: CameraKind): string | undefined {
+  const v = str(input, kind, { max: 40 });
   if (v === undefined) return undefined;
-  const id = v.toLowerCase();
-  return FRAMING_IDS.includes(id) ? id : bad(`framing "${clip(v, 30)}" tidak dikenal. Pilihan: ${FRAMING_IDS.join(', ')}`);
-}
-
-function moveId(input: ActionInput): string | undefined {
-  const v = str(input, 'move', { max: 40 });
-  if (v === undefined) return undefined;
-  const id = v.toLowerCase();
-  return MOVE_IDS.includes(id) ? id : bad(`move "${clip(v, 30)}" tidak dikenal. Pilihan: ${MOVE_IDS.join(', ')}`);
+  return cameraId(kind, v) ?? bad(`${kind} "${clip(v, 30)}" tidak dikenal. Pilihan: ${cameraIds(kind).join(', ')}`);
 }
 
 const uniqueId = (taken: Iterable<string>, base: string): string => {
@@ -410,8 +410,8 @@ function shotFields(input: ActionInput): ShotFields {
     if (value !== undefined) intent[key] = value;
   }
   const fields: ShotFields = { intent };
-  const framing = framingId(input); if (framing) fields.framing = framing;
-  const move = moveId(input); if (move) fields.move = move;
+  const framing = camera(input, 'framing'); if (framing) fields.framing = framing;
+  const move = camera(input, 'move'); if (move) fields.move = move;
   const narration = str(input, 'narration', { max: 200, allowEmpty: true }); if (narration !== undefined) fields.narration = narration;
   const silent = bool(input, 'silent'); if (silent !== undefined) fields.silent = silent;
   const prompt = str(input, 'prompt', { max: 2000 }); if (prompt !== undefined) fields.prompt = prompt;
@@ -470,6 +470,9 @@ const hasShotFields = (f: ShotFields) => Object.keys(f.intent).length > 0 || f.f
 
 type Plan = { label: string; estimate: Estimate; payload?: Record<string, unknown> };
 
+/** The approved revision for the service call that queues jobs (checked there under the story lock). */
+const revOf = (ctx: ActionContext): { rev?: number } => (ctx.rev !== undefined ? { rev: ctx.rev } : {});
+
 /**
  * A spending action: `plan` validates and prices (no side effects: no file, no job, no write),
  * `execute` queues. Without `ctx.confirmed === true` (set by the caller, never by model input) the
@@ -487,6 +490,7 @@ function spending(def: {
       const plan = await def.plan(ctx, storyId, input, record, board);
       if ('ok' in plan) return plan;
       if (ctx.confirmed !== true) return { ok: false, needsConfirm: true, label: plan.label, estimate: plan.estimate };
+      if (ctx.rev !== undefined && ctx.rev !== record.rev) return fail(STALE_MESSAGE, 'STALE');
       return def.execute(ctx, storyId, input, plan);
     })
   };
@@ -717,7 +721,9 @@ export const ACTIONS: Record<ActionName, Action> = {
       if (keep + (count as number) > 30) bad(`Proyek maksimal 30 shot — sekarang ${b.shots.length}.`);
       if (!ctx.model || !(await ctx.model.configured())) return fail(NO_MODEL_MESSAGE, 'UNAVAILABLE');
       if (BUSY_STATUSES.includes(record.status)) return fail(BUSY_MESSAGE, 'BUSY');
-      const shots = await breakdownScene(ctx.model, b, scene.id, count as number, brief, { mode });
+      const shots = await breakdownScene(ctx.model, b, scene.id, count as number, brief, { mode, ...(ctx.signal ? { signal: ctx.signal } : {}) });
+      // The turn ended while the model wrote: nothing is inserted after the caller gave up.
+      if (ctx.signal?.aborted) return fail('Dibatalkan — batas waktu asisten habis.', 'UNAVAILABLE');
       const ids = new Set(shots.map(s => s.id));
       return mutate(ctx, storyId, current => {
         if (current.shots.some(s => ids.has(s.id))) throw new StoryError('STALE', STALE_MESSAGE);
@@ -980,7 +986,7 @@ export const ACTIONS: Record<ActionName, Action> = {
       const { token, name, reference } = plan.payload as { token: string; name: string; reference?: RefPlan };
       await keepReference(ctx, storyId, reference);
       try {
-        const record = await ctx.stories.makeSheet(storyId, token, reference ? { reference: reference.rel } : {});
+        const record = await ctx.stories.makeSheet(storyId, token, { ...(reference ? { reference: reference.rel } : {}), ...revOf(ctx) });
         return { ok: true, label: `Sheet ${name} sedang dibuat`, data: { status: record.status } };
       } catch (error) {
         await dropReference(ctx, storyId, reference).catch(() => undefined);
@@ -1014,7 +1020,7 @@ export const ACTIONS: Record<ActionName, Action> = {
       const { id, n, note, reference } = plan.payload as { id: string; n: number; note?: string; reference?: RefPlan };
       await keepReference(ctx, storyId, reference);
       try {
-        await ctx.stories.redrawFrame(storyId, id, undefined, { ...(note ? { note } : {}), ...(reference ? { reference: reference.rel } : {}) });
+        await ctx.stories.redrawFrame(storyId, id, undefined, { ...(note ? { note } : {}), ...(reference ? { reference: reference.rel } : {}), ...revOf(ctx) });
       } catch (error) {
         await dropReference(ctx, storyId, reference).catch(() => undefined);
         throw error;
@@ -1041,7 +1047,7 @@ export const ACTIONS: Record<ActionName, Action> = {
     },
     execute: async (ctx, storyId, _input, plan) => {
       const { scene, n } = plan.payload as { scene?: string; n?: number };
-      await ctx.stories.prepare(storyId, scene ? { scene } : {});
+      await ctx.stories.prepare(storyId, { ...(scene ? { scene } : {}), ...revOf(ctx) });
       return { ok: true, label: `Sheet dan keyframe${n ? ` scene ${n}` : ''} sedang dibuat` };
     }
   }),
@@ -1081,7 +1087,7 @@ export const ACTIONS: Record<ActionName, Action> = {
     },
     execute: async (ctx, storyId, _input, plan) => {
       const { shot, scene, todo } = plan.payload as { shot?: string; scene?: string; todo: number };
-      await ctx.stories.render(storyId, shot ? { shot } : scene ? { scene } : {});
+      await ctx.stories.render(storyId, { ...(shot ? { shot } : scene ? { scene } : {}), ...revOf(ctx) });
       return { ok: true, label: `${todo} klip masuk antrean render` };
     }
   }),
@@ -1091,7 +1097,7 @@ export const ACTIONS: Record<ActionName, Action> = {
     schema: obj({}),
     plan: async () => ({ label: 'Rakit video final (gratis)', estimate: { credits: 0 } }),
     execute: async (ctx, storyId) => {
-      const record = await ctx.stories.assemble(storyId);
+      const record = await ctx.stories.assemble(storyId, revOf(ctx));
       return record.status === 'done' ? { ok: true, label: 'Video final sudah dirakit' } : fail(record.error ?? 'Perakitan gagal', 'FAILED');
     }
   }),

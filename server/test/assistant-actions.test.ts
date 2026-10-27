@@ -7,6 +7,7 @@ import { resolveScene, resolveShot } from '../src/assistant/resolve.js';
 import { imageInfo } from '../src/assistant/uploads.js';
 import { buildApp } from '../src/app.js';
 import { FlowStore } from '../src/flow/store.js';
+import { CATALOG } from '../src/stories/looks.js';
 import { STALE_MESSAGE } from '../src/stories/service.js';
 import type { SnapshotStore } from '../src/stories/snapshots.js';
 import { compileBoardShot, validateStoryboard, type Storyboard } from '../src/stories/storyboard.js';
@@ -187,6 +188,41 @@ describe('edit_shot', () => {
     const shot = (await t.service.readStoryboard(story.id)).shots[0]!;
     expect(shot.intent).toMatchObject({ framing: 'close-up', move: 'push-in' });
     expect(shot.prompt.startsWith('Close-up, the camera pushes in slowly.')).toBe(true);
+  });
+
+  it('camera ids: rack-focus is a catalog move and compiles as one; spelled loosely it is normalised; unknown ids list the choices', async () => {
+    expect(CATALOG.moves.map(m => m.id)).toContain('rack-focus');
+    const t = serviceSetup();
+    const story = await t.service.create(twoScenes());
+    okOf(await run(ctxFor(t), story.id, 'edit_shot', { shot: 1, move: 'rack-focus' }));
+    let board = await t.service.readStoryboard(story.id);
+    expect(board.shots[0]!.intent!.move).toBe('rack-focus');
+    expect(compileBoardShot(board, board.shots[0]!).videoPrompt).toContain('focus shifts from the foreground to the subject');
+    expect(compileBoardShot(board, board.shots[0]!).videoPrompt).not.toContain('the camera stays still');
+    okOf(await run(ctxFor(t), story.id, 'edit_shot', { shot: 2, move: 'Rack Focus', framing: 'Medium Close' }));
+    board = await t.service.readStoryboard(story.id);
+    expect(board.shots[1]!.intent).toMatchObject({ move: 'rack-focus', framing: 'medium-close' });
+    const error = errOf(await run(ctxFor(t), story.id, 'edit_shot', { shot: 1, move: 'snap-focus' }));
+    expect(error).toMatch(/snap-focus/);
+    for (const id of CATALOG.moves.map(m => m.id)) expect(error).toContain(id);
+    const added = okOf(await run(ctxFor(t), story.id, 'add_shot', {
+      scene: 1, subject: 'KAPAS', action: 'peeks out of the woven basket', startState: 'the basket lid is closed', endState: 'one floppy ear shows above the rim',
+      framing: 'close-up', move: 'rack focus', narration: 'Kapas mengintip dari keranjang.'
+    }));
+    expect(added.ok).toBe(true);
+    board = await t.service.readStoryboard(story.id);
+    expect(board.shots.find(s => s.intent?.subject === 'KAPAS' && s.intent.action.includes('peeks'))!.intent!.move).toBe('rack-focus');
+    expect(errOf(await run(ctxFor(t), story.id, 'add_shot', {
+      scene: 1, subject: 'KAPAS', action: 'hops out', startState: 'in the basket', endState: 'on the floor', move: 'snap-focus'
+    }))).toMatch(/Pilihan: .*rack-focus/);
+  });
+
+  it('tool schemas carry the catalog framing and move ids as enums', () => {
+    for (const name of ['edit_shot', 'add_shot'] as const) {
+      const props = (toolSpecs().find(s => s.function.name === name)!.function.parameters as { properties: Record<string, { enum?: string[] }> }).properties;
+      expect(props.framing!.enum).toEqual(CATALOG.framings.map(f => f.id));
+      expect(props.move!.enum).toEqual(CATALOG.moves.map(m => m.id));
+    }
   });
 
   it('legacy board: edits only that shot\'s prose, passes validateStoryboard, keeps the other paid clip', async () => {

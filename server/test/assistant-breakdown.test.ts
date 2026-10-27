@@ -108,6 +108,20 @@ describe('breakdownScene', () => {
     expect((error as Error).message).toMatch(/drone-orbit/);
   });
 
+  it('camera ids: rack-focus is accepted, loose spelling is normalised, an unknown move is fed back with the valid ids', async () => {
+    const model = fakeModel([
+      JSON.stringify([intent(0, { move: 'snap-focus' }), intent(1, { move: 'Rack Focus' }), intent(2)]),
+      JSON.stringify([intent(0, { move: 'rack-focus' }), intent(1, { move: 'Rack Focus' }), intent(2)])
+    ]);
+    const shots = await breakdownScene(model, withPlaceholder(), 'gang', 3);
+    expect(model.calls).toHaveLength(2);
+    const feedback = model.calls[1]!.messages.at(-1)!.content;
+    expect(feedback).toMatch(/shot 1: move "snap-focus" is not one of/);
+    expect(feedback).toContain('rack-focus');
+    expect(feedback).not.toMatch(/shot 2/);
+    expect(shots.map(s => s.intent!.move)).toEqual(['rack-focus', 'rack-focus', 'push-in']);
+  });
+
   it('narration over the word limit or with empty adjectives is an issue', async () => {
     const long = 'Laras berjalan pelan melewati lapak ikan yang basah sambil memeluk keranjang erat sekali.';
     const model = fakeModel([JSON.stringify([intent(0, { narration: long }), intent(1, { narration: 'Pasar yang indah.' })])]);

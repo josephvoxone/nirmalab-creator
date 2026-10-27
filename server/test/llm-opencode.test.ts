@@ -6,8 +6,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { buildApp } from '../src/app.js';
 import { UserAuthStore } from '../src/auth/store.js';
 import { FlowStore } from '../src/flow/store.js';
-import { TEXT_MODELS, TextModelConfigStore } from '../src/llm/config.js';
-import { LlmError, createOpenCodeModel, type TextModel } from '../src/llm/opencode.js';
+import { DEFAULT_TEXT_MODEL, TEXT_MODELS, TextModelConfigStore } from '../src/llm/config.js';
+import { LlmError, TEXT_CHAIN, createOpenCodeModel, type TextModel } from '../src/llm/opencode.js';
 import { registerProviderRoutes } from '../src/providers/routes.js';
 
 const KEY = 'fake-opencode-key-0000wxyz';
@@ -51,7 +51,7 @@ describe('OpenCode Go text model', () => {
     const model = createOpenCodeModel({ store: await storeWithKey(), fetch: f.fetchImpl });
     const first = await model.chat({ messages: user, maxTokens: 50 });
     await model.chat({ messages: user });
-    expect(first).toEqual({ message: { role: 'assistant', content: 'halo' }, model: 'glm-5.3', usage: { total_tokens: 12 } });
+    expect(first).toEqual({ message: { role: 'assistant', content: 'halo' }, model: 'glm-5.3-flash', usage: { total_tokens: 12 } });
     expect(f.calls).toHaveLength(2);
     const [a, b] = f.calls;
     expect(a!.url).toBe(URL_CHAT);
@@ -60,7 +60,7 @@ describe('OpenCode Go text model', () => {
     expect(a!.headers.get('x-opencode-session')).toMatch(SESSION);
     expect(b!.headers.get('x-opencode-session')).toMatch(SESSION);
     expect(a!.headers.get('x-opencode-session')).not.toBe(b!.headers.get('x-opencode-session'));
-    expect(a!.body).toMatchObject({ model: 'glm-5.3', messages: user, max_tokens: 50 });
+    expect(a!.body).toMatchObject({ model: 'glm-5.3-flash', messages: user, max_tokens: 50 });
   });
 
   it('passes tools through and returns tool calls from the reply', async () => {
@@ -72,10 +72,10 @@ describe('OpenCode Go text model', () => {
     expect(out.message).toEqual({ role: 'assistant', content: '', tool_calls: toolCalls });
   });
 
-  it('on 429 for glm-5.3 falls back to glm-5.3-flash, then beam-free', async () => {
+  it('on 429 for glm-5.3-flash (default) falls back to glm-5.3, then beam-free', async () => {
     const f = fakeFetch(model => (model === 'beam-free' ? ok(model, 'dari beam') : status(429)));
     const out = await createOpenCodeModel({ store: await storeWithKey(), fetch: f.fetchImpl }).chat({ messages: user });
-    expect(f.calls.map(c => c.body.model)).toEqual(['glm-5.3', 'glm-5.3-flash', 'beam-free']);
+    expect(f.calls.map(c => c.body.model)).toEqual(['glm-5.3-flash', 'glm-5.3', 'beam-free']);
     expect(out.model).toBe('beam-free');
     expect(out.message.content).toBe('dari beam');
     const sessions = f.calls.map(c => c.headers.get('x-opencode-session'));
@@ -84,15 +84,15 @@ describe('OpenCode Go text model', () => {
 
   it('falls through on 5xx, network errors and timeouts', async () => {
     const f = fakeFetch((model, _call, init) => {
-      if (model === 'glm-5.3') return status(503);
-      if (model === 'glm-5.3-flash') throw new TypeError('fetch failed');
+      if (model === 'glm-5.3-flash') return status(503);
+      if (model === 'glm-5.3') throw new TypeError('fetch failed');
       return new Promise<Response>((_resolve, reject) => {
         init?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
       });
     });
-    const model = createOpenCodeModel({ store: await storeWithKey(), fetch: f.fetchImpl, models: ['glm-5.3', 'glm-5.3-flash', 'beam-free', 'deepseek-v4-pro'], timeoutMs: 20 });
+    const model = createOpenCodeModel({ store: await storeWithKey(), fetch: f.fetchImpl, models: ['glm-5.3-flash', 'glm-5.3', 'beam-free', 'deepseek-v4-pro'], timeoutMs: 20 });
     await expect(model.chat({ messages: user })).rejects.toMatchObject({ code: 'UNAVAILABLE' });
-    expect(f.calls.map(c => c.body.model)).toEqual(['glm-5.3', 'glm-5.3-flash', 'beam-free', 'deepseek-v4-pro']);
+    expect(f.calls.map(c => c.body.model)).toEqual(['glm-5.3-flash', 'glm-5.3', 'beam-free', 'deepseek-v4-pro']);
   });
 
   it('all models failing throws LlmError UNAVAILABLE with a plain Indonesian message', async () => {
@@ -122,12 +122,12 @@ describe('OpenCode Go text model', () => {
   });
 
   it('tries the chosen model first, then the rest of the chain without duplicates', async () => {
-    const flash = fakeFetch(() => status(429));
-    await createOpenCodeModel({ store: await storeWithKey('glm-5.3-flash'), fetch: flash.fetchImpl }).chat({ messages: user }).catch(() => undefined);
-    expect(flash.calls.map(c => c.body.model)).toEqual(['glm-5.3-flash', 'glm-5.3', 'beam-free']);
+    const glm = fakeFetch(() => status(429));
+    await createOpenCodeModel({ store: await storeWithKey('glm-5.3'), fetch: glm.fetchImpl }).chat({ messages: user }).catch(() => undefined);
+    expect(glm.calls.map(c => c.body.model)).toEqual(['glm-5.3', 'glm-5.3-flash', 'beam-free']);
     const deepseek = fakeFetch(() => status(500));
     await createOpenCodeModel({ store: await storeWithKey('deepseek-v4-pro'), fetch: deepseek.fetchImpl }).chat({ messages: user }).catch(() => undefined);
-    expect(deepseek.calls.map(c => c.body.model)).toEqual(['deepseek-v4-pro', 'glm-5.3', 'glm-5.3-flash', 'beam-free']);
+    expect(deepseek.calls.map(c => c.body.model)).toEqual(['deepseek-v4-pro', 'glm-5.3-flash', 'glm-5.3', 'beam-free']);
   });
 
   it('403 and 404 stop after one call', async () => {
@@ -198,7 +198,7 @@ describe('TextModelConfigStore', () => {
   it('stores the key 0600 at providers/opencode-go.json; view() shows only the last 4', async () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'nc-llm-'));
     const store = new TextModelConfigStore(dataDir);
-    expect(await store.view()).toEqual({ configured: false, model: 'glm-5.3' });
+    expect(await store.view()).toEqual({ configured: false, model: 'glm-5.3-flash' });
     const view = await store.patch({ apiKey: KEY, model: 'beam-free' });
     expect(view).toEqual({ configured: true, keyHint: '••••wxyz', model: 'beam-free' });
     expect(JSON.stringify(await store.view())).not.toContain(KEY);
@@ -214,7 +214,9 @@ describe('TextModelConfigStore', () => {
     await expect(store.patch({ model: 'gpt-9' })).rejects.toThrow(/model/i);
     await expect(store.patch({ apiKey: 'short' })).rejects.toThrow(/key/i);
     await expect(store.patch({ apiKey: 'has space in the key 123' })).rejects.toThrow(/key/i);
-    expect(TEXT_MODELS).toEqual(['glm-5.3', 'glm-5.3-flash', 'beam-free', 'deepseek-v4-pro']);
+    expect(TEXT_MODELS).toEqual(['glm-5.3-flash', 'glm-5.3', 'beam-free', 'deepseek-v4-pro']);
+    expect(DEFAULT_TEXT_MODEL).toBe('glm-5.3-flash');
+    expect(TEXT_CHAIN).toEqual(['glm-5.3-flash', 'glm-5.3', 'beam-free']);
   });
 });
 
@@ -319,7 +321,7 @@ describe('buildApp wiring', () => {
     const cookie = String(login.headers['set-cookie']).split(';')[0]!;
     expect((await app.inject({ method: 'PUT', url: '/api/providers/text', headers: { cookie }, payload: { apiKey: KEY } })).statusCode).toBe(200);
     const res = await app.inject({ method: 'POST', url: '/api/providers/text/test', headers: { cookie } });
-    expect(res.json()).toMatchObject({ ok: true, model: 'glm-5.3' });
+    expect(res.json()).toMatchObject({ ok: true, model: 'glm-5.3-flash' });
     expect(f.calls.map(c => [c.url, c.headers.get('authorization')])).toEqual([[URL_CHAT, `Bearer ${KEY}`]]);
   });
 });
