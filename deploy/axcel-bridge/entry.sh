@@ -19,6 +19,8 @@ mkdir -p "$PROFILE" "${AXCEL_OUT_DIR:-/data/axcel}"
 : "${AXCEL_BRIDGE_TOKEN:?set AXCEL_BRIDGE_TOKEN}"
 [ -n "${AXCEL_SESI:-}" ] || echo "[entry] WARN: AXCEL_SESI kosong — sesi harus login manual"
 
+# a stale X lock from the previous container run makes Xvfb refuse to start
+rm -f /tmp/.X99-lock /tmp/.X11-unix/X99
 Xvfb :99 -screen 0 1400x1000x24 -nolisten tcp >/var/log/xvfb.log 2>&1 &
 sleep 2
 

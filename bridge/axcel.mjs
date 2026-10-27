@@ -370,7 +370,17 @@ async function generateTurnstile(page) {
     return await window.__axcelBridge.solve(${JSON.stringify(keyMain)}, 'generate');
   })()`, { timeout: 150_000, userGesture: true });
   log('turnstile generate:', raw ? `${raw.slice(0, 12)}… (${raw.length})` : raw, `${Date.now() - started}ms`);
-  if (!raw || raw.startsWith('__')) throw new Error(`Turnstile generate gagal (${raw || 'kosong'}) — coba lagi`);
+  if (!raw || raw.startsWith('__')) {
+    const err = new Error(`Turnstile generate gagal (${raw || 'kosong'}) — coba lagi`);
+    // A timeout on the managed widget is not "busy, try again": Cloudflare refuses this browser/IP
+    // outright (seen from the datacenter). Marking it final lets the server fail over to Flow on the
+    // first attempt instead of burning three. On the Mac the widget does answer, so this never fires.
+    if (raw === '__timeout__' || raw === '__no_turnstile__') {
+      err.final = true;
+      err.message = 'Cloudflare menolak Turnstile di lingkungan ini (IP/browser) — pakai proxy residensial atau engine lain';
+    }
+    throw err;
+  }
   return raw;
 }
 
