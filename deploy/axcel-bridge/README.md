@@ -54,6 +54,22 @@ Cek: `GET /api/providers` harus menampilkan `axcel.configured: true` + `health.a
   **failover ke Google Flow** (job Flow baru, prompt/aspect/durasi sama) — terbukti di produksi:
   `job_f5484c8db6c7b225` (axcel, failed) → `job_a44e14a8766092a5` (flow, done 782.600 B).
 
+## Cek egress sebelum beli proxy
+
+`GET /diagnose` (Bearer token) menjawab satu pertanyaan: **dari IP ini Axcel bisa generate atau tidak?**
+
+```sh
+docker exec axcel-bridge sh -c 'curl -s -H "Authorization: Bearer $AXCEL_BRIDGE_TOKEN" \
+  http://127.0.0.1:8899/diagnose'
+# {"egress":{"ip":"187.53.137.24","org":"AS47583 Hostinger International Limited","country":"MY"},
+#  "login":"ok","turnstileGenerate":"ditolak",
+#  "verdict":"generate akan ditolak — ganti egress (proxy residensial/mobile)"}
+```
+
+Yang dinilai Cloudflare bukan "CGNAT", tapi **jenis ASN**: hosting/VPS (Hostinger, DO, AWS) ditolak,
+ISP residensial atau operator seluler (yang kebetulan CGNAT) lolos. Verdict `siap generate` = proxy-nya
+layak; `ditolak` = buang, jangan dibeli lagi.
+
 ## Operasional
 
 ```sh

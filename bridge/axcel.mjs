@@ -622,6 +622,45 @@ const server = createServer(async (request, reply) => {
         tokenUmurMs: Math.max(0, pageToken.expiresAt - Date.now())
       });
     }
+    if (request.method === 'GET' && url.pathname === '/diagnose') {
+      // Which egress does Chrome use, and can Cloudflare mint the generate token from here?
+      // One call answers "is this proxy good enough for Axcel?".
+      const page = await getPage();
+      // axcel.cloud's CSP blocks third-party connect-src, so the egress probe runs in a blank tab
+      // (same Chrome, same proxy, no CSP).
+      const egress = await (async () => {
+        let targetId;
+        try {
+          ({ targetId } = await page.cdp.send('Target.createTarget', { url: 'about:blank' }));
+          const { sessionId } = await page.cdp.send('Target.attachToTarget', { targetId, flatten: true });
+          const r = await page.cdp.send('Runtime.evaluate', {
+            expression: `fetch('https://ipinfo.io/json').then(r => r.json()).catch(e => ({ error: String(e) }))`,
+            awaitPromise: true, returnByValue: true, timeout: 25_000
+          }, sessionId);
+          return r.result?.value ?? {};
+        } catch (error) {
+          return { error: error.message };
+        } finally {
+          if (targetId) await page.cdp.send('Target.closeTarget', { targetId }).catch(() => undefined);
+        }
+      })();
+      const me = await evaluate(page, `fetch('/api/auth/me',{credentials:'same-origin',signal:AbortSignal.timeout(60000),headers:${JSON.stringify(CLIENT_HEADER)}}).then(r=>r.json()).catch(()=>({masuk:null}))`, { timeout: 80_000 }).catch(() => ({ masuk: null }));
+      const started = Date.now();
+      let turnstile = 'error';
+      try {
+        await generateTurnstile(page);
+        turnstile = 'ok';
+      } catch (error) {
+        turnstile = error?.final ? 'ditolak' : 'error';
+      }
+      return send(reply, 200, {
+        egress: { ip: egress.ip ?? null, org: egress.org ?? null, country: egress.country ?? null, city: egress.city ?? null },
+        login: me?.masuk === true ? 'ok' : me?.masuk === null ? 'lambat' : 'tidak login',
+        turnstileGenerate: turnstile,
+        ms: Date.now() - started,
+        verdict: turnstile === 'ok' ? 'siap generate' : 'generate akan ditolak — ganti egress (proxy residensial/mobile)'
+      });
+    }
     if (request.method === 'GET' && url.pathname === '/account') return send(reply, 200, await account());
     if (request.method === 'GET' && url.pathname === '/catalog') return send(reply, 200, await catalog());
     if (request.method === 'POST' && url.pathname === '/generate') {
