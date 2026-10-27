@@ -3,3 +3,6 @@ server/dist
 web/dist
 .env
 *.log
+
+# isolated feature worktrees
+.worktrees/
