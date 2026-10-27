@@ -27,22 +27,31 @@ const Section = (props: { id: string; title: string; hint: string; children: Rea
   </section>
 );
 
-/** One field: reads as text, turns into a field on click, commits on Enter or Simpan. */
+/**
+ * One field: reads as text, turns into a field on click, commits on Enter or Simpan. A refused save
+ * (409 STALE included) opens the field again with what the user typed, until they save it again on
+ * top of the fresh board or press Batal — like the shot sheet.
+ */
 function Inline(props: {
-  label: string; value: string; placeholder: string; onSave: (value: string) => void;
+  label: string; value: string; placeholder: string; onSave: (value: string) => Promise<boolean>;
   multiline?: boolean; rows?: number; labelClass?: string;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(props.value);
-  const start = () => { setDraft(props.value); setEditing(true); };
-  const commit = () => {
+  const [failed, setFailed] = useState(false);
+  const start = () => { setDraft(props.value); setFailed(false); setEditing(true); };
+  const cancel = () => { setEditing(false); setFailed(false); };
+  const commit = async () => {
     setEditing(false);
     const next = draft.trim();
-    if (next !== props.value.trim()) props.onSave(next);
+    if (next === props.value.trim()) { setFailed(false); return; }
+    const ok = await props.onSave(next);
+    setFailed(!ok);
+    if (!ok) setEditing(true);
   };
   const onKeyDown = (e: KeyboardEvent) => {
-    if (e.key === 'Escape') { e.preventDefault(); setEditing(false); }
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); commit(); }
+    if (e.key === 'Escape') { e.preventDefault(); cancel(); }
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void commit(); }
   };
   return (
     <div className="flex items-start gap-1">
@@ -58,9 +67,10 @@ function Inline(props: {
               <input autoFocus aria-label={props.label} placeholder={props.placeholder} value={draft} maxLength={200}
                 onChange={e => setDraft(e.target.value)} onKeyDown={onKeyDown} className={`${inputClass} h-7 text-[12.5px]`} />
             )}
+            {failed && <p role="status" className="text-[11.5px] font-medium text-foreground">Perubahanmu belum tersimpan — simpan lagi</p>}
             <div className="flex gap-1.5">
-              <Button size="sm" onClick={commit}>Simpan</Button>
-              <Button size="sm" variant="ghost" onClick={() => setEditing(false)}>Batal</Button>
+              <Button size="sm" onClick={() => void commit()}>Simpan</Button>
+              <Button size="sm" variant="ghost" onClick={cancel}>Batal</Button>
             </div>
           </div>
         ) : (
@@ -97,8 +107,6 @@ export function mergeBible(stored: unknown, next: StoryBible): Raw {
 export function BibleTab() {
   const p = useProject();
   const { board } = p;
-  // The text of a save that was refused stays on screen until the board changes for another reason.
-  const [held, setHeld] = useState<{ from: unknown; bible: StoryBible }>();
 
   if (!board) {
     return (
@@ -108,11 +116,8 @@ export function BibleTab() {
     );
   }
 
-  const bible = held && held.from === board.bible ? held.bible : readBible(board.bible);
-  const commit = (next: StoryBible) => {
-    setHeld({ from: board.bible, bible: next });
-    void p.save({ ...board, bible: mergeBible(board.bible, next) });
-  };
+  const bible = readBible(board.bible);
+  const commit = (next: StoryBible) => p.save({ ...board, bible: mergeBible(board.bible, next) });
 
   if (!bible) {
     return (
@@ -120,7 +125,7 @@ export function BibleTab() {
         <p className="min-w-0 flex-1 text-muted-foreground">
           Proyek ini belum punya bible: satu halaman berisi logline, tema, tone, struktur hook–setup–turn–payoff, anchor karakter dan tujuan tiap scene — dasar semua prompt shot. Isinya draf bebas, boleh diisi bertahap.
         </p>
-        <Button size="sm" variant="glass" onClick={() => commit(seedBible(board))}><Plus /> Buat bible</Button>
+        <Button size="sm" variant="glass" onClick={() => void commit(seedBible(board))}><Plus /> Buat bible</Button>
       </div>
     );
   }
@@ -129,7 +134,7 @@ export function BibleTab() {
   const sceneGoal = (id: string) => bible.scenes.find(s => s.id === id)?.goal ?? '';
   const setSceneGoal = (id: string, title: string, goal: string) => {
     const exists = bible.scenes.some(s => s.id === id);
-    commit(moved(bible, {
+    return commit(moved(bible, {
       scenes: exists
         ? bible.scenes.map(s => (s.id === id ? { ...s, goal } : s))
         : [...bible.scenes, { id, title, goal }]
@@ -158,7 +163,7 @@ export function BibleTab() {
           <div className="flex items-center gap-2">
             <span className="text-[11.5px] text-muted-foreground">Penonton</span>
             <Segmented name="Penonton" value={bible.audience} options={AUDIENCES}
-              onChange={(audience: Audience) => commit(moved(bible, { audience }))} />
+              onChange={(audience: Audience) => void commit(moved(bible, { audience }))} />
           </div>
         </Section>
 

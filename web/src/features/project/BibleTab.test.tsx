@@ -2,7 +2,7 @@ import { screen, waitFor, within } from '@testing-library/react';
 import { userEvent } from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import { ProjectPage } from './ProjectPage.js';
-import { BOARD, fakeProjectApi, ID, mountProject } from './testkit.js';
+import { BOARD, fakeProjectApi, ID, mountProject, storyFor } from './testkit.js';
 import type { StoryBible } from '../bible/story.js';
 
 const BIBLE: StoryBible = {
@@ -141,6 +141,43 @@ describe('Bible tab', () => {
     await userEvent.click(within(story).getByRole('button', { name: /ubah tema/i }));
     await userEvent.type(within(story).getByRole('textbox', { name: /^tema$/i }), ' dan kehilangan{Enter}');
     expect(await screen.findByRole('alert')).toHaveTextContent(/anchor jingga hanya berisi kata rasa/i);
+  });
+
+  it('a STALE refusal keeps the typed text open until the user saves it again (on the fresh board) or cancels', async () => {
+    const api = fakeProjectApi({ board: withBible(), story: storyFor(withBible(), [], [], { rev: 4 }) });
+    await open(api);
+    // The assistant changes the logline before this tab saves its theme.
+    api.board = { ...api.board, bible: { ...BIBLE, logline: 'Logline dari asisten' } };
+    api.story = { ...api.story, rev: 5 };
+    const story = screen.getByRole('region', { name: /^cerita$/i });
+    await userEvent.click(within(story).getByRole('button', { name: /ubah tema/i }));
+    const theme = within(story).getByRole('textbox', { name: /^tema$/i });
+    await userEvent.clear(theme);
+    await userEvent.type(theme, 'Kesetiaan yang sabar{Enter}');
+    expect(await screen.findByText('Proyek baru diubah asisten — dimuat ulang')).toBeInTheDocument();
+    await waitFor(() => expect(within(story).getByText('Logline dari asisten')).toBeInTheDocument());
+    // Still there after the fresh board arrived, with a note.
+    expect(within(story).getByRole('textbox', { name: /^tema$/i })).toHaveValue('Kesetiaan yang sabar');
+    expect(within(story).getByText('Perubahanmu belum tersimpan — simpan lagi')).toBeInTheDocument();
+    await userEvent.click(within(story).getByRole('button', { name: /^simpan$/i }));
+    await waitFor(() => expect(lastBoard(api)?.bible?.theme).toBe('Kesetiaan yang sabar'));
+    expect(api.calls.filter(c => c.method === 'PUT').map(c => c.body!.rev)).toEqual([4, 5]);
+    expect(api.board.bible).toMatchObject({ theme: 'Kesetiaan yang sabar', logline: 'Logline dari asisten' });
+    await waitFor(() => expect(within(story).queryByText('Perubahanmu belum tersimpan — simpan lagi')).toBeNull());
+  });
+
+  it('Batal after a STALE refusal drops the held text', async () => {
+    const api = fakeProjectApi({ board: withBible(), story: storyFor(withBible(), [], [], { rev: 4 }) });
+    await open(api);
+    api.story = { ...api.story, rev: 5 };
+    const story = screen.getByRole('region', { name: /^cerita$/i });
+    await userEvent.click(within(story).getByRole('button', { name: /ubah tone/i }));
+    await userEvent.type(within(story).getByRole('textbox', { name: /^tone$/i }), ' sekali{Enter}');
+    expect(await within(story).findByText('Perubahanmu belum tersimpan — simpan lagi')).toBeInTheDocument();
+    await userEvent.click(within(story).getByRole('button', { name: /^batal$/i }));
+    expect(within(story).queryByRole('textbox', { name: /^tone$/i })).toBeNull();
+    expect(within(story).getByText(BIBLE.tone)).toBeInTheDocument();
+    expect(api.calls.filter(c => c.method === 'PUT')).toHaveLength(1);
   });
 
   it('uses no native select, date, radio or checkbox', async () => {

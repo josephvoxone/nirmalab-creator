@@ -94,6 +94,31 @@ describe('ShotSheet — stale save', () => {
   });
 });
 
+describe('ShotSheet — after a STALE reload only the fields the user changed are saved', () => {
+  it('the assistant\'s new prompt for the same shot survives; the user\'s narration is saved on top', async () => {
+    const api = fakeProjectApi({ story: storyFor(BOARD, [], [], { rev: 5 }) });
+    mountProject(<Harness shotId="01-pagar" />, api.fetchImpl);
+    const sheet = await screen.findByRole('dialog', { name: /01-pagar$/ });
+    const narration = within(sheet).getByRole('textbox', { name: 'Narasi' });
+    await userEvent.clear(narration);
+    await userEvent.type(narration, 'Jingga tetap menunggu.');
+    // The assistant rewrites this shot's prompt meanwhile.
+    const PROMPT = 'Close-up, the camera pushes in slowly. JINGGA lifts her head toward the road.';
+    api.board = { ...api.board, shots: api.board.shots.map(s => (s.id === '01-pagar' ? { ...s, prompt: PROMPT } : s)) };
+    api.story = { ...api.story, rev: 6 };
+    await userEvent.click(within(sheet).getByRole('button', { name: /^simpan$/i }));
+    expect(await within(sheet).findByText('Perubahanmu belum tersimpan — simpan lagi')).toBeInTheDocument();
+    // The fresh board shows the assistant's prompt in the field the user never touched.
+    await waitFor(() => expect(within(sheet).getByRole('textbox', { name: /prompt \(english\)/i })).toHaveValue(PROMPT));
+    expect(narration).toHaveValue('Jingga tetap menunggu.');
+    await userEvent.click(within(sheet).getByRole('button', { name: /^simpan$/i }));
+    await waitFor(() => expect(puts(api)).toHaveLength(2));
+    const shot = (puts(api)[1]!.body!.storyboard as typeof BOARD).shots.find(s => s.id === '01-pagar')!;
+    expect(shot).toMatchObject({ prompt: PROMPT, narration: 'Jingga tetap menunggu.' });
+    expect(api.board.shots.find(s => s.id === '01-pagar')).toMatchObject({ prompt: PROMPT, narration: 'Jingga tetap menunggu.' });
+  });
+});
+
 describe('useProject — quick successive saves', () => {
   it('sends the second save with the rev the first one returned (no false STALE)', async () => {
     const api = fakeProjectApi({ story: storyFor(BOARD, [], [], { rev: 7 }) });
@@ -105,5 +130,86 @@ describe('useProject — quick successive saves', () => {
     await act(async () => { await Promise.all([save({ ...board!, title: 'Satu' }), save({ ...board!, title: 'Dua' })]); });
     expect(puts(api).map(c => c.body!.rev)).toEqual([7, 8]);
     expect(screen.queryByText(BANNER)).toBeNull();
+  });
+});
+
+// ------------------------------------------------------------------ base revisions (review fix round 1)
+
+type P = ReturnType<typeof useProjectState>;
+
+/** The hook mounted bare: `now` is the latest render, `first` the first render that had a board. */
+function mountHook(api: Api) {
+  const seen: { now?: P; first?: P } = {};
+  function Grab() {
+    const { id = '' } = useParams();
+    const p = useProjectState(id, 0);
+    seen.now = p;
+    if (!seen.first && p.board) seen.first = p;
+    return <p>{p.notice ?? 'ok'}</p>;
+  }
+  mountProject(<Grab />, api.fetchImpl);
+  return seen;
+}
+
+describe('useProject — every save carries the rev of the board it was built from', () => {
+  it('a save built from a board read before the assistant changed it is refused (STALE), even after a reload', async () => {
+    const api = fakeProjectApi({ story: storyFor(BOARD, [], [], { rev: 3 }) });
+    const seen = mountHook(api);
+    await waitFor(() => expect(seen.first).toBeTruthy());
+    assistantEdits(api);
+    act(() => seen.now!.reload());
+    await waitFor(() => expect(seen.now!.board!.title).toBe('Judul dari asisten'));
+    // An editor that read the board before the assistant's change saves on top of it.
+    const old = seen.first!;
+    let ok: boolean | undefined;
+    await act(async () => { ok = await old.save({ ...old.board!, title: 'Judul lama saya' }); });
+    expect(ok).toBe(false);
+    expect(puts(api).map(c => c.body!.rev)).toEqual([3]);
+    expect(api.board.title).toBe('Judul dari asisten');
+    expect(await screen.findByText(BANNER)).toBeInTheDocument();
+  });
+
+  it('an updater save runs on the latest board with its rev', async () => {
+    const api = fakeProjectApi({ story: storyFor(BOARD, [], [], { rev: 3 }) });
+    const seen = mountHook(api);
+    await waitFor(() => expect(seen.first).toBeTruthy());
+    assistantEdits(api);
+    act(() => seen.now!.reload());
+    await waitFor(() => expect(seen.now!.board!.title).toBe('Judul dari asisten'));
+    await act(async () => { await seen.first!.save(latest => ({ ...latest, logline: 'Logline baru' })); });
+    expect(puts(api).map(c => c.body!.rev)).toEqual([4]);
+    expect(api.board).toMatchObject({ title: 'Judul dari asisten', logline: 'Logline baru' });
+  });
+
+  it('a breakdown applied between two queued saves is never deleted by the second save', async () => {
+    const api = fakeProjectApi({ story: storyFor(BOARD, [], [], { rev: 7 }) });
+    // The first PUT is stored by the server at once, but its answer is held back.
+    let release!: () => void;
+    const held = new Promise<void>(r => { release = r; });
+    const inner = api.fetchImpl;
+    let first = true;
+    const fetchImpl = vi.fn(async (url: string, init?: RequestInit) => {
+      const res = await inner(url, init);
+      if (init?.method === 'PUT' && first) { first = false; await held; }
+      return res;
+    });
+    const seen: { now?: P } = {};
+    function Grab() { const { id = '' } = useParams(); const p = useProjectState(id, 0); seen.now = p; return <p>{p.notice ?? 'ok'}</p>; }
+    mountProject(<Grab />, fetchImpl as unknown as Api['fetchImpl']);
+    await waitFor(() => expect(seen.now?.board).toBeTruthy());
+    const p = seen.now!;
+    let done!: Promise<boolean[]>;
+    act(() => { done = Promise.all([p.save({ ...p.board!, title: 'Satu' }), p.save({ ...p.board!, title: 'Dua' })]); });
+    await waitFor(() => expect(puts(api)).toHaveLength(1));
+    // The AI planner adds a shot on the server (rev 8 → 9) and its answer lands in the tab.
+    api.board = { ...api.board, shots: [...api.board.shots, { id: 'ai-1', prompt: 'Wide shot, the camera stays still. A storm.' }] };
+    api.story = { ...api.story, rev: (api.story.rev ?? 0) + 1, shots: [...api.story.shots, { id: 'ai-1', status: 'pending', attempts: 0 }] };
+    act(() => seen.now!.apply({ story: api.story, storyboard: api.board as never }));
+    release();
+    await act(async () => { await done; });
+    expect(puts(api).map(c => c.body!.rev)).toEqual([7, 8]);
+    expect(api.board.shots.map(s => s.id)).toContain('ai-1');
+    expect(await screen.findByText(BANNER)).toBeInTheDocument();
+    await waitFor(() => expect(seen.now!.board!.shots.map(s => s.id)).toContain('ai-1'));
   });
 });

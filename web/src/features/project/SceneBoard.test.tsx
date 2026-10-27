@@ -36,9 +36,9 @@ function breakdownRoute(holder: { api?: Api }, opts: { error?: { status: number;
   };
 }
 
-function setup(board: Board, opts: Parameters<typeof breakdownRoute>[1] = {}) {
+function setup(board: Board, opts: Parameters<typeof breakdownRoute>[1] = {}, frames: string[] = []) {
   const holder: { api?: Api } = {};
-  holder.api = fakeProjectApi({ board, story: storyFor(board, [], [], { rev: 2 }), extra: breakdownRoute(holder, opts) });
+  holder.api = fakeProjectApi({ board, story: storyFor(board, frames, [], { rev: 2 }), extra: breakdownRoute(holder, opts) });
   return holder.api;
 }
 
@@ -92,7 +92,8 @@ describe('Scene board — "Pecah jadi shot (AI)"', () => {
       shots: [...base.shots.filter(s => s.id !== '00-pembuka' && s.id !== '01-pagar'), { id: 'shot-5', prompt: 'Medium shot, the camera stays still. ', narration: 'Tulis narasi singkat di sini.', intent: { subject: 'JINGGA', action: '', startState: '', endState: '' } }],
       scenes: [{ ...base.scenes![0]!, shots: ['shot-5'] }, base.scenes![1]!]
     };
-    const api = setup(board, { gate });
+    // Nothing drawn yet (a done keyframe would make the shot non-empty).
+    const api = setup(board, { gate }, board.shots.map(() => 'pending'));
     mountProject(<ProjectPage pollMs={0} />, api.fetchImpl);
     const dialog = await openDialog();
     expect(within(within(dialog).getByRole('radiogroup', { name: 'Mode' })).getByRole('radio', { name: 'Ganti shot kosong' })).toHaveAttribute('aria-checked', 'true');
@@ -114,14 +115,49 @@ describe('Scene board — "Pecah jadi shot (AI)"', () => {
   });
 
   it('a failed breakdown shows the plain reason and "Coba lagi" sends it again', async () => {
-    const api = setup(bibleBoard(), { error: { status: 400, code: 'INVALID', message: 'Scene "Menunggu" belum punya tujuan di bible.' } });
+    const api = setup(bibleBoard(), { error: { status: 503, code: 'FAILED', message: 'Model teks tidak menjawab — coba lagi sebentar lagi.' } });
     mountProject(<ProjectPage pollMs={0} />, api.fetchImpl);
     const dialog = await openDialog();
     await userEvent.click(within(dialog).getByRole('button', { name: /pecah jadi 4 shot/i }));
-    expect(await within(dialog).findByRole('alert')).toHaveTextContent('Scene "Menunggu" belum punya tujuan di bible.');
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('Model teks tidak menjawab — coba lagi sebentar lagi.');
     await userEvent.click(within(dialog).getByRole('button', { name: /coba lagi/i }));
     await waitFor(() => expect(breakdowns(api)).toHaveLength(2));
     expect(document.querySelectorAll('select, input[type=date], input[type=radio], input[type=checkbox]')).toHaveLength(0);
+  });
+
+  it('a scene without a goal is not fixed by retrying: the error links to the Bible tab instead of "Coba lagi"', async () => {
+    const api = setup(bibleBoard(), { error: { status: 400, code: 'INVALID', message: 'Scene 1 belum punya tujuan di bible — isi dulu (edit_scene goal).' } });
+    mountProject(<ProjectPage pollMs={0} />, api.fetchImpl);
+    const dialog = await openDialog();
+    await userEvent.click(within(dialog).getByRole('button', { name: /pecah jadi 4 shot/i }));
+    const alert = await within(dialog).findByRole('alert');
+    expect(alert).toHaveTextContent('Scene ini belum punya tujuan — isi dulu di tab Bible.');
+    expect(alert).not.toHaveTextContent('edit_scene');
+    expect(within(alert).queryByRole('button', { name: /coba lagi/i })).toBeNull();
+    await userEvent.click(within(alert).getByRole('link', { name: /buka tab bible/i }));
+    expect(await screen.findByRole('region', { name: 'Tujuan scene' })).toBeInTheDocument();
+    expect(breakdowns(api)).toHaveLength(1);
+  });
+
+  it('a shot with a done clip or a done keyframe is never "empty": replace stays off', async () => {
+    const base = bibleBoard();
+    const placeholder = (id: string) => ({ id, prompt: 'Medium shot, the camera stays still. ', narration: 'Tulis narasi singkat di sini.', intent: { subject: 'JINGGA', action: '', startState: '', endState: '' } });
+    const board: Board = {
+      ...base,
+      shots: [...base.shots.filter(s => s.id !== '00-pembuka' && s.id !== '01-pagar'), placeholder('shot-5'), placeholder('shot-6')],
+      scenes: [{ ...base.scenes![0]!, shots: ['shot-5', 'shot-6'] }, base.scenes![1]!]
+    };
+    for (const [frames, clips] of [[['pending', 'pending', 'pending', 'pending'], ['pending', 'pending', 'pending', 'done']], [['pending', 'pending', 'pending', 'done'], []]] as const) {
+      const holder: { api?: Api } = {};
+      // storyFor numbers states by board order: shots 02, 03, shot-5, shot-6 → index 3 is shot-6.
+      holder.api = fakeProjectApi({ board, story: storyFor(board, [...frames], [...clips], { rev: 2 }), extra: breakdownRoute(holder) });
+      const view = mountProject(<ProjectPage pollMs={0} />, holder.api.fetchImpl);
+      const dialog = await openDialog();
+      const mode = within(dialog).getByRole('radiogroup', { name: 'Mode' });
+      expect(within(mode).getByRole('radio', { name: 'Ganti shot kosong' })).toBeDisabled();
+      expect(within(mode).getByRole('radio', { name: 'Tambah di akhir' })).toHaveAttribute('aria-checked', 'true');
+      view.unmount();
+    }
   });
 
   it('is not offered on legacy boards (no dead button)', async () => {

@@ -14,23 +14,37 @@ import { useSession } from '../../lib/session.js';
 import { Segmented } from '../../ui/controls.js';
 import { MentionTextarea } from '../../ui/MentionTextarea.js';
 import { describeError } from '../../ui/states.js';
-import { storiesApi, type BreakdownMode } from '../stories/storiesClient.js';
-import { mentionTriggers } from './IntentFields.js';
+import { storiesApi, type BreakdownMode, type ShotState } from '../stories/storiesClient.js';
+import { mentionTriggers } from './mentions.js';
 import type { Board, Scene, Shot } from './model.js';
 import { useProject } from './useProject.js';
 
 const COUNTS = ['2', '3', '4', '5', '6', '7', '8'] as const;
 const PLACEHOLDER_PROMPT = 'Medium shot, the camera stays still.';
 
-/** A shot with nothing in it yet: a placeholder prompt, or an intent without action and states. */
-export function isEmptyShot(s: Shot): boolean {
+/**
+ * A shot with nothing in it yet: a placeholder prompt, or an intent without action and states.
+ * A shot that already has a done clip or a done keyframe is never empty (replacing it would throw a take away).
+ */
+export function isEmptyShot(s: Shot, state?: ShotState): boolean {
   if (s.reuse) return false;
+  if (state?.status === 'done' || state?.frame?.status === 'done') return false;
   if (s.intent) return !s.intent.action?.trim() && !s.intent.startState?.trim() && !s.intent.endState?.trim();
   const prose = (s.prompt ?? '').trim();
   return !prose || prose === PLACEHOLDER_PROMPT;
 }
 
-type Failure = { message: string; noModel: boolean };
+/** `noModel`: set up a text model; `needsBible`: the bible is missing a goal (or the board has none) — a retry cannot fix either. */
+type Failure = { message: string; noModel?: boolean; needsBible?: boolean };
+
+function failureOf(e: unknown): Failure {
+  if (e instanceof ApiError && e.code === 'UNAVAILABLE' && /model teks/i.test(e.message)) return { message: 'Butuh model teks — atur di Pengaturan › Provider', noModel: true };
+  if (e instanceof ApiError && e.code === 'INVALID') {
+    if (/belum punya tujuan/i.test(e.message)) return { message: 'Scene ini belum punya tujuan — isi dulu di tab Bible.', needsBible: true };
+    if (/butuh bible|tab bible/i.test(e.message)) return { message: describeError(e), needsBible: true };
+  }
+  return { message: describeError(e) };
+}
 
 export function SceneBreakdownDialog(props: { open: boolean; onOpenChange: (open: boolean) => void; board: Board; scene: Scene }) {
   const p = useProject();
@@ -38,7 +52,7 @@ export function SceneBreakdownDialog(props: { open: boolean; onOpenChange: (open
   const location = useLocation();
   const api = useMemo(() => storiesApi(fetchImpl), [fetchImpl]);
   const { board, scene } = props;
-  const onlyEmpty = scene.shots.every(id => { const s = board.shots.find(x => x.id === id); return !s || isEmptyShot(s); });
+  const onlyEmpty = scene.shots.every(id => { const s = board.shots.find(x => x.id === id); return !s || isEmptyShot(s, p.story?.shots.find(x => x.id === id)); });
   const [count, setCount] = useState<(typeof COUNTS)[number]>('4');
   const [brief, setBrief] = useState('');
   const [mode, setMode] = useState<BreakdownMode>(onlyEmpty ? 'replace' : 'append');
@@ -58,8 +72,7 @@ export function SceneBreakdownDialog(props: { open: boolean; onOpenChange: (open
       props.onOpenChange(false);
       setBrief('');
     } catch (e) {
-      const noModel = e instanceof ApiError && e.code === 'UNAVAILABLE' && /model teks/i.test(e.message);
-      setFailure({ message: noModel ? 'Butuh model teks — atur di Pengaturan › Provider' : describeError(e), noModel });
+      setFailure(failureOf(e));
     } finally {
       setRunning(false);
     }
@@ -101,7 +114,9 @@ export function SceneBreakdownDialog(props: { open: boolean; onOpenChange: (open
                 <div className="flex gap-1.5">
                   {failure.noModel
                     ? <Link to="/pengaturan/provider" state={{ background: (location.state as { background?: unknown } | null)?.background ?? location }} className={buttonVariants({ size: 'xs', variant: 'glass' })}>Buka Pengaturan › Provider</Link>
-                    : <Button type="button" size="xs" variant="ghost" onClick={() => void run()}><RotateCcw /> Coba lagi</Button>}
+                    : failure.needsBible
+                      ? <Link to="?tab=bible" replace onClick={() => props.onOpenChange(false)} className={buttonVariants({ size: 'xs', variant: 'glass' })}>Buka tab Bible</Link>
+                      : <Button type="button" size="xs" variant="ghost" onClick={() => void run()}><RotateCcw /> Coba lagi</Button>}
                 </div>
               </div>
             )}

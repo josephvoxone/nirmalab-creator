@@ -125,4 +125,18 @@ describe('MentionTextarea', () => {
     expect(parseFloat(el.style.height)).toBeLessThan(400);
     expect(parseFloat(el.style.height)).toBeGreaterThan(20);
   });
+
+  it('IME: Enter/Tab/arrows while composing belong to the IME — no pick, the list stays, nothing is submitted', async () => {
+    const onSubmit = vi.fn();
+    render(<Harness onSubmit={onSubmit} />);
+    await userEvent.type(box(), 'buka @La');
+    expect(screen.getByRole('listbox')).toBeInTheDocument();
+    fireEvent.keyDown(box(), { key: 'Enter', isComposing: true });
+    fireEvent.keyDown(box(), { key: 'Tab', keyCode: 229 });
+    fireEvent.keyDown(box(), { key: 'ArrowDown', isComposing: true });
+    expect(box()).toHaveValue('buka @La');
+    expect(screen.getByRole('listbox')).toBeInTheDocument();
+    expect(within(screen.getByRole('listbox')).getAllByRole('option')[0]).toHaveAttribute('aria-selected', 'true');
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
 });

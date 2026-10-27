@@ -10,12 +10,13 @@ import { cn } from '@/lib/utils';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { useSession } from '../../lib/session.js';
-import { sizedImg } from '../../lib/media.js';
+import { UPLOAD_WIDTHS, sizedImg } from '../../lib/media.js';
 import { inputClass } from '../../ui/controls.js';
 import { describeError } from '../../ui/states.js';
 import { FLOW, fmtUsd, isOpenRouter, type Engine, type EngineSet } from '../providers/providersClient.js';
 import { CREDITS_PER_SHOT, UPLOAD_TYPES, storiesApi, uploadProblem, type SheetAnswer, type Story } from '../stories/storiesClient.js';
 import type { Board } from './model.js';
+import { shotsUsing } from './mentions.js';
 import { media, useProject } from './useProject.js';
 
 /** A bible character card as stored (unknown fields are kept on save). */
@@ -49,14 +50,9 @@ export function withCard(board: Board, token: string, next: Card | null): Board 
   return out;
 }
 
-const tokenIn = (token: string) => new RegExp(`(^|[^A-Za-z0-9_])${token}(?![A-Za-z0-9_])`);
-
 /** What an anchor change re-renders: shots whose cast includes the token, and their done clips. */
 export function anchorImpact(board: Board, story: Story, token: string): { shots: number; clips: number } {
-  const re = tokenIn(token);
-  const ids = board.shots
-    .filter(s => [s.prompt, s.intent?.subject, s.intent?.action].some(t => typeof t === 'string' && re.test(t)))
-    .map(s => s.id);
+  const ids = shotsUsing(board, token).shots.map(s => s.id);
   return { shots: ids.length, clips: ids.filter(id => story.shots.find(s => s.id === id)?.status === 'done').length };
 }
 
@@ -159,7 +155,11 @@ export function CharacterCard(props: { card: Card; engine: EngineSet; locked: bo
     try {
       const r = await api.upload(p.id, f);
       const name = r.url.split('/').pop()!;
-      await p.save(withCard(board, card.token, { ...card, reference: `uploads/${name}` }));
+      // The upload took a while: store the reference on the board as it is NOW (the assistant may have saved meanwhile).
+      await p.save(latest => {
+        const now = cardsOf(latest).find(c => c.token === card.token);
+        return now ? withCard(latest, card.token, { ...now, reference: `uploads/${name}` }) : latest;
+      });
     } catch (e) {
       setProblem(`Referensi gagal diunggah: ${describeError(e)}`);
     } finally {
@@ -246,14 +246,17 @@ export function CharacterCard(props: { card: Card; engine: EngineSet; locked: bo
                   <Button type="button" size="sm" variant="ghost" disabled={props.locked || uploading} onClick={() => file.current?.click()}>
                     {uploading ? <Loader2 className="animate-spin" /> : <ImagePlus />} {card.reference ? 'Ganti referensi' : 'Unggah referensi'}
                   </Button>
-                  <input ref={file} type="file" accept={UPLOAD_TYPES.join(',')} aria-label={`Pilih gambar referensi ${card.name}`} className="sr-only" tabIndex={-1}
+                  <input ref={file} type="file" accept={UPLOAD_TYPES.join(',')} aria-label={`Pilih gambar referensi ${card.name}`} hidden
                     onChange={e => void upload(e.target.files?.[0])} />
                 </>
               )}
             </div>
+            {konsisten && !sheet && (
+              <p className="text-[11.5px] text-muted-foreground">Sheet bisa dibuat setelah {card.name} dipakai di shot (sebut {card.token} di subjek atau aksi).</p>
+            )}
             {card.reference && (
               <div className="flex items-center gap-2 text-[12px] text-muted-foreground">
-                <img src={api.uploadUrl(p.id, card.reference)} width={REF_THUMB} height={REF_THUMB} alt={`Referensi ${card.name}`} loading="lazy" decoding="async"
+                <img {...sizedImg(api.uploadUrl(p.id, card.reference), REF_THUMB, UPLOAD_WIDTHS)} width={REF_THUMB} height={REF_THUMB} alt={`Referensi ${card.name}`} loading="lazy" decoding="async"
                   className="size-10 rounded-md object-cover ring-1 ring-border" />
                 <span>Referensi</span>
                 <Button type="button" size="xs" variant="ghost" disabled={props.locked} onClick={dropReference}><X /> Hapus referensi</Button>

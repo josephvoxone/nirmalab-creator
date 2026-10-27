@@ -29,7 +29,9 @@ export function mcpApi(fetchImpl: FetchLike) {
   return {
     list: async () => {
       const r = await requestJson<unknown>(fetchImpl, '/api/mcp/tokens');
-      return Array.isArray(r) ? r as McpToken[] : [];
+      // A broken answer is an error to retry, never "no tokens" (that would hide live tokens).
+      if (!Array.isArray(r)) throw new Error('Jawaban server tidak terbaca.');
+      return r as McpToken[];
     },
     create: (name: string) => requestJson<CreatedMcpToken>(fetchImpl, '/api/mcp/tokens', post({ name })),
     revoke: (id: string) => requestJson<{ ok: boolean }>(fetchImpl, `/api/mcp/tokens/${encodeURIComponent(id)}`, del()),
@@ -57,24 +59,26 @@ async function copyText(text: string): Promise<boolean> {
   try { return document.execCommand('copy'); } catch { return false; } finally { area.remove(); }
 }
 
-function CopyButton(props: { text: string }) {
+/** `what` names the thing copied, so two copy buttons side by side have distinct names. */
+function CopyButton(props: { text: string; what: string }) {
   const [state, setState] = useState<'idle' | 'ok' | 'fail'>('idle');
   useEffect(() => { setState('idle'); }, [props.text]);
+  const label = state === 'ok' ? `${props.what[0]!.toUpperCase()}${props.what.slice(1)} tersalin` : state === 'fail' ? `Salin ${props.what} manual` : `Salin ${props.what}`;
   return (
-    <Button type="button" size="sm" variant="glass"
+    <Button type="button" size="sm" variant="glass" aria-label={label}
       onClick={() => { void copyText(props.text).then(ok => setState(ok ? 'ok' : 'fail')); }}>
       {state === 'ok' ? <Check /> : <Copy />} {state === 'ok' ? 'Tersalin' : state === 'fail' ? 'Salin manual' : 'Salin'}
     </Button>
   );
 }
 
-function CodeBlock(props: { label: string; text: string }) {
+function CodeBlock(props: { label: string; text: string; what: string }) {
   return (
     <div className="flex flex-col gap-1.5">
       <pre aria-label={props.label} className="glass-well max-h-64 overflow-auto rounded-md bg-muted px-3 py-2.5 font-mono text-[12px] leading-relaxed whitespace-pre text-foreground [scrollbar-width:thin]">
         <code>{props.text}</code>
       </pre>
-      <div><CopyButton text={props.text} /></div>
+      <div><CopyButton text={props.text} what={props.what} /></div>
     </div>
   );
 }
@@ -89,7 +93,10 @@ export function IntegrationsPanel() {
   const [tick, setTick] = useState(0);
   const [formOpen, setFormOpen] = useState(false);
   const [name, setName] = useState('');
-  const [busy, setBusy] = useState<'create' | 'revoke' | 'test'>();
+  // One flag per action: a test finishing never re-enables "Buat" while a create is still out (and so on).
+  const [creating, setCreating] = useState(false);
+  const [revoking, setRevoking] = useState(false);
+  const [testing, setTesting] = useState(false);
   const [error, setError] = useState('');
   const [revealed, setRevealed] = useState<CreatedMcpToken>();
   const [confirm, setConfirm] = useState<McpToken>();
@@ -116,7 +123,7 @@ export function IntegrationsPanel() {
     e.preventDefault();
     const n = name.trim();
     if (!n) return;
-    setBusy('create');
+    setCreating(true);
     setError('');
     try {
       const created = await api.create(n);
@@ -130,7 +137,7 @@ export function IntegrationsPanel() {
     } catch (err) {
       setError(describeError(err));
     } finally {
-      setBusy(undefined);
+      setCreating(false);
     }
   };
 
@@ -141,7 +148,7 @@ export function IntegrationsPanel() {
   };
 
   const revoke = async (token: McpToken) => {
-    setBusy('revoke');
+    setRevoking(true);
     setError('');
     try {
       await api.revoke(token.id);
@@ -150,19 +157,22 @@ export function IntegrationsPanel() {
     } catch (err) {
       setError(describeError(err));
     } finally {
-      setBusy(undefined);
+      setRevoking(false);
     }
   };
 
   const test = async () => {
-    setBusy('test');
+    setTesting(true);
     setResult(undefined);
     setTestError('');
-    try { setResult(await api.test(revealed?.token)); } catch (err) { setTestError(describeError(err)); } finally { setBusy(undefined); }
+    try { setResult(await api.test(revealed?.token)); } catch (err) { setTestError(describeError(err)); } finally { setTesting(false); }
   };
+  // A create/revoke error belongs to that attempt: opening or cancelling the form starts clean.
+  const openForm = () => { setError(''); setFormOpen(true); };
+  const closeForm = () => { setError(''); setFormOpen(false); setName(''); };
 
   const createButton = (
-    <Button size="sm" variant="glass" disabled={full || formOpen} onClick={() => setFormOpen(true)}><Plus /> Buat token</Button>
+    <Button size="sm" variant="glass" disabled={full || formOpen} onClick={openForm}><Plus /> Buat token</Button>
   );
 
   return (
@@ -208,7 +218,7 @@ export function IntegrationsPanel() {
                       <span className="truncate text-[13px] text-foreground">{t.name}</span>
                       <span className="text-[12px] text-muted-foreground">Dibuat {when(t.createdAt)} · Terakhir dipakai {when(t.lastUsedAt)}</span>
                     </div>
-                    <Button size="sm" variant="ghost" className="ml-auto shrink-0" aria-label={`Cabut ${t.name}`} disabled={busy === 'revoke'} onClick={() => setConfirm(t)}>Cabut</Button>
+                    <Button size="sm" variant="ghost" className="ml-auto shrink-0" aria-label={`Cabut ${t.name}`} disabled={revoking} onClick={() => setConfirm(t)}>Cabut</Button>
                   </li>
                 ))}
               </ul>
@@ -223,8 +233,8 @@ export function IntegrationsPanel() {
               <input ref={nameRef} className={inputClass} maxLength={MAX_NAME} autoComplete="off"
                 placeholder="mis. Claude Code di laptop" value={name} onChange={e => setName(e.target.value)} />
             </label>
-            <Button type="submit" size="lg" disabled={busy === 'create' || !name.trim()}>{busy === 'create' ? 'Membuat…' : 'Buat'}</Button>
-            <Button type="button" size="lg" variant="ghost" onClick={() => { setFormOpen(false); setName(''); }}>Batal</Button>
+            <Button type="submit" size="lg" disabled={creating || !name.trim()}>{creating ? 'Membuat…' : 'Buat'}</Button>
+            <Button type="button" size="lg" variant="ghost" onClick={closeForm}>Batal</Button>
           </form>
         )}
 
@@ -236,7 +246,7 @@ export function IntegrationsPanel() {
               <TriangleAlert aria-hidden="true" className="size-3.5 shrink-0" />Token ini hanya ditampilkan sekali. Simpan sekarang.
             </p>
             <div className="flex flex-wrap items-center gap-2">
-              <CopyButton text={revealed.token} />
+              <CopyButton text={revealed.token} what="token" />
               <Button size="sm" onClick={done}>Selesai</Button>
             </div>
           </div>
@@ -257,18 +267,18 @@ export function IntegrationsPanel() {
           {snippet.steps.map(s => <li key={s}>{s}</li>)}
         </ol>
         {snippet.file && <p className="text-[12px] text-muted-foreground">File: <span className="font-mono text-foreground/90">{snippet.file}</span></p>}
-        <CodeBlock label={`Konfigurasi ${clientLabel}`} text={snippet.text} />
+        <CodeBlock label={`Konfigurasi ${clientLabel}`} text={snippet.text} what="konfigurasi" />
         {snippet.extra && <>
           <span className="text-[12px] text-muted-foreground">{snippet.extra.label}</span>
-          <CodeBlock label={snippet.extra.label} text={snippet.extra.text} />
+          <CodeBlock label={snippet.extra.label} text={snippet.extra.text} what="variabel token" />
         </>}
         <div className="flex flex-wrap items-center gap-2">
           <a href={snippet.docUrl} target="_blank" rel="noreferrer"
             className="inline-flex items-center gap-1 text-[12.5px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline [&_svg]:size-3.5">
             Dokumentasi resmi {clientLabel} <ExternalLink aria-hidden="true" />
           </a>
-          <Button size="sm" variant="glass" className="ml-auto" disabled={busy === 'test'} onClick={() => void test()}>
-            <PlugZap /> {busy === 'test' ? 'Mengetes…' : 'Tes koneksi'}
+          <Button size="sm" variant="glass" className="ml-auto" disabled={testing} onClick={() => void test()}>
+            <PlugZap /> {testing ? 'Mengetes…' : 'Tes koneksi'}
           </Button>
         </div>
         {result && <p role="status" className="text-[12.5px] text-(--success) tabular-nums">Terhubung · {result.tools} tools</p>}

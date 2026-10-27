@@ -63,6 +63,8 @@ function SceneRow(props: {
 export function SceneList(props: {
   board: Board; story: Story; selected: string; locked: boolean;
   onSelect: (id: string) => void; onMove: (id: string, to: number) => void; onAdd: (title: string) => void;
+  /** Bible boards: a new scene needs a goal, so "Tambah scene" opens the form instead of the inline title field. */
+  onAddForm?: () => void;
 }) {
   const scenes = props.board.scenes ?? [];
   const [adding, setAdding] = useState(false);
@@ -93,7 +95,7 @@ export function SceneList(props: {
           onBlur={() => { if (title.trim()) commit(); else setAdding(false); }}
           className="h-7 rounded-md border border-input bg-(--field) px-2 text-[13px] outline-none placeholder:text-muted-foreground focus-visible:border-ring" />
       ) : (
-        <Button type="button" size="sm" variant="ghost" aria-label="Tambah scene" disabled={props.locked} onClick={() => setAdding(true)} className="justify-start text-muted-foreground">
+        <Button type="button" size="sm" variant="ghost" aria-label="Tambah scene" disabled={props.locked} onClick={() => (props.onAddForm ? props.onAddForm() : setAdding(true))} className="justify-start text-muted-foreground">
           <Plus /> Scene
         </Button>
       )}

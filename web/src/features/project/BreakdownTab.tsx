@@ -27,17 +27,12 @@ import '../stories/studio.css';
 import { media, useProject } from './useProject.js';
 import type { Board, CharacterSpec } from './model.js';
 import { CharacterCard, cardsOf, withCard } from './CharacterCard.js';
+import { shotsUsing } from './mentions.js';
 
 const TOKEN_RE = /^[A-Z][A-Z0-9_]{1,30}$/;
 const tokenOf = (name: string) => name.normalize('NFKD').replace(/[^A-Za-z0-9]+/g, '_').replace(/^_+|_+$/g, '').toUpperCase().slice(0, 30);
 const titleCase = (t: string) => t.toLowerCase().split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
 const asSpec = (token: string, s: CharacterSpec) => (typeof s === 'string' ? { name: titleCase(token), look: s } : { name: s.name || titleCase(token), look: s.look });
-const uses = (b: Board, token: string) => {
-  const re = new RegExp(`\\b${token}\\b`);
-  const shots = b.shots.filter(s => [s.prompt, s.intent?.subject, s.intent?.action].some(t => typeof t === 'string' && re.test(t)));
-  const scenes = (b.scenes ?? []).filter(sc => sc.shots.some(id => shots.some(s => s.id === id)));
-  return { shots, scenes };
-};
 
 function Section(props: { id: string; title: string; hint: string; action?: ReactNode; children: ReactNode }) {
   return (
@@ -184,7 +179,7 @@ export function BreakdownTab() {
 
   const bible = !!board.bible;
   const cards = bible ? cardsOf(board) : [];
-  const characters = Object.entries(board.characters ?? {}).map(([token, spec]) => ({ token, ...asSpec(token, spec), ...uses(board, token) }));
+  const characters = Object.entries(board.characters ?? {}).map(([token, spec]) => ({ token, ...asSpec(token, spec), ...shotsUsing(board, token) }));
   const lookdev = (key: string) => {
     const raw = (board.bible as { locations?: Array<{ key?: unknown; lookdev?: unknown }> } | undefined)?.locations;
     const card = Array.isArray(raw) ? raw.find(l => l?.key === key) : undefined;
@@ -214,7 +209,10 @@ export function BreakdownTab() {
     const token = tokenOf(name);
     if (!TOKEN_RE.test(token) || cards.some(c => c.token === token) || board.characters?.[token]) return false;
     const anchors = anchorText.split(',').map(a => a.trim()).filter(Boolean);
-    return p.save(withCard(board, token, { token, name, anchors, want: '', need: '', arc: '' }));
+    // Both sides at once (like locations): the bible card, and the cast entry the sheet and TOKEN expansion read
+    // (same "name, anchors" look the server mirrors for a new card).
+    const next = withCard(board, token, { token, name, anchors, want: '', need: '', arc: '' });
+    return p.save({ ...next, characters: { ...board.characters, [token]: [name.trim(), ...anchors].join(', ') } });
   };
   const saveLocation = (key: string, name: string, look: string) => p.save(withLocation(board, key, { name, look }));
   const addLocation = async (name: string, look: string) => {
@@ -233,7 +231,7 @@ export function BreakdownTab() {
   ) : (
     <ul className="flex flex-col">
       {cards.map(c => {
-        const used = uses(board, c.token).shots.length;
+        const used = shotsUsing(board, c.token).shots.length;
         return (
           <CharacterCard key={c.token} card={c} engine={engineOf(board)} locked={locked}
             deleteBlocked={used ? `Dipakai di ${used} shot — ganti subjek shot itu dulu` : undefined}

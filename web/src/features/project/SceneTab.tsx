@@ -15,7 +15,8 @@ import {
 import { useSession } from '../../lib/session.js';
 import { useCatalog } from '../stories/catalog.js';
 import { STATUS_LABEL, isActive, storiesApi } from '../stories/storiesClient.js';
-import { addScene, addShot, duplicateShot, intentSkeleton, moveScene, moveShot, removeScene, removeShot, sceneOf, splitSceneAfter, type Board } from './model.js';
+import { addScene, addShot, duplicateShot, intentSkeleton, moveScene, moveShot, removeScene, removeShot, sceneOf, splitSceneAfter, type Board, type SceneGoal } from './model.js';
+import { NewSceneDialog } from './NewSceneDialog.js';
 import { SceneBoard, type SceneActions } from './SceneBoard.js';
 import { dragEndBoard, parseDragId } from './SceneHelpers.js';
 import { SceneList } from './SceneList.js';
@@ -46,6 +47,8 @@ export function SceneTab() {
   const [sheet, setSheet] = useState<string>();
   const [doomed, setDoomed] = useState<Doomed>();
   const [dragging, setDragging] = useState<string>();
+  /** Bible boards: the new-scene form is open (after a shot when it splits a scene). */
+  const [newScene, setNewScene] = useState<{ afterShot?: string }>();
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
@@ -75,16 +78,21 @@ export function SceneTab() {
     },
     prepare: () => void p.prepare(scene.id),
     render: () => void p.render({ scene: scene.id }),
-    splitAfter: (shotId: string) => save(splitSceneAfter(board, shotId, '')),
+    // Bible boards ask for the new scene's goal first; legacy boards split at once.
+    splitAfter: (shotId: string) => (board.bible ? setNewScene({ afterShot: shotId }) : save(splitSceneAfter(board, shotId, ''))),
     moveScene: to => save(moveScene(board, scene.id, to)),
     removeScene: () => setDoomed({ kind: 'scene', id: scene.id })
   };
 
-  const onAddScene = (title: string) => {
-    const next = addScene(board, title);
+  const onAddScene = (title: string, extra: SceneGoal = {}) => {
+    const next = addScene(board, title, undefined, extra);
     const id = newId(scenes.map(s => s.id), (next.scenes ?? []).map(s => s.id));
     save(next);
     if (id) setSelected(id);
+  };
+  const onCreateScene = (title: string, extra: SceneGoal) => {
+    if (newScene?.afterShot) save(splitSceneAfter(board, newScene.afterShot, title, extra));
+    else onAddScene(title, extra);
   };
 
   /** Removing a scene hands its shots to the previous scene (the next one for the first). */
@@ -126,7 +134,7 @@ export function SceneTab() {
       <DndContext sensors={sensors} collisionDetection={sceneCollision} onDragStart={onDragStart} onDragEnd={onDragEnd} onDragCancel={() => setDragging(undefined)}>
         <div className="grid items-start gap-3 md:grid-cols-[236px_minmax(0,1fr)]">
           <SceneList board={board} story={story} selected={scene.id} locked={locked} onSelect={setSelected}
-            onMove={(id, to) => save(moveScene(board, id, to))} onAdd={onAddScene} />
+            onMove={(id, to) => save(moveScene(board, id, to))} onAdd={title => onAddScene(title)} onAddForm={board.bible ? () => setNewScene({}) : undefined} />
           <SceneBoard projectId={p.id} board={board} story={story} scene={scene} index={index} locked={locked} busy={!!p.busy && p.busy !== 'save'}
             picked={picked} actions={actions} />
         </div>
@@ -141,6 +149,10 @@ export function SceneTab() {
         </DragOverlay>
       </DndContext>
       <ShotSheet shotId={sheet} catalog={catalog} onClose={() => setSheet(undefined)} />
+      {!!board.bible && (
+        <NewSceneDialog open={!!newScene} board={board} afterShot={newScene?.afterShot} defaultTitle={`Scene ${scenes.length + 1}`}
+          onOpenChange={o => { if (!o) setNewScene(undefined); }} onCreate={onCreateScene} />
+      )}
       <AlertDialog open={!!doomed} onOpenChange={o => { if (!o) setDoomed(undefined); }}>
         <AlertDialogContent>
           <AlertDialogHeader>

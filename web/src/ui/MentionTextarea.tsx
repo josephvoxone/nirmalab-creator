@@ -121,6 +121,8 @@ export function MentionTextarea(props: MentionTextareaProps) {
   useEffect(() => { if (props.disabled) setQuery(undefined); }, [props.disabled]);
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    // An IME (Japanese, Chinese, Korean…) is composing: Enter/Tab/arrows confirm or move its candidates.
+    if (e.nativeEvent.isComposing || e.keyCode === 229) return;
     if (open) {
       if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
         e.preventDefault();
@@ -142,7 +144,7 @@ export function MentionTextarea(props: MentionTextareaProps) {
         return;
       }
     }
-    if (e.key === 'Enter' && !e.shiftKey && props.onSubmit && !e.nativeEvent.isComposing) {
+    if (e.key === 'Enter' && !e.shiftKey && props.onSubmit) {
       e.preventDefault();
       props.onSubmit(props.value);
     }

@@ -16,7 +16,7 @@ const ago = (ms: number) => new Date(Date.now() - ms).toISOString();
 const laptop: Tok = { id: 'tok_1', name: 'Claude Code di laptop', createdAt: ago(3 * 86_400_000), lastUsedAt: ago(2 * 3_600_000) };
 const cursor: Tok = { id: 'tok_2', name: 'Cursor kantor', createdAt: ago(86_400_000), lastUsedAt: null };
 
-function fake(opts: { tokens?: Tok[]; gets?: Reply[]; hang?: boolean; test?: Reply } = {}) {
+function fake(opts: { tokens?: Tok[]; gets?: Reply[]; hang?: boolean; test?: Reply; createGate?: Promise<void>; testGate?: Promise<void>; revoke?: Reply } = {}) {
   let tokens = structuredClone(opts.tokens ?? []);
   const gets = [...(opts.gets ?? [])];
   const calls: Array<{ method: string; url: string; body?: unknown }> = [];
@@ -29,15 +29,18 @@ function fake(opts: { tokens?: Tok[]; gets?: Reply[]; hang?: boolean; test?: Rep
       return json(gets.shift() ?? { status: 200, body: tokens });
     }
     if (url === '/api/mcp/tokens' && method === 'POST') {
+      await opts.createGate;
       const t = { id: `tok_${tokens.length + 10}`, name: body.name, createdAt: new Date().toISOString(), lastUsedAt: null };
       tokens = [...tokens, t];
       return json({ status: 201, body: { id: t.id, name: t.name, token: REAL } });
     }
     const del = /^\/api\/mcp\/tokens\/(.+)$/.exec(url);
     if (del && method === 'DELETE') {
+      if (opts.revoke) return json(opts.revoke);
       tokens = tokens.filter(t => t.id !== del[1]);
       return json({ status: 200, body: { ok: true } });
     }
+    if (url === '/api/mcp/test' && method === 'POST') await opts.testGate;
     if (url === '/api/mcp/test' && method === 'POST') return json(opts.test ?? { status: 200, body: { ok: true, tools: 22, user: admin.email } });
     return json({ status: 404, body: { error: { message: `no fake for ${method} ${url}` } } });
   });
@@ -148,7 +151,7 @@ describe('Pengaturan › Integrasi', () => {
     expect(setupRegion()).toHaveTextContent('claude_desktop_config.json');
     await user.click(within(picker).getByRole('radio', { name: 'Codex' }));
     expect(code()).toHaveTextContent('bearer_token_env_var');
-    expect(within(setupRegion()).getByLabelText(/variabel token/i)).toHaveTextContent('export NIRMALAB_MCP_TOKEN="<TOKEN>"');
+    expect(within(setupRegion()).getByLabelText(/variabel token/i, { selector: 'pre' })).toHaveTextContent('export NIRMALAB_MCP_TOKEN="<TOKEN>"');
     expect(within(setupRegion()).getByRole('link', { name: /dokumentasi resmi/i })).toHaveAttribute('href', 'https://developers.openai.com/codex/mcp/');
     expect(within(setupRegion()).getAllByRole('listitem').length).toBeGreaterThanOrEqual(2);
   });
@@ -200,6 +203,102 @@ describe('Pengaturan › Integrasi', () => {
     await within(tokensRegion()).findByText('Belum ada token');
     await user.click(within(setupRegion()).getByRole('button', { name: /tes koneksi/i }));
     expect(await within(setupRegion()).findByRole('alert')).toHaveTextContent(/tes gagal.*server mcp tidak menjawab/i);
+  });
+});
+
+describe('Pengaturan › Integrasi — review fixes', () => {
+  const gate = () => { let open!: () => void; const p = new Promise<void>(r => { open = r; }); return { p, open }; };
+
+  it('create and test have their own busy state: one finishing never re-enables the other mid-request', async () => {
+    const user = userEvent.setup();
+    const create = gate();
+    const test = gate();
+    open(fake({ tokens: [laptop], createGate: create.p, testGate: test.p }));
+    await user.click(await within(tokensRegion()).findByRole('button', { name: 'Buat token' }));
+    await user.type(within(tokensRegion()).getByLabelText('Nama token'), 'Codex');
+    await user.click(within(tokensRegion()).getByRole('button', { name: /^buat$/i }));
+    const making = within(tokensRegion()).getByRole('button', { name: 'Membuat…' });
+    expect(making).toBeDisabled();
+    await user.click(within(setupRegion()).getByRole('button', { name: /tes koneksi/i }));
+    expect(within(setupRegion()).getByRole('button', { name: /mengetes/i })).toBeDisabled();
+    // The test starting does not re-enable "Buat" while the create request is still out.
+    expect(within(tokensRegion()).getByRole('button', { name: 'Membuat…' })).toBeDisabled();
+    test.open();
+    expect(await within(setupRegion()).findByRole('status')).toHaveTextContent('Terhubung · 22 tools');
+    expect(within(tokensRegion()).getByRole('button', { name: 'Membuat…' })).toBeDisabled();
+    // And the other way round: a test still out stays "Mengetes…" while a create finishes.
+    await user.click(within(setupRegion()).getByRole('button', { name: /tes koneksi/i }));
+    create.open();
+    expect(await screen.findByRole('region', { name: /token baru/i })).toBeInTheDocument();
+  });
+
+  it('a create finishing does not re-enable Tes koneksi while a test is still out', async () => {
+    const user = userEvent.setup();
+    const create = gate();
+    const test = gate();
+    open(fake({ createGate: create.p, testGate: test.p }));
+    await user.click(await within(tokensRegion()).findByRole('button', { name: 'Buat token' }));
+    await user.type(within(tokensRegion()).getByLabelText('Nama token'), 'Codex');
+    await user.click(within(tokensRegion()).getByRole('button', { name: /^buat$/i }));
+    await user.click(within(setupRegion()).getByRole('button', { name: /tes koneksi/i }));
+    create.open();
+    await screen.findByRole('region', { name: /token baru/i });
+    expect(within(setupRegion()).getByRole('button', { name: /mengetes/i })).toBeDisabled();
+    test.open();
+    await waitFor(() => expect(within(setupRegion()).getByRole('button', { name: /tes koneksi/i })).toBeEnabled());
+  });
+
+  it('a malformed token list is an error with Coba lagi, not an empty list', async () => {
+    const user = userEvent.setup();
+    open(fake({ gets: [{ status: 200, body: { tokens: 'rusak' } }], tokens: [laptop] }));
+    const alert = await within(tokensRegion()).findByRole('alert');
+    expect(alert).toHaveTextContent(/token gagal dimuat/i);
+    expect(within(tokensRegion()).queryByText('Belum ada token')).toBeNull();
+    await user.click(within(alert).getByRole('button', { name: /coba lagi/i }));
+    expect(await within(tokensRegion()).findByRole('listitem', { name: 'Claude Code di laptop' })).toBeInTheDocument();
+  });
+
+  it('Codex has two copy buttons with distinct names', async () => {
+    const user = userEvent.setup();
+    open(fake());
+    await user.click(within(within(setupRegion()).getByRole('radiogroup', { name: /klien/i })).getByRole('radio', { name: 'Codex' }));
+    expect(within(setupRegion()).getByRole('button', { name: 'Salin konfigurasi' })).toBeInTheDocument();
+    expect(within(setupRegion()).getByRole('button', { name: 'Salin variabel token' })).toBeInTheDocument();
+  });
+
+  it('cancelling or reopening the form clears a create or revoke error', async () => {
+    const user = userEvent.setup();
+    const f = fake({ tokens: [laptop], revoke: { status: 500, body: { error: { message: 'disk penuh' } } } });
+    open(f);
+    const row = await within(tokensRegion()).findByRole('listitem', { name: 'Claude Code di laptop' });
+    await user.click(within(row).getByRole('button', { name: /cabut/i }));
+    await user.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: /^cabut/i }));
+    expect(await within(tokensRegion()).findByRole('alert')).toHaveTextContent(/disk penuh/);
+    await user.click(within(tokensRegion()).getByRole('button', { name: 'Buat token' }));
+    expect(within(tokensRegion()).queryByRole('alert')).toBeNull();
+    // A create error, then Batal: gone too.
+    f.fetchImpl.mockImplementationOnce(async () => json({ status: 409, body: { error: { message: 'Maksimal 10 token' } } }));
+    await user.type(within(tokensRegion()).getByLabelText('Nama token'), 'Satu lagi');
+    await user.click(within(tokensRegion()).getByRole('button', { name: /^buat$/i }));
+    expect(await within(tokensRegion()).findByRole('alert')).toHaveTextContent(/maksimal 10 token/i);
+    await user.click(within(tokensRegion()).getByRole('button', { name: /^batal$/i }));
+    expect(within(tokensRegion()).queryByRole('alert')).toBeNull();
+  });
+
+  it('revoking the token that is still revealed clears the reveal and the snippet goes back to <TOKEN>', async () => {
+    const user = userEvent.setup();
+    open(fake());
+    await user.click(await within(tokensRegion()).findByRole('button', { name: 'Buat token' }));
+    await user.type(within(tokensRegion()).getByLabelText('Nama token'), 'Laptop');
+    await user.click(within(tokensRegion()).getByRole('button', { name: /^buat$/i }));
+    await screen.findByRole('region', { name: /token baru/i });
+    expect(code()).toHaveTextContent(REAL);
+    const row = await within(tokensRegion()).findByRole('listitem', { name: 'Laptop' });
+    await user.click(within(row).getByRole('button', { name: /cabut/i }));
+    await user.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: /^cabut/i }));
+    await waitFor(() => expect(screen.queryByRole('region', { name: /token baru/i })).toBeNull());
+    expect(code()).toHaveTextContent('<TOKEN>');
+    expect(document.body.innerHTML).not.toContain(REAL);
   });
 });
 

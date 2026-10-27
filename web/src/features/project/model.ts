@@ -89,11 +89,29 @@ export function moveScene(input: Board, sceneId: string, toIndex: number): Board
   return normalizeScenes(b);
 }
 
-export function addScene(input: Board, title: string, afterSceneId?: string): Board {
+/** What a new scene of a bible board needs: its story goal (required there) and, optionally, a location key. */
+export type SceneGoal = { goal?: string; location?: string };
+
+/**
+ * The new scene's location on the board side and, on bible boards, its card `{id, title, goal, location?}`
+ * in `bible.scenes` — in the same save, because the server refuses a new bible scene without a goal.
+ */
+function withSceneCard(b: Board, scene: Scene, extra: SceneGoal): void {
+  const location = extra.location && b.locations?.[extra.location] ? extra.location : undefined;
+  if (location) scene.location = location;
+  const goal = extra.goal?.trim();
+  if (!b.bible || !goal) return;
+  const bible = b.bible as Record<string, unknown>;
+  const cards = Array.isArray(bible.scenes) ? bible.scenes as unknown[] : [];
+  b.bible = { ...bible, scenes: [...cards, { id: scene.id, title: scene.title, goal, ...(location ? { location } : {}) }] };
+}
+
+export function addScene(input: Board, title: string, afterSceneId?: string, extra: SceneGoal = {}): Board {
   const b = normalizeScenes(input);
   const scene: Scene = { id: uniqueId(b.scenes!.map(s => s.id), `scene-${b.scenes!.length + 1}`), title: title.trim() || `Scene ${b.scenes!.length + 1}`, shots: [] };
   const at = afterSceneId ? b.scenes!.findIndex(s => s.id === afterSceneId) + 1 : b.scenes!.length;
   b.scenes!.splice(at > 0 ? at : b.scenes!.length, 0, scene);
+  withSceneCard(b, scene, extra);
   return normalizeScenes(b);
 }
 
@@ -120,7 +138,7 @@ export function removeScene(input: Board, sceneId: string): Board {
   return normalizeScenes(b);
 }
 
-export function splitSceneAfter(input: Board, shotId: string, title: string): Board {
+export function splitSceneAfter(input: Board, shotId: string, title: string, extra: SceneGoal = {}): Board {
   const b = normalizeScenes(input);
   const scene = sceneOf(b, shotId);
   if (!scene) return b;
@@ -128,8 +146,17 @@ export function splitSceneAfter(input: Board, shotId: string, title: string): Bo
   if (at >= scene.shots.length) return b;
   const rest = scene.shots.splice(at);
   const i = b.scenes!.indexOf(scene);
-  b.scenes!.splice(i + 1, 0, { id: uniqueId(b.scenes!.map(s => s.id), `scene-${b.scenes!.length + 1}`), title: title.trim() || `Scene ${i + 2}`, shots: rest });
+  const next: Scene = { id: uniqueId(b.scenes!.map(s => s.id), `scene-${b.scenes!.length + 1}`), title: title.trim() || `Scene ${i + 2}`, shots: rest };
+  b.scenes!.splice(i + 1, 0, next);
+  withSceneCard(b, next, extra);
   return normalizeScenes(b);
+}
+
+/** Location choices of a bible scene: the bible's locations (key + name), else the board's. */
+export function locationChoices(b: Board): Array<{ key: string; name: string }> {
+  const raw = (b.bible as { locations?: Array<{ key?: unknown; name?: unknown }> } | undefined)?.locations;
+  const bible = Array.isArray(raw) ? raw.filter(l => typeof l?.key === 'string').map(l => ({ key: l.key as string, name: typeof l.name === 'string' && l.name ? l.name : l.key as string })) : [];
+  return bible.length ? bible : Object.entries(b.locations ?? {}).map(([key, l]) => ({ key, name: l.name || key }));
 }
 
 /** A new shot; `init` overrides the placeholder (bible boards pass an intent skeleton so it is compiled, not prose). */

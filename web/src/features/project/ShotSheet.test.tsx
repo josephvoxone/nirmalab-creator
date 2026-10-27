@@ -1,4 +1,4 @@
-import { screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { userEvent } from '@testing-library/user-event';
 import { useParams } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
@@ -218,11 +218,27 @@ describe('ShotSheet — bible boards (intent)', () => {
     const sheet = await open(api);
     await waitFor(() => expect(compiles(api)).toHaveLength(1));
     const action = within(sheet).getByRole('combobox', { name: 'Aksi' });
-    await userEvent.type(action, ' quietly');
-    await waitFor(() => expect(compiles(api)).toHaveLength(2));
-    expect(compiles(api)[1]!.body!.shot).toMatchObject({ intent: { action: 'sits by the gate quietly' } });
-    await new Promise(r => setTimeout(r, 600));
-    expect(compiles(api)).toHaveLength(2);
+    // Fake clock (setTimeout only): the burst, the 400 ms quiet period and the 600 ms after it take no
+    // real time. Keystrokes go through fireEvent: user-event waits on a real-looking setTimeout(0) between
+    // actions, which a faked setTimeout never fires.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      for (const tail of [' q', ' qu', ' quiet', ' quietly']) {
+        act(() => { fireEvent.change(action, { target: { value: `sits by the gate${tail}` } }); });
+        await act(async () => { vi.advanceTimersByTime(100); });
+      }
+      expect(compiles(api)).toHaveLength(1);
+      // 100 ms since the last keystroke: still quiet, 300 ms to go.
+      await act(async () => { vi.advanceTimersByTime(299); });
+      expect(compiles(api)).toHaveLength(1);
+      await act(async () => { vi.advanceTimersByTime(1); });
+      expect(compiles(api)).toHaveLength(2);
+      expect(compiles(api)[1]!.body!.shot).toMatchObject({ intent: { action: 'sits by the gate quietly' } });
+      await act(async () => { vi.advanceTimersByTime(600); });
+      expect(compiles(api)).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
 
     await userEvent.clear(action);
     const issues = await within(sheet).findByRole('list', { name: 'Masalah prompt' });

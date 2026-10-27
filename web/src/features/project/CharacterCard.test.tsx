@@ -1,7 +1,10 @@
-import { screen, waitFor, within } from '@testing-library/react';
+import { act, screen, waitFor, within } from '@testing-library/react';
 import { userEvent } from '@testing-library/user-event';
+import { useParams } from 'react-router-dom';
 import { describe, expect, it } from 'vitest';
+import { BreakdownTab } from './BreakdownTab.js';
 import { ProjectPage } from './ProjectPage.js';
+import { ProjectProvider, useProjectState } from './useProject.js';
 import { BIBLE, bibleBoard, fakeProjectApi, ID, mountProject, storyFor, type ExtraRoute } from './testkit.js';
 import type { Board } from './model.js';
 import type { Story } from '../stories/storiesClient.js';
@@ -97,6 +100,9 @@ describe('Breakdown › character cards (bible boards)', () => {
     const cast = await open(api);
     const jingga = card(cast, 'Jingga');
     const file = new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3])], 'jingga.png', { type: 'image/png' });
+    // The file input is not a second control next to the button: hidden from the page and from assistive tech.
+    expect(within(jingga).getByLabelText('Pilih gambar referensi Jingga')).not.toBeVisible();
+    expect(within(jingga).getAllByRole('button', { name: /referensi/i })).toHaveLength(1);
     await userEvent.upload(within(jingga).getByLabelText('Pilih gambar referensi Jingga'), file);
     await waitFor(() => expect(api.calls.some(c => c.url === `/api/stories/${ID}/uploads`)).toBe(true));
     const post = api.calls.find(c => c.url === `/api/stories/${ID}/uploads`)!;
@@ -105,7 +111,9 @@ describe('Breakdown › character cards (bible boards)', () => {
     expect(post.headers?.['Content-Type']).toBe('image/png');
     await waitFor(() => expect(lastBoard(api)?.bible?.characters?.[0]?.reference).toBe('uploads/up_0123456789abcdef.png'));
     const ref = await within(card(screen.getByRole('region', { name: /^karakter$/i }), 'Jingga')).findByRole('img', { name: 'Referensi Jingga' });
-    expect(ref).toHaveAttribute('src', UPLOAD.url);
+    // A sized webp of the upload (64 px at 1x, 96 px at 2x), not the 800×1200 original.
+    expect(ref).toHaveAttribute('src', `${UPLOAD.url}?w=64`);
+    expect(ref).toHaveAttribute('srcset', `${UPLOAD.url}?w=64 1x, ${UPLOAD.url}?w=96 2x`);
     expect(Number(ref.getAttribute('width'))).toBeLessThanOrEqual(120);
     await userEvent.click(within(card(screen.getByRole('region', { name: /^karakter$/i }), 'Jingga')).getByRole('button', { name: /hapus referensi/i }));
     await waitFor(() => expect(lastBoard(api)?.bible?.characters?.[0]).not.toHaveProperty('reference'));
@@ -148,6 +156,21 @@ describe('Breakdown › character cards (bible boards)', () => {
     expect(lastBoard(api)?.bible?.characters?.[1]).toEqual(BIBLE.characters[1]);
   });
 
+  it('a new character is written on both sides (bible card + cast entry); its sheet waits until a shot uses it', async () => {
+    const api = setup();
+    const cast = await open(api);
+    await userEvent.click(within(cast).getByRole('button', { name: /tambah karakter/i }));
+    await userEvent.type(within(cast).getByRole('textbox', { name: 'Nama karakter' }), 'Bu Sari');
+    await userEvent.type(within(cast).getByRole('textbox', { name: 'Anchor visual baru' }), 'kebaya hijau lumut, sanggul kecil');
+    await userEvent.click(within(cast).getByRole('button', { name: /^tambah$/i }));
+    await waitFor(() => expect(lastBoard(api)?.bible?.characters?.[2]).toEqual({ token: 'BU_SARI', name: 'Bu Sari', anchors: ['kebaya hijau lumut', 'sanggul kecil'], want: '', need: '', arc: '' }));
+    expect(lastBoard(api)?.characters?.BU_SARI).toBe('Bu Sari, kebaya hijau lumut, sanggul kecil');
+    // The server makes a sheet only for a character some shot uses: the card says so instead of a dead button.
+    const sari = await within(screen.getByRole('region', { name: /^karakter$/i })).findByRole('listitem', { name: 'Bu Sari' });
+    expect(within(sari).queryByRole('button', { name: /buat (ulang )?sheet/i })).toBeNull();
+    expect(sari).toHaveTextContent('Sheet bisa dibuat setelah Bu Sari dipakai di shot (sebut BU_SARI di subjek atau aksi).');
+  });
+
   it('legacy boards keep the {name, look} editor (no anchors, no sheet button)', async () => {
     const cast = await open(fakeProjectApi());
     const jingga = card(cast, 'Jingga');
@@ -172,5 +195,45 @@ describe('Breakdown › location cards (bible boards)', () => {
     await userEvent.click(within(pagar).getByRole('button', { name: /^simpan$/i }));
     await waitFor(() => expect(lastBoard(api)?.bible?.locations?.[0]).toEqual({ key: 'PAGAR', name: 'Pagar rumah', lookdev: 'a blue iron gate under a mango tree at dusk' }));
     expect(lastBoard(api)?.locations?.PAGAR).toEqual({ name: 'Pagar rumah', look: 'a blue iron gate under a mango tree at dusk' });
+  });
+});
+
+describe('Breakdown › reference upload vs. the assistant', () => {
+  it('an assistant edit + reload while the upload is pending survives the save that stores the reference', async () => {
+    const board = bibleBoard();
+    let release!: () => void;
+    const held = new Promise<void>(r => { release = r; });
+    const holder: { api?: Api } = {};
+    const api = fakeProjectApi({
+      board, story: storyFor(board, [], [], { rev: 2 }),
+      extra: async (call, json) => {
+        if (call.url === `/api/stories/${ID}/uploads` && call.method === 'POST') { await held; return json(201, UPLOAD); }
+        return undefined;
+      }
+    });
+    holder.api = api;
+    let project!: ReturnType<typeof useProjectState>;
+    function Page() {
+      const { id = '' } = useParams();
+      const p = useProjectState(id, 0);
+      project = p;
+      if (!p.board || !p.story) return <p>memuat</p>;
+      return <ProjectProvider value={p}><BreakdownTab /></ProjectProvider>;
+    }
+    mountProject(<Page />, api.fetchImpl, { path: `/cerita/${ID}?tab=breakdown` });
+    const cast = await screen.findByRole('region', { name: /^karakter$/i });
+    const file = new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3])], 'jingga.png', { type: 'image/png' });
+    await userEvent.upload(within(card(cast, 'Jingga')).getByLabelText('Pilih gambar referensi Jingga'), file);
+    await waitFor(() => expect(api.calls.some(c => c.url === `/api/stories/${ID}/uploads`)).toBe(true));
+    // While the image uploads, the assistant renames the project; the chat panel reloads the tab.
+    api.board = { ...api.board, title: 'Judul dari asisten' };
+    api.story = { ...api.story, title: 'Judul dari asisten', rev: 3 };
+    act(() => project.reload());
+    await waitFor(() => expect(project.board!.title).toBe('Judul dari asisten'));
+    release();
+    await waitFor(() => expect(lastBoard(api)?.bible?.characters?.[0]?.reference).toBe('uploads/up_0123456789abcdef.png'));
+    expect(lastBoard(api)?.title).toBe('Judul dari asisten');
+    expect(api.board.title).toBe('Judul dari asisten');
+    expect(api.board.bible).toMatchObject({ characters: [{ token: 'JINGGA', reference: 'uploads/up_0123456789abcdef.png' }, BIBLE.characters[1]] });
   });
 });

@@ -9,14 +9,12 @@ import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useSession } from '../../lib/session.js';
-import { sized } from '../../lib/media.js';
 import { Choice, inputClass, textareaClass } from '../../ui/controls.js';
-import { MentionTextarea, type MentionItem, type MentionTriggers } from '../../ui/MentionTextarea.js';
+import { MentionTextarea, type MentionTriggers } from '../../ui/MentionTextarea.js';
 import { describeError } from '../../ui/states.js';
 import type { Catalog } from '../stories/catalog.js';
-import { storiesApi, type CompiledPreview, type Story } from '../stories/storiesClient.js';
-import type { Board, Shot, ShotIntent } from './model.js';
-import { media } from './useProject.js';
+import { storiesApi, type CompiledPreview } from '../stories/storiesClient.js';
+import type { Shot, ShotIntent } from './model.js';
 
 export type Intent = ShotIntent;
 export type IntentDraft = { subject: string; action: string; startState: string; endState: string; emotion: string; framing: string; move: string };
@@ -47,23 +45,8 @@ export function intentFrom(draft: IntentDraft, previous?: Partial<Intent>): Inte
 export const sameDraft = (a: IntentDraft, b: IntentDraft) => (Object.keys(a) as Array<keyof IntentDraft>).every(k => a[k].trim() === b[k].trim());
 export const missingSlots = (d: IntentDraft) => REQUIRED.filter(k => !d[k].trim());
 
-type CardLike = { token?: unknown; name?: unknown };
-/** Bible characters (falling back to the cast map) for `@`, locations for `#`. Shared with the breakdown dialog and the chat composer. */
-export function mentionTriggers(projectId: string, board: Board, story?: Story): MentionTriggers {
-  const bible = board.bible as { characters?: CardLike[] } | undefined;
-  const cards = Array.isArray(bible?.characters) && bible.characters.length
-    ? bible.characters.map(c => ({ token: str(c.token), name: str(c.name) || str(c.token) }))
-    : Object.entries(board.characters ?? {}).map(([token, spec]) => ({ token, name: typeof spec === 'object' && spec.name ? spec.name : token }));
-  const people: MentionItem[] = cards.filter(c => c.token).map(c => {
-    const sheet = story?.cast?.find(x => x.token === c.token);
-    return {
-      id: c.token, label: c.name, hint: c.token, insert: c.token,
-      ...(sheet?.status === 'done' ? { avatar: sized(media.cast(projectId, c.token, sheet.mediaId ?? ''), 40) } : {})
-    };
-  });
-  const places: MentionItem[] = Object.entries(board.locations ?? {}).map(([key, l]) => ({ id: key, label: l.name || key, hint: key, insert: key }));
-  return { '@': people, '#': places };
-}
+/** Moved to mentions.ts; re-exported so existing imports keep working. */
+export { mentionTriggers } from './mentions.js';
 
 function Label(props: { id: string; text: string; required?: boolean; missing?: boolean }) {
   return (
@@ -80,28 +63,31 @@ export function IntentFields(props: {
   const v = props.value;
   const set = (key: keyof IntentDraft) => (text: string) => props.onChange({ ...v, [key]: text });
   const missing = new Set(props.required ? missingSlots(v) : []);
+  // One rule for all four required slots: once the user has filled any of them, every empty one is flagged.
+  const started = REQUIRED.some(k => !!v[k].trim());
+  const flag = (k: keyof IntentDraft) => started && missing.has(k);
   const id = (k: string) => `intent-${k}-${props.shotId}`;
   return (
     <div role="group" aria-label="Niat shot" className="flex flex-col gap-2.5">
       <div className="flex flex-col gap-1">
-        <Label id={id('subject')} text="Subjek" required={props.required} missing={missing.has('subject') && !!v.action} />
-        <MentionTextarea ariaLabel="Subjek" rows={1} maxRows={3} value={v.subject} onChange={set('subject')} triggers={props.triggers} disabled={props.disabled}
+        <Label id={id('subject')} text="Subjek" required={props.required} missing={flag('subject')} />
+        <MentionTextarea ariaLabel="Subjek" rows={1} maxRows={3} value={v.subject} onChange={set('subject')} triggers={props.triggers} disabled={props.disabled} ariaInvalid={flag('subject')}
           placeholder="LARAS, or a concrete noun: an old wooden boat" className="text-[12.5px]" />
       </div>
       <div className="flex flex-col gap-1">
-        <Label id={id('action')} text="Aksi" required={props.required} />
-        <MentionTextarea ariaLabel="Aksi" rows={1} maxRows={4} value={v.action} onChange={set('action')} triggers={props.triggers} disabled={props.disabled}
+        <Label id={id('action')} text="Aksi" required={props.required} missing={flag('action')} />
+        <MentionTextarea ariaLabel="Aksi" rows={1} maxRows={4} value={v.action} onChange={set('action')} triggers={props.triggers} disabled={props.disabled} ariaInvalid={flag('action')}
           placeholder="One action in English: lifts the lantern toward the door" className="text-[12.5px]" />
       </div>
       <div className="grid gap-2.5 sm:grid-cols-2">
         <div className="flex flex-col gap-1">
-          <Label id={id('start')} text="Keadaan awal" required={props.required} />
-          <textarea aria-labelledby={id('start')} rows={2} value={v.startState} disabled={props.disabled} onChange={e => set('startState')(e.target.value)}
+          <Label id={id('start')} text="Keadaan awal" required={props.required} missing={flag('startState')} />
+          <textarea aria-labelledby={id('start')} rows={2} value={v.startState} disabled={props.disabled} aria-invalid={flag('startState') || undefined} onChange={e => set('startState')(e.target.value)}
             placeholder="First frame: lantern unlit on the floor" className={cn(textareaClass, 'min-h-0 resize-none text-[12.5px]')} />
         </div>
         <div className="flex flex-col gap-1">
-          <Label id={id('end')} text="Keadaan akhir" required={props.required} />
-          <textarea aria-labelledby={id('end')} rows={2} value={v.endState} disabled={props.disabled} onChange={e => set('endState')(e.target.value)}
+          <Label id={id('end')} text="Keadaan akhir" required={props.required} missing={flag('endState')} />
+          <textarea aria-labelledby={id('end')} rows={2} value={v.endState} disabled={props.disabled} aria-invalid={flag('endState') || undefined} onChange={e => set('endState')(e.target.value)}
             placeholder="Last frame: lantern glowing at eye level" className={cn(textareaClass, 'min-h-0 resize-none text-[12.5px]')} />
         </div>
       </div>
