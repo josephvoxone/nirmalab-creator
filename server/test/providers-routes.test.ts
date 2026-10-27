@@ -49,6 +49,7 @@ describe('provider routes', () => {
     const a = await t.flow.addAccount({ label: 'A', email: 'a@b.c' });
     await t.flow.addAccount({ label: 'B', email: 'b@b.c' });
     expect((await t.admin('GET', '/api/providers')).json()).toEqual({
+      axcel: { configured: false, health: null, url: 'http://127.0.0.1:8899' },
       flow: { accounts: 2, credits: null, online: false },
       openrouter: { configured: false, defaults: {}, auditModel: 'google/gemini-2.5-flash' }
     });

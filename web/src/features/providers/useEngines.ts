@@ -5,7 +5,7 @@
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { FetchLike } from '../../lib/api.js';
-import { isOpenRouter, providersApi, shortPrice, type Engine, type MediaKind, type ModelInfo, type Models, type Providers } from './providersClient.js';
+import { AXCEL_DEFAULT_MODEL, isAxcel, isOpenRouter, providersApi, shortPrice, type Engine, type MediaKind, type ModelInfo, type Models, type Providers } from './providersClient.js';
 
 export type EngineCatalog = {
   status: 'loading' | 'ready' | 'error';
@@ -71,8 +71,28 @@ export function openRouterOption(cat: EngineCatalog, kind: MediaKind, current?: 
   return { available, label, hint, modelId, model };
 }
 
+/** Axcel (Gold plan, through the Mac bridge): no per-clip price, one fixed model per kind. */
+export type AxcelOption = { available: boolean; label: string; hint?: string; modelId: string };
+
+export function axcelOption(cat: EngineCatalog, kind: MediaKind, current?: Engine): AxcelOption {
+  const state = cat.providers?.axcel;
+  const modelId = isAxcel(current) ? current.model : AXCEL_DEFAULT_MODEL[kind];
+  const plan = state?.health?.plan ? state.health.plan.replace(/^./, c => c.toUpperCase()) : undefined;
+  const configured = cat.status === 'ready' && !!state?.configured && !state.error;
+  return {
+    available: configured,
+    label: `Axcel${plan ? ` · ${plan}` : ''} · ${modelId}`,
+    modelId,
+    hint: configured ? undefined
+      : cat.status === 'loading' ? 'Memuat pengaturan provider…'
+      : state?.error ? `Bridge Axcel: ${state.error}`
+      : state?.configured ? SETUP_HINT : 'Jalankan bridge Axcel di Mac lalu isi tokennya di Pengaturan › Provider'
+  };
+}
+
 /** The engine to send when the user picked `provider` for this kind. */
-export function engineFor(provider: Engine['provider'], option: OpenRouterOption): Engine {
+export function engineFor(provider: Engine['provider'], option: OpenRouterOption, axcel?: AxcelOption): Engine {
+  if (provider === 'axcel') return axcel?.available ? { provider: 'axcel', model: axcel.modelId } : { provider: 'flow' };
   return provider === 'openrouter' && option.available && option.modelId ? { provider: 'openrouter', model: option.modelId } : { provider: 'flow' };
 }
 

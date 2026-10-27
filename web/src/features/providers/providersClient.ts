@@ -1,8 +1,8 @@
 /** Client + pure helpers for the engine providers (contract: docs/providers-and-media.md §1). */
 import { ApiError, type FetchLike } from '../../lib/api.js';
 
-export type ProviderId = 'flow' | 'openrouter';
-export type Engine = { provider: 'flow' } | { provider: 'openrouter'; model: string };
+export type ProviderId = 'flow' | 'openrouter' | 'axcel';
+export type Engine = { provider: 'flow' } | { provider: 'openrouter'; model: string } | { provider: 'axcel'; model: string };
 export type EngineSet = { image?: Engine; video?: Engine };
 export type MediaKind = 'image' | 'video';
 
@@ -11,8 +11,17 @@ export type ModelInfo = {
   references?: boolean; usdPerClip?: number | null; usdPerImage?: number | null; priceLabel: string;
 };
 export type Models = { image: ModelInfo[]; video: ModelInfo[] };
+export type AxcelModelInfo = { id: string; name: string; kind: MediaKind; inputs: string[]; durations?: number[]; resolutions?: number[]; ratios: string[]; audio: boolean };
 export type OpenRouterState = { configured: boolean; keyHint?: string; defaults: { image?: string; video?: string } };
-export type Providers = { flow: { accounts: number; credits: number | null; online: boolean }; openrouter: OpenRouterState };
+export type AxcelState = {
+  configured: boolean;
+  url: string;
+  tokenHint?: string;
+  /** Live answer from the Mac bridge (the browser session behind it). */
+  health?: { akun: string | null; plan: string | null; planAktif: boolean; refMedia: boolean } | null;
+  error?: string;
+};
+export type Providers = { flow: { accounts: number; credits: number | null; online: boolean }; openrouter: OpenRouterState; axcel?: AxcelState };
 export type Balance = { usedUsd: number; limitUsd: number | null; remainingUsd: number | null };
 export type OpenRouterPatch = { apiKey?: string | null; defaults?: { image?: string | null; video?: string | null } };
 
@@ -40,7 +49,10 @@ export function providersApi(fetchImpl: FetchLike) {
     get: () => request<Providers>(fetchImpl, '/api/providers'),
     save: (patch: OpenRouterPatch) => request<OpenRouterState>(fetchImpl, '/api/providers/openrouter', { method: 'PUT', body: JSON.stringify(patch) }),
     test: () => request<{ ok: true; balance: Balance }>(fetchImpl, '/api/providers/openrouter/test', { method: 'POST', body: '{}' }),
-    models: () => request<Models>(fetchImpl, '/api/providers/openrouter/models')
+    models: () => request<Models>(fetchImpl, '/api/providers/openrouter/models'),
+    axcelModels: () => request<{ models: AxcelModelInfo[] }>(fetchImpl, '/api/providers/axcel/models'),
+    saveAxcel: (patch: { url?: string | null; token?: string | null }) => request<AxcelState>(fetchImpl, '/api/providers/axcel', { method: 'PUT', body: JSON.stringify(patch) }),
+    testAxcel: () => request<{ ok: true; health: AxcelState['health'] }>(fetchImpl, '/api/providers/axcel/test', { method: 'POST', body: '{}' })
   };
 }
 
@@ -74,3 +86,7 @@ export function shortPrice(kind: MediaKind, m?: ModelInfo): string {
 }
 
 export const isOpenRouter = (e?: Engine): e is { provider: 'openrouter'; model: string } => e?.provider === 'openrouter';
+export const isAxcel = (e?: Engine): e is { provider: 'axcel'; model: string } => e?.provider === 'axcel';
+
+/** The Axcel model each kind defaults to (Axcel bills the plan, not per clip). */
+export const AXCEL_DEFAULT_MODEL: Record<MediaKind, string> = { image: 'Nano Banana Pro', video: 'Seedance 2.0' };
