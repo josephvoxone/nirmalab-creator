@@ -37,12 +37,20 @@ export type Snapshot = {
 };
 
 export type RestoreResult = 'ok' | 'stale' | 'missing';
+/** A restored take that could not come back as it was (its media is gone): it must be made again. */
+export type RestoreAttention = { id: string; take: 'clip' | 'frame' | 'cast' };
+export type RestoreOutcome = { result: RestoreResult; attention: RestoreAttention[] };
 
 export type SnapshotHooks = {
   /** The story's mutation lock (StoryService.withLock): restores never interleave with edits. */
   lock?: <T>(storyId: string, fn: () => Promise<T>) => Promise<T>;
-  /** Runs under the lock before any file is written: may throw (busy story) and re-links media of restored takes. */
-  beforeRestore?: (current: StoryRecord, restored: StoryRecord) => Promise<void>;
+  /** Runs under the lock before a snapshot is written: may throw (busy story — a running job would race the snapshot). */
+  beforeTake?: (current: StoryRecord) => void;
+  /**
+   * Runs under the lock before any file is written: may throw (busy story), may adjust `restored`
+   * (archive displaced takes, re-link media, status) and returns the takes that need attention.
+   */
+  beforeRestore?: (current: StoryRecord, restored: StoryRecord) => Promise<RestoreAttention[] | void>;
 };
 
 let seq = 0;
@@ -94,10 +102,11 @@ export class SnapshotStore {
   }
 
   /** Snapshot the story as it is now. `rev` is the revision to pass to the change (`updateStoryboard(..., { rev })`). */
-  async take(storyId: string, label: string): Promise<{ undoId: string; rev: number; revAfter?: number }> {
+  async take(storyId: string, label: string): Promise<{ undoId: string; rev: number }> {
     return this.locked(storyId, async () => {
-      const storyboard = await readFile(join(this.storyDir(storyId), 'storyboard.json'), 'utf8');
       const record = await this.readRecord(storyId);
+      this.hooks.beforeTake?.(record);
+      const storyboard = await readFile(join(this.storyDir(storyId), 'storyboard.json'), 'utf8');
       const atMs = Date.now();
       seq = (seq + 1) % 10_000;
       const undoId = `u_${storyId.slice('story_'.length)}_${String(atMs).padStart(13, '0')}_${String(seq).padStart(4, '0')}`;
@@ -120,10 +129,10 @@ export class SnapshotStore {
     });
   }
 
-  /** Drop a snapshot whose change failed. */
+  /** Drop a snapshot whose change failed (under the story lock, like every other write). */
   async discard(undoId: string): Promise<void> {
     const where = this.where(undoId);
-    if (where) await rm(where.path, { force: true });
+    if (where) await this.locked(where.storyId, () => rm(where.path, { force: true }));
   }
 
   async get(undoId: string): Promise<Snapshot | undefined> {
@@ -142,14 +151,14 @@ export class SnapshotStore {
    * and the revision on disk must still equal the snapshot's `revAfter`. The restored record gets
    * rev = current + 1 (a restore is a change: open tabs go stale); every take field is the snapshot's.
    */
-  async restore(storyId: string, undoId: string, currentRev: number): Promise<RestoreResult> {
+  async restore(storyId: string, undoId: string, currentRev: number): Promise<RestoreOutcome> {
     const where = this.where(undoId);
-    if (!where || where.storyId !== storyId) return 'missing';
-    return this.locked(storyId, async () => {
+    if (!where || where.storyId !== storyId) return { result: 'missing', attention: [] };
+    return this.locked(storyId, async (): Promise<RestoreOutcome> => {
       const snapshot = await this.read(undoId);
-      if (!snapshot || snapshot.storyId !== storyId || typeof snapshot.revAfter !== 'number') return 'missing';
+      if (!snapshot || snapshot.storyId !== storyId || typeof snapshot.revAfter !== 'number') return { result: 'missing', attention: [] };
       const current = await this.readRecord(storyId);
-      if (currentRev !== snapshot.revAfter || current.rev !== snapshot.revAfter) return 'stale';
+      if (currentRev !== snapshot.revAfter || current.rev !== snapshot.revAfter) return { result: 'stale', attention: [] };
       const restored = { ...current } as StoryRecord & Record<string, unknown>;
       for (const key of TAKE_FIELDS) delete restored[key];
       Object.assign(restored, snapshot.record);
@@ -159,11 +168,11 @@ export class SnapshotStore {
       const now = Date.now();
       restored.updatedAtMs = now;
       restored.events = [...(current.events ?? []), { atMs: now, message: `Dibatalkan: ${snapshot.label}` }].slice(-60);
-      await this.hooks.beforeRestore?.(current, restored);
+      const attention = (await this.hooks.beforeRestore?.(current, restored)) ?? [];
       const dir = this.storyDir(storyId);
       await this.atomicWrite(join(dir, 'storyboard.json'), snapshot.storyboard);
       await this.atomicWrite(join(dir, 'story.json'), JSON.stringify(restored, null, 1));
-      return 'ok';
+      return { result: 'ok', attention };
     });
   }
 

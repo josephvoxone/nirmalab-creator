@@ -110,10 +110,12 @@ function syncScenes(board: Storyboard, prev: Storyboard | undefined): void {
   const bibleKeys = new Set((bible.locations ?? []).map(l => l.key));
   const cards = new Map<string, SceneCard>((bible.scenes ?? []).map(c => [c.id, c]));
   const nextScenes: Scene[] = scenes.map(scene => {
-    const card = cards.get(scene.id);
+    // The same id-or-title match the goal check uses: a card it accepts is a card that is mirrored.
+    const found = cardFor(board, scene);
+    const card = found && cards.get(found.id);
     if (!card) return scene;
     const was = prevScenes.get(scene.id);
-    const wasCard = prevCards.get(scene.id);
+    const wasCard = prevCards.get(card.id);
     const out = { ...scene };
     const outCard = { ...card };
     // Title.
@@ -131,7 +133,7 @@ function syncScenes(board: Storyboard, prev: Storyboard | undefined): void {
       if (scene.location === undefined) delete outCard.location;
       else if (bibleKeys.has(scene.location)) outCard.location = scene.location;
     }
-    cards.set(scene.id, outCard);
+    cards.set(card.id, outCard);
     return out;
   });
   // A board scene removed in this edit takes its card with it.

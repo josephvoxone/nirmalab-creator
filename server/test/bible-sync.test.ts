@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { bibleSceneErrors, syncBible } from '../src/bible/sync.js';
 import { StoryError } from '../src/stories/service.js';
@@ -84,6 +86,24 @@ describe('syncBible: locations and scenes', () => {
     expect(moved.scenes![0]!.title).toBe('Pasar Siang');
   });
 
+  it('a card matched by title (not id) gets the scene title/location mirrored, like the goal check finds it', () => {
+    const prev: Storyboard = {
+      ...bibleBoard(),
+      locations: { ...bibleBoard().locations!, HUTAN: { name: 'Hutan', look: 'a misty pine forest' } }
+    };
+    prev.bible = { ...prev.bible!, locations: [...prev.bible!.locations, { key: 'HUTAN', name: 'Hutan', lookdev: 'a misty pine forest' }] };
+    const next: Storyboard = {
+      ...prev,
+      scenes: [...prev.scenes!, { id: 'hutan', title: 'Ke Hutan', location: 'HUTAN', shots: [] }],
+      bible: { ...prev.bible!, scenes: [...prev.bible!.scenes, { id: 'scene-2', title: 'ke hutan', goal: 'Kapas kabur ke hutan' }] }
+    };
+    const out = syncBible(next, prev);
+    expect(bibleSceneErrors(out, prev)).toEqual([]);
+    expect(out.bible!.scenes).toHaveLength(2);
+    expect(out.bible!.scenes.find(c => c.id === 'scene-2')).toMatchObject({ title: 'ke hutan', goal: 'Kapas kabur ke hutan', location: 'HUTAN' });
+    expect(out.scenes!.find(s => s.id === 'hutan')!.title).toBe('ke hutan');
+  });
+
   it('a new board scene without a bible card (add_scene without goal) is rejected; with a card it passes', () => {
     const prev = bibleBoard();
     const added: Storyboard = { ...prev, scenes: [...prev.scenes!, { id: 'hutan', title: 'Ke Hutan', shots: [] }] };
@@ -145,6 +165,20 @@ describe('updateStoryboard on bible boards', () => {
     expect(error).toBeInstanceOf(StoryError);
     expect((error as StoryError).code).toBe('INVALID');
     expect((error as StoryError).message).toContain('scene Ke Hutan: tujuan (goal) wajib di proyek bible');
+  });
+
+  it('an unchanged re-save of a rendered bible board keeps the bytes, the rev and every take', async () => {
+    const t = serviceSetup();
+    const done = await renderedStory(t, bibleBoard());
+    expect(done.shots.map(s => s.status)).toEqual(['done', 'done']);
+    const file = join(t.dataDir, 'stories', done.id, 'storyboard.json');
+    const bytes = readFileSync(file, 'utf8');
+    const saved = await t.service.updateStoryboard(done.id, await t.service.readStoryboard(done.id), { rev: done.rev });
+    expect(readFileSync(file, 'utf8')).toBe(bytes);
+    expect(saved.rev).toBe(done.rev);
+    expect(saved.shots).toEqual(done.shots);
+    expect(saved.status).toBe('done');
+    expect(saved.videoStale).toBeUndefined();
   });
 
   it('leaves legacy boards exactly as sent (no sync)', async () => {

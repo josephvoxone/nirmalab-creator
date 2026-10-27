@@ -157,6 +157,8 @@ export async function registerStoryRoutes(
     if (!shot || typeof shot !== 'object' || Array.isArray(shot) || typeof shot.id !== 'string' || !SHOT_ID.test(shot.id)) {
       return badRequest(reply, 'shot with a valid id is required');
     }
+    const intent = (shot as { intent?: unknown }).intent;
+    if (intent !== undefined && (!intent || typeof intent !== 'object' || Array.isArray(intent))) return badRequest(reply, 'shot.intent must be an object');
     try {
       if (!(await stories.get(request.params.id))) return notFound(reply, 'Story');
       const board = await stories.readStoryboard(request.params.id);

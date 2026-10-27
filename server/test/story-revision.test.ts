@@ -1,4 +1,4 @@
-import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { buildApp } from '../src/app.js';
@@ -76,7 +76,7 @@ describe('undo snapshots', () => {
     expect(edited.shots.find(s => s.id === '01-a')!.status).toBe('pending');
     await t.service.snapshots.commit(taken.undoId, edited.rev);
 
-    expect(await t.service.restoreSnapshot(done.id, taken.undoId, edited.rev)).toBe('ok');
+    expect((await t.service.restoreSnapshot(done.id, taken.undoId, edited.rev)).result).toBe('ok');
     const restored = (await t.service.get(done.id))!;
     expect(readFileSync(boardFile(t.dataDir, done.id), 'utf8')).toBe(boardBytes);
     expect(JSON.stringify(restored.shots)).toBe(shotsBefore);
@@ -101,7 +101,7 @@ describe('undo snapshots', () => {
     await finishQueued(t, 'video');
     await t.service.reconcile(done.id);
     expect(readFileSync(shotFile).equals(original)).toBe(false);
-    expect(await t.service.restoreSnapshot(done.id, taken.undoId, edited.rev)).toBe('ok');
+    expect((await t.service.restoreSnapshot(done.id, taken.undoId, edited.rev)).result).toBe('ok');
     expect(readFileSync(shotFile).equals(original)).toBe(true);
   });
 
@@ -114,16 +114,16 @@ describe('undo snapshots', () => {
     await t.service.snapshots.commit(taken.undoId, edited.rev);
     const later = await t.service.updateStoryboard(story.id, { ...board, title: 'Dua' });
     const before = readFileSync(boardFile(t.dataDir, story.id), 'utf8');
-    expect(await t.service.restoreSnapshot(story.id, taken.undoId, later.rev)).toBe('stale');
+    expect((await t.service.restoreSnapshot(story.id, taken.undoId, later.rev)).result).toBe('stale');
     // The caller's view is checked too: a tab that read the old rev cannot undo.
-    expect(await t.service.restoreSnapshot(story.id, taken.undoId, edited.rev)).toBe('stale');
+    expect((await t.service.restoreSnapshot(story.id, taken.undoId, edited.rev)).result).toBe('stale');
     expect(readFileSync(boardFile(t.dataDir, story.id), 'utf8')).toBe(before);
     expect((await t.service.get(story.id))!.rev).toBe(later.rev);
-    expect(await t.service.restoreSnapshot(story.id, 'u_0000000000000000_0000000000000_0000', later.rev)).toBe('missing');
-    expect(await t.service.restoreSnapshot(story.id, '../../etc/passwd', later.rev)).toBe('missing');
+    expect((await t.service.restoreSnapshot(story.id, 'u_0000000000000000_0000000000000_0000', later.rev)).result).toBe('missing');
+    expect((await t.service.restoreSnapshot(story.id, '../../etc/passwd', later.rev)).result).toBe('missing');
     // An uncommitted snapshot (the change failed) cannot be restored either.
     const orphan = await t.service.snapshots.take(story.id, 'gagal');
-    expect(await t.service.restoreSnapshot(story.id, orphan.undoId, later.rev)).toBe('missing');
+    expect((await t.service.restoreSnapshot(story.id, orphan.undoId, later.rev)).result).toBe('missing');
   });
 
   it('keeps a ring of the newest 50 snapshots per story', async () => {
@@ -135,6 +135,111 @@ describe('undo snapshots', () => {
     const files = readdirSync(join(t.dataDir, 'stories', story.id, 'snapshots'));
     expect(files).toHaveLength(50);
     expect(files.sort()).toEqual(ids.slice(5).map(id => `${id}.json`).sort());
+  });
+
+  it('undo after a paid render keeps the paid take: re-applying the same edit reinstates it (no new job)', async () => {
+    const t = serviceSetup();
+    const done = await renderedStory(t, bibleBoard());
+    const j1 = done.shots[1]!.jobId!;
+    const edit = (b: Storyboard): Storyboard => ({
+      ...b, shots: b.shots.map(s => (s.id === '02-kapas' ? { ...s, intent: { ...s.intent!, subject: 'KAPAS', action: 'peeks out of the woven basket' } } : s))
+    });
+    const taken = await t.service.snapshots.take(done.id, 'ubah intent');
+    const edited = await t.service.updateStoryboard(done.id, edit(await t.service.readStoryboard(done.id)), { rev: taken.rev });
+    expect(edited.rev).toBe(taken.rev + 1);
+    await t.service.snapshots.commit(taken.undoId, edited.rev);
+    await t.service.render(done.id, { force: true });
+    await finishQueued(t, 'video');
+    const rendered = (await t.service.reconcile(done.id))!;
+    const paid = rendered.shots[1]!;
+    expect(paid.status).toBe('done');
+    expect(paid.jobId).not.toBe(j1);
+    const shotFile = t.service.shotPath(done.id, '02-kapas');
+    const paidBytes = readFileSync(shotFile);
+
+    expect((await t.service.restoreSnapshot(done.id, taken.undoId, rendered.rev)).result).toBe('ok');
+    const restored = (await t.service.get(done.id))!;
+    expect(restored.shots[1]).toMatchObject({ status: 'done', jobId: j1 });
+    expect(readFileSync(shotFile).equals(paidBytes)).toBe(false);
+
+    const jobs = (await t.flow.listJobs()).length;
+    const again = await t.service.updateStoryboard(done.id, edit(await t.service.readStoryboard(done.id)), { rev: restored.rev });
+    expect(again.shots[1]).toMatchObject({ status: 'done', jobId: paid.jobId, promptHash: paid.promptHash });
+    expect(readFileSync(shotFile).equals(paidBytes)).toBe(true);
+    await t.service.render(done.id, { force: true });
+    expect((await t.flow.listJobs()).length).toBe(jobs);
+  });
+
+  it('restore never says done while the cut is stale (a newer cut was assembled after the snapshot)', async () => {
+    const t = serviceSetup();
+    const done = await renderedStory(t, legacyBoard());
+    const taken = await t.service.snapshots.take(done.id, 'ubah shot 2');
+    await new Promise(r => setTimeout(r, 5));
+    const board = await t.service.readStoryboard(done.id);
+    const edited = await t.service.updateStoryboard(done.id, {
+      ...board, shots: board.shots.map(s => (s.id === '01-a' ? { ...s, prompt: 'Close-up of a kitten asleep on a porch.' } : s))
+    });
+    await t.service.snapshots.commit(taken.undoId, edited.rev);
+    await t.service.render(done.id, { force: true });
+    await finishQueued(t, 'video');
+    const v2 = (await t.service.reconcile(done.id))!;
+    expect(v2.status).toBe('done');
+    expect(v2.video!.finishedAtMs).toBeGreaterThan(done.video!.finishedAtMs);
+    expect((await t.service.restoreSnapshot(done.id, taken.undoId, v2.rev)).result).toBe('ok');
+    const restored = (await t.service.get(done.id))!;
+    expect(restored.videoStale).toBe(true);
+    expect(restored.status).toBe('review');
+  });
+
+  it('restore whose old clip file is gone: ok, the shot must be rendered again and is listed for attention', async () => {
+    const t = serviceSetup();
+    const done = await renderedStory(t, legacyBoard());
+    const j1 = done.shots[1]!.jobId!;
+    const taken = await t.service.snapshots.take(done.id, 'ubah shot 2');
+    const board = await t.service.readStoryboard(done.id);
+    const edited = await t.service.updateStoryboard(done.id, {
+      ...board, shots: board.shots.map(s => (s.id === '01-a' ? { ...s, prompt: 'Close-up of a kitten asleep on a porch.' } : s))
+    });
+    await t.service.snapshots.commit(taken.undoId, edited.rev);
+    await t.service.render(done.id, { force: true });
+    await finishQueued(t, 'video');
+    const v2 = (await t.service.reconcile(done.id))!;
+    rmSync((await t.flow.getJob(j1))!.resultPath!);
+    const outcome = await t.service.restoreSnapshot(done.id, taken.undoId, v2.rev);
+    expect(outcome.result).toBe('ok');
+    expect(outcome.attention).toEqual([{ id: '01-a', take: 'clip' }]);
+    const restored = (await t.service.get(done.id))!;
+    // The record never claims a take whose media is gone, and the newer file is not passed off as it.
+    expect(restored.shots[1]).toMatchObject({ status: 'pending' });
+    expect(restored.shots[1]!.jobId).toBeUndefined();
+    expect(existsSync(t.service.shotPath(done.id, '01-a'))).toBe(false);
+    expect(restored.status).toBe('draft');
+    expect(restored.shots[0]).toEqual(done.shots[0]);
+  });
+
+  it('take refuses a busy story (render running) with BUSY and writes no snapshot', async () => {
+    const t = serviceSetup();
+    const story = await t.service.create(legacyBoard());
+    await t.service.render(story.id, { force: true });
+    expect((await t.service.get(story.id))!.status).toBe('rendering');
+    const error = await t.service.snapshots.take(story.id, 'saat render').catch(e => e);
+    expect(error).toBeInstanceOf(StoryError);
+    expect((error as StoryError).code).toBe('BUSY');
+    expect(await t.service.snapshots.list(story.id)).toEqual([]);
+  });
+
+  it('redrawFrame with a new prompt while the cast sheet is not ready leaves board and rev untouched', async () => {
+    const t = serviceSetup();
+    const story = await t.service.create({
+      title: 'Konsisten', mode: 'konsisten', audio: 'Audio: voice-over: "{line}"', characters: { MIMI: 'a grey kitten' },
+      shots: [{ id: '01-a', prompt: 'Medium shot of MIMI on a porch.', narration: 'Mimi menunggu.' }]
+    });
+    const before = readFileSync(boardFile(t.dataDir, story.id), 'utf8');
+    const error = await t.service.redrawFrame(story.id, '01-a', 'Close-up of MIMI asleep on a porch.').catch(e => e);
+    expect(error).toBeInstanceOf(StoryError);
+    expect((error as StoryError).message).toBe('Lembar karakter belum siap');
+    expect(readFileSync(boardFile(t.dataDir, story.id), 'utf8')).toBe(before);
+    expect((await t.service.get(story.id))!.rev).toBe(1);
   });
 });
 
@@ -201,6 +306,11 @@ describe('story routes: rev + compile-shot', () => {
     expect(readFileSync(boardFile(dataDir, id), 'utf8')).toBe(before);
 
     expect((await server.inject({ method: 'POST', url: `/api/stories/${id}/compile-shot`, headers: { cookie }, payload: {} })).statusCode).toBe(400);
+    for (const bad of [{ shot: 'x' }, { shot: [shot] }, { shot: { ...shot, intent: 'lifts a basket' } }, { shot: { ...shot, intent: [] } }, { shot: { ...shot, intent: null } }]) {
+      const res400 = await server.inject({ method: 'POST', url: `/api/stories/${id}/compile-shot`, headers: { cookie }, payload: bad });
+      expect(res400.statusCode).toBe(400);
+      expect(res400.json().error.code).toBe('INVALID');
+    }
     expect((await server.inject({ method: 'POST', url: `/api/stories/${id}/compile-shot`, payload: { shot } })).statusCode).toBe(401);
     expect((await server.inject({ method: 'POST', url: '/api/stories/story_0000000000000000/compile-shot', headers: { cookie }, payload: { shot } })).statusCode).toBe(404);
   });

@@ -17,7 +17,7 @@ import { linkOrCopy } from '../media/link.js';
 import { CREDITS_PER_SHOT, bibleSceneFor, castOf, frameHashFor, framePromptFor, hashFor, normalizeScenes, sceneOf, sheetHashFor, sheetPromptFor, shotCast, shotPromptFor, validateStoryboard, type Shot, type Storyboard } from './storyboard.js';
 import { ShotCompileError } from '../bible/compiler.js';
 import { bibleSceneErrors, syncBible } from '../bible/sync.js';
-import { SnapshotStore, type RestoreResult } from './snapshots.js';
+import { SnapshotStore, type RestoreAttention, type RestoreOutcome } from './snapshots.js';
 import { AUDIT_GATE, AuditParseError, MAX_AUDIT_IMAGES, type AuditDimensions, type AuditExpectation, type AuditResult } from '../audit/vision.js';
 
 import { composeStyle, resolveLook } from './looks.js';
@@ -113,7 +113,16 @@ export type StoryRecord = {
   createdBy?: string;
   /** Why the last assembly was refused (spec §4.4), so the UI can list the shots. */
   gate?: { message: string; shots: GateBlocker[] };
+  /**
+   * Paid done takes an edit or an undo displaced (`clip:<shotId>`, `frame:<shotId>`, `cast:<token>`;
+   * newest first, at most MAX_ARCHIVED each). When an edit brings back a prompt one of them was
+   * made from, it is reinstated instead of paid for again. Not a take field: undo never rewinds it.
+   */
+  takeArchive?: Record<string, TakeState[]>;
 };
+
+/** Displaced done takes kept per shot/frame/cast entry. */
+export const MAX_ARCHIVED = 5;
 
 export type StoryDeps = {
   dataDir: string;
@@ -170,6 +179,12 @@ export function idleStatus(record: StoryRecord): StoryStatus {
   return 'draft';
 }
 
+/** A shot's clip take without its keyframe (frames are archived on their own). */
+function clipTake(shot: ShotState): ShotState {
+  const { frame: _frame, ...clip } = shot;
+  return clip;
+}
+
 export class StoryService {
   private locks = new Map<string, Promise<unknown>>();
   private readonly root: string;
@@ -180,6 +195,7 @@ export class StoryService {
     this.root = join(deps.dataDir, 'stories');
     this.snapshots = new SnapshotStore(this.root, {
       lock: (id, fn) => this.withLock(id, fn),
+      beforeTake: current => { if (BUSY_STATUSES.includes(current.status)) throw new StoryError('BUSY', 'Story sedang diproses; tunggu selesai atau gagal dulu'); },
       beforeRestore: (current, restored) => this.beforeRestore(current, restored)
     });
   }
@@ -324,27 +340,69 @@ export class StoryService {
       // Bible boards hash PROMPT_VERSION + the compiled prompt; legacy boards hash exactly what they did before.
       const clipHash = (b: Storyboard, shot: Storyboard['shots'][number]) => hashFor(b, shot);
       const same = (stored: string | undefined, now: string, was: () => string | undefined) => stored === now || was() === now;
-      record.cast = konsisten ? castOf(board).map(c => {
-        const old = oldCast.get(c.token);
-        const h = sheetHashFor(c, board);
-        const was = () => { const bc = beforeCast.get(c.token); return bc && before ? sheetHashFor(bc, before) : undefined; };
-        return old && old.status === 'done' && same(old.promptHash, h, was) ? { ...old, promptHash: h } : { token: c.token, name: c.name, status: 'pending' as const, attempts: 0 };
-      }) : undefined;
+      // A take not kept may still be in the archive (an undo displaced it): same prompt → reinstated, not paid again.
+      const links: Array<[string, string]> = [];
+      const archived = (key: string, h: string, target: string) => this.fromArchive(record, key, h, target, links);
+      const keptCast = new Set<CastState>();
+      if (konsisten) {
+        const cast: CastState[] = [];
+        for (const c of castOf(board)) {
+          const old = oldCast.get(c.token);
+          const h = sheetHashFor(c, board);
+          const was = () => { const bc = beforeCast.get(c.token); return bc && before ? sheetHashFor(bc, before) : undefined; };
+          if (old && old.status === 'done' && same(old.promptHash, h, was)) {
+            keptCast.add(old);
+            cast.push({ ...old, promptHash: h });
+            continue;
+          }
+          const back = await archived(`cast:${c.token}`, h, this.castPath(id, c.token));
+          cast.push(back ? { ...back, token: c.token, name: c.name, promptHash: h } : { token: c.token, name: c.name, status: 'pending' as const, attempts: 0 });
+        }
+        record.cast = cast;
+      } else {
+        record.cast = undefined;
+      }
       const castChanged = new Set((record.cast ?? []).filter(c => c.status !== 'done').map(c => c.token));
       record.title = board.title.trim();
-      record.shots = board.shots.map(shot => {
+      const keptClips = new Set<ShotState>();
+      const keptFrames = new Set<TakeState>();
+      const shots: ShotState[] = [];
+      for (const shot of board.shots) {
         const old = previous.get(shot.id);
         const prev = beforeShots.get(shot.id);
         const promptHash = clipHash(board, shot);
         const frameHash = konsisten && !shot.reuse ? frameHashFor(board, shot) : undefined;
+        const castReady = !shotCast(board, shot).some(c => castChanged.has(c.token));
         const keepFrame = konsisten && old?.frame?.status === 'done' && frameHash !== undefined
           && same(old.frame.promptHash, frameHash, () => (prev && before && !prev.reuse ? frameHashFor(before, prev) : undefined))
-          && !shotCast(board, shot).some(c => castChanged.has(c.token));
-        const frame = konsisten && !shot.reuse ? (keepFrame ? { ...old!.frame!, promptHash: frameHash } : { status: 'pending' as const, attempts: 0 }) : undefined;
+          && castReady;
+        let frame: TakeState | undefined;
+        if (frameHash !== undefined) {
+          if (keepFrame) {
+            keptFrames.add(old!.frame!);
+            frame = { ...old!.frame!, promptHash: frameHash };
+          } else {
+            const back = castReady ? await archived(`frame:${shot.id}`, frameHash, this.framePath(id, shot.id)) : undefined;
+            frame = back ? { ...back, promptHash: frameHash } : { status: 'pending' as const, attempts: 0 };
+          }
+        }
+        const frameReady = !konsisten || !!shot.reuse || frame?.status === 'done';
         const keepClip = old?.status === 'done' && same(old.promptHash, promptHash, () => (prev && before ? clipHash(before, prev) : undefined));
-        if (old && keepClip && (!konsisten || keepFrame || shot.reuse)) return { ...old, promptHash, ...(frame ? { frame } : {}) };
-        return { id: shot.id, status: 'pending', attempts: 0, ...(frame ? { frame } : {}) };
-      });
+        if (old && keepClip && frameReady) {
+          keptClips.add(old);
+          shots.push({ ...old, promptHash, ...(frame ? { frame } : {}) });
+          continue;
+        }
+        const back = frameReady ? await archived(`clip:${shot.id}`, promptHash, this.shotPath(id, shot.id)) : undefined;
+        shots.push(back ? { ...(back as ShotState), id: shot.id, promptHash, ...(frame ? { frame } : {}) } : { id: shot.id, status: 'pending', attempts: 0, ...(frame ? { frame } : {}) });
+      }
+      record.shots = shots;
+      // Every paid take this edit lets go of goes to the archive (an edit back, or an undo, can reinstate it).
+      for (const old of previous.values()) {
+        if (!keptClips.has(old)) this.archiveTake(record, `clip:${old.id}`, clipTake(old));
+        if (old.frame && !keptFrames.has(old.frame)) this.archiveTake(record, `frame:${old.id}`, old.frame);
+      }
+      for (const old of oldCast.values()) if (!keptCast.has(old)) this.archiveTake(record, `cast:${old.token}`, old);
       record.error = undefined;
       record.run = undefined;
       record.gate = undefined;
@@ -353,6 +411,7 @@ export class StoryService {
       if (record.video && changed && cut(record.shots) !== cut([...previous.values()])) record.videoStale = true;
       record.status = idleStatus(record);
       if (changed) record.rev += 1;
+      for (const [source, target] of links) await linkOrCopy(source, target);
       await this.writeJson(join(this.storyDir(id), 'storyboard.json'), { ...board, slug: id });
       await this.save(record, 'Storyboard diubah');
       return record;
@@ -364,27 +423,95 @@ export class StoryService {
    * changed after that snapshot's change (currentRev or the stored rev ≠ revAfter), 'missing' when
    * the snapshot is unknown or was never committed. Runs under the story lock.
    */
-  async restoreSnapshot(id: string, undoId: string, currentRev: number): Promise<RestoreResult> {
+  async restoreSnapshot(id: string, undoId: string, currentRev: number): Promise<RestoreOutcome> {
     await this.require(id);
     return this.snapshots.restore(id, undoId, currentRev);
   }
 
-  /** Under the lock, before a restore writes: refuse while jobs run; bring back the media of restored takes. */
-  private async beforeRestore(current: StoryRecord, restored: StoryRecord): Promise<void> {
-    if (BUSY_STATUSES.includes(current.status)) throw new StoryError('BUSY', 'Story sedang diproses; tunggu selesai atau gagal dulu');
-    // A newer take may have replaced the file (render after the edit): re-link the restored job's result.
-    const relink = async (take: { status: ShotStatus; jobId?: string } | undefined, now: { jobId?: string } | undefined, target: string) => {
-      if (take?.status !== 'done' || !take.jobId || take.jobId === now?.jobId) return;
+  /** Keep a displaced paid take (done, with a job) in the archive, newest first. */
+  private archiveTake(record: StoryRecord, key: string, take: TakeState | undefined): void {
+    if (take?.status !== 'done' || !take.jobId) return;
+    const archive = { ...(record.takeArchive ?? {}) };
+    archive[key] = [{ ...take }, ...(archive[key] ?? []).filter(t => t.jobId !== take.jobId)].slice(0, MAX_ARCHIVED);
+    record.takeArchive = archive;
+  }
+
+  /**
+   * An archived take of `key` made from `promptHash` whose result file still exists: taken out of
+   * the archive and returned; its media is queued in `links` to be re-linked to `target`.
+   */
+  private async fromArchive(record: StoryRecord, key: string, promptHash: string, target: string, links: Array<[string, string]>): Promise<TakeState | undefined> {
+    const list = record.takeArchive?.[key] ?? [];
+    for (const take of list) {
+      if (take.promptHash !== promptHash || !take.jobId) continue;
       const job = await this.deps.flow.getJob(take.jobId);
-      if (job?.resultPath && existsSync(job.resultPath)) await linkOrCopy(job.resultPath, target);
-    };
-    const shots = new Map(current.shots.map(s => [s.id, s]));
-    for (const shot of restored.shots) {
-      await relink(shot, shots.get(shot.id), this.shotPath(current.id, shot.id));
-      await relink(shot.frame, shots.get(shot.id)?.frame, this.framePath(current.id, shot.id));
+      if (job?.status !== 'done' || !job.resultPath || !existsSync(job.resultPath)) continue;
+      links.push([job.resultPath, target]);
+      const rest = list.filter(t => t !== take);
+      const archive = { ...record.takeArchive };
+      if (rest.length) archive[key] = rest; else delete archive[key];
+      record.takeArchive = Object.keys(archive).length ? archive : undefined;
+      return { ...take };
     }
+    return undefined;
+  }
+
+  /**
+   * Under the lock, before a restore writes: refuse while jobs run; archive every paid take the
+   * restore displaces; bring back the media of restored takes — a take whose media is gone is reset
+   * (made again) and returned for attention; finally the status follows the restored takes.
+   */
+  private async beforeRestore(current: StoryRecord, restored: StoryRecord): Promise<RestoreAttention[]> {
+    if (BUSY_STATUSES.includes(current.status)) throw new StoryError('BUSY', 'Story sedang diproses; tunggu selesai atau gagal dulu');
+    const shots = new Map(current.shots.map(s => [s.id, s]));
     const cast = new Map((current.cast ?? []).map(c => [c.token, c]));
-    for (const c of restored.cast ?? []) await relink(c, cast.get(c.token), this.castPath(current.id, c.token));
+    const backShots = new Map(restored.shots.map(s => [s.id, s]));
+    const backCast = new Map((restored.cast ?? []).map(c => [c.token, c]));
+    const displaced = (now: TakeState | undefined, back: TakeState | undefined) => now?.status === 'done' && !!now.jobId && back?.jobId !== now.jobId;
+    for (const now of current.shots) {
+      const back = backShots.get(now.id);
+      if (displaced(now, back)) this.archiveTake(restored, `clip:${now.id}`, clipTake(now));
+      if (displaced(now.frame, back?.frame)) this.archiveTake(restored, `frame:${now.id}`, now.frame);
+    }
+    for (const now of current.cast ?? []) if (displaced(now, backCast.get(now.token))) this.archiveTake(restored, `cast:${now.token}`, now);
+
+    // A newer take may have replaced the file (render after the edit): re-link the restored job's result.
+    // false = the restored take's media is gone; the newer file must not pass for it.
+    const relink = async (take: TakeState | undefined, now: TakeState | undefined, target: string): Promise<boolean> => {
+      if (take?.status !== 'done' || !take.jobId || take.jobId === now?.jobId) return true;
+      const job = await this.deps.flow.getJob(take.jobId);
+      if (job?.resultPath && existsSync(job.resultPath)) {
+        await linkOrCopy(job.resultPath, target);
+        return true;
+      }
+      await rm(target, { force: true });
+      return false;
+    };
+    const attention: RestoreAttention[] = [];
+    restored.shots = await Promise.all(restored.shots.map(async shot => {
+      let out = shot;
+      if (!(await relink(shot.frame, shots.get(shot.id)?.frame, this.framePath(current.id, shot.id)))) {
+        out = { ...out, frame: { status: 'pending', attempts: 0 } };
+        attention.push({ id: shot.id, take: 'frame' });
+      }
+      if (!(await relink(shot, shots.get(shot.id), this.shotPath(current.id, shot.id)))) {
+        out = { id: shot.id, status: 'pending', attempts: 0, ...(out.frame ? { frame: out.frame } : {}) };
+        attention.push({ id: shot.id, take: 'clip' });
+      }
+      return out;
+    }));
+    if (restored.cast) {
+      const next: CastState[] = [];
+      for (const c of restored.cast) {
+        if (await relink(c, cast.get(c.token), this.castPath(current.id, c.token))) { next.push(c); continue; }
+        next.push({ token: c.token, name: c.name, status: 'pending', attempts: 0 });
+        attention.push({ id: c.token, take: 'cast' });
+      }
+      restored.cast = next;
+    }
+    // The snapshot's status described its own cut: never 'done' over a stale cut or a take made again.
+    if (!BUSY_STATUSES.includes(restored.status)) restored.status = idleStatus(restored);
+    return attention;
   }
 
   private async require(id: string): Promise<StoryRecord> {
@@ -764,13 +891,16 @@ export class StoryService {
       if (prompt !== undefined) {
         shot.prompt = prompt.trim();
         this.assertValid(board);
+      }
+      // Checked before anything is written: a refusal leaves board and rev as they were.
+      const needed = new Set(shotCast(board, shot).map(c => c.token));
+      if ((record.cast ?? []).some(c => needed.has(c.token) && c.status !== 'done')) throw new StoryError('INVALID', 'Lembar karakter belum siap');
+      if (prompt !== undefined) {
         await this.writeJson(join(this.storyDir(id), 'storyboard.json'), board);
         record.rev += 1;
         Object.assign(state, { status: 'pending', attempts: 0, error: undefined });
       }
       state.frame = { status: 'pending', attempts: 0 };
-      const needed = new Set(shotCast(board, shot).map(c => c.token));
-      if ((record.cast ?? []).some(c => needed.has(c.token) && c.status !== 'done')) throw new StoryError('INVALID', 'Lembar karakter belum siap');
       await this.queueFrame(record, board, shotId);
       record.run = { shots: [shotId] };
       record.status = 'framing';
