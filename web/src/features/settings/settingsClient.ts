@@ -75,7 +75,7 @@ export function textModelApi(fetchImpl: FetchLike) {
 
 /** "Tersimpan · …abcd" from a server keyHint like "••••abcd". */
 export function textKeyText(hint?: string): string {
-  return `Tersimpan · …${(hint ?? '').replace(/[•*.\s]/g, '').slice(-4)}`;
+  return `Tersimpan · …${(hint ?? '').slice(-4)}`;
 }
 
 export function inviteLink(origin: string, token: string): string {

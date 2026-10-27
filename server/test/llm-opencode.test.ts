@@ -38,6 +38,13 @@ async function storeWithKey(model?: string) {
 
 const user = [{ role: 'user' as const, content: 'Halo' }];
 
+/** A promise that only settles (rejects) when the request's signal aborts — a stalled fetch or body read. */
+const hangUntilAbort = <T>(signal?: AbortSignal | null) => new Promise<T>((_resolve, reject) => {
+  const fail = () => reject(new DOMException('aborted', 'AbortError'));
+  if (signal?.aborted) fail();
+  else signal?.addEventListener('abort', fail, { once: true });
+});
+
 describe('OpenCode Go text model', () => {
   it('posts to the Go endpoint with bearer key, a User-Agent and a fresh session id per request', async () => {
     const f = fakeFetch(model => ok(model));
@@ -123,6 +130,61 @@ describe('OpenCode Go text model', () => {
     expect(deepseek.calls.map(c => c.body.model)).toEqual(['deepseek-v4-pro', 'glm-5.3', 'glm-5.3-flash', 'beam-free']);
   });
 
+  it('403 and 404 stop after one call', async () => {
+    for (const code of [403, 404]) {
+      const f = fakeFetch(() => status(code));
+      await expect(createOpenCodeModel({ store: await storeWithKey(), fetch: f.fetchImpl }).chat({ messages: user })).rejects.toMatchObject({ code: 'UNAVAILABLE' });
+      expect(f.calls).toHaveLength(1);
+    }
+  });
+
+  it('an already-aborted signal rejects without calling fetch', async () => {
+    const f = fakeFetch(model => ok(model));
+    const caller = new AbortController();
+    caller.abort();
+    await expect(createOpenCodeModel({ store: await storeWithKey(), fetch: f.fetchImpl }).chat({ messages: user, signal: caller.signal }))
+      .rejects.toMatchObject({ code: 'UNAVAILABLE', message: 'Permintaan ke model teks dibatalkan.' });
+    expect(f.calls).toHaveLength(0);
+  });
+
+  it('an abort while the reply body is read rejects after one call and never tries the next model', async () => {
+    const caller = new AbortController();
+    const f = fakeFetch((model, _call, init) => {
+      if (f.calls.length > 1) return ok(model);
+      setTimeout(() => caller.abort(), 5);
+      return { status: 200, ok: true, json: () => hangUntilAbort(init?.signal) } as unknown as Response;
+    });
+    await expect(createOpenCodeModel({ store: await storeWithKey(), fetch: f.fetchImpl }).chat({ messages: user, signal: caller.signal }))
+      .rejects.toMatchObject({ code: 'UNAVAILABLE', message: 'Permintaan ke model teks dibatalkan.' });
+    expect(f.calls).toHaveLength(1);
+  });
+
+  it('a timeout while the reply body is read counts as a timeout, not a bad response', async () => {
+    const f = fakeFetch((_model, _call, init) => ({ status: 200, ok: true, json: () => hangUntilAbort(init?.signal) } as unknown as Response));
+    const err = await createOpenCodeModel({ store: await storeWithKey(), fetch: f.fetchImpl, timeoutMs: 20 }).chat({ messages: user }).catch((e: unknown) => e) as LlmError;
+    expect(err).toMatchObject({ code: 'UNAVAILABLE' });
+    expect(err.message).toMatch(/tidak menjawab/);
+    expect(f.calls).toHaveLength(3);
+  });
+
+  it('leaves tool_calls off the message when none of them is well-formed', async () => {
+    const f = fakeFetch(() => new Response(JSON.stringify({ choices: [{ message: { content: 'x', tool_calls: [{ bogus: 1 }] } }] })));
+    const out = await createOpenCodeModel({ store: await storeWithKey(), fetch: f.fetchImpl }).chat({ messages: user });
+    expect('tool_calls' in out.message).toBe(false);
+  });
+
+  it('fallback: false tries only the chosen model, with the per-call timeout', async () => {
+    const limited = fakeFetch(() => status(429));
+    await expect(createOpenCodeModel({ store: await storeWithKey('glm-5.3-flash'), fetch: limited.fetchImpl }).chat({ messages: user, fallback: false }))
+      .rejects.toMatchObject({ code: 'UNAVAILABLE' });
+    expect(limited.calls.map(c => c.body.model)).toEqual(['glm-5.3-flash']);
+    const hanging = fakeFetch((_model, _call, init) => hangUntilAbort(init?.signal));
+    const err = await createOpenCodeModel({ store: await storeWithKey(), fetch: hanging.fetchImpl, timeoutMs: 60_000 })
+      .chat({ messages: user, fallback: false, timeoutMs: 20 }).catch((e: unknown) => e) as LlmError;
+    expect(err.message).toMatch(/tidak menjawab/);
+    expect(hanging.calls).toHaveLength(1);
+  });
+
   it('without a key: configured() is false and chat throws NOT_CONFIGURED without calling fetch', async () => {
     const f = fakeFetch(model => ok(model));
     const model = createOpenCodeModel({ store: new TextModelConfigStore(mkdtempSync(join(tmpdir(), 'nc-llm-'))), fetch: f.fetchImpl });
@@ -159,13 +221,13 @@ describe('TextModelConfigStore', () => {
 let server: FastifyInstance | undefined;
 afterEach(async () => { await server?.close(); server = undefined; });
 
-async function routes(model?: TextModel) {
+async function routes(model?: TextModel, fetchImpl?: typeof fetch) {
   const dataDir = mkdtempSync(join(tmpdir(), 'nc-llm-routes-'));
   const auth = new UserAuthStore(mkdtempSync(join(tmpdir(), 'nc-llm-auth-')));
   const admin = await auth.createUser({ email: 'admin@x.io', password: 'admin-pass-1', isAdmin: true });
   const member = await auth.createUser({ email: 'member@x.io', password: 'member-pass-1', isAdmin: false });
   const store = new TextModelConfigStore(dataDir);
-  const textModel = model ?? createOpenCodeModel({ store, fetch: fakeFetch(m => ok(m)).fetchImpl });
+  const textModel = model ?? createOpenCodeModel({ store, fetch: fetchImpl ?? fakeFetch(m => ok(m)).fetchImpl });
   server = Fastify();
   await registerProviderRoutes(server, { userAuthStore: auth, dataDir, flow: new FlowStore(join(dataDir, 'flow')), text: { store, model: textModel } });
   await server.ready();
@@ -222,6 +284,22 @@ describe('text model routes', () => {
     const none = await unset.admin('POST', '/api/providers/text/test');
     expect(none.statusCode).toBe(400);
     expect(none.json().error.code).toBe('NOT_CONFIGURED');
+  });
+  it('test tries only the chosen model with a 20 s limit, so the button never waits on the whole chain', async () => {
+    let seen: Parameters<TextModel['chat']>[0] | undefined;
+    const t = await routes(fakeModel(async input => { seen = input; return { message: { role: 'assistant', content: 'ok' }, model: 'glm-5.3' }; }));
+    expect((await t.admin('POST', '/api/providers/text/test')).statusCode).toBe(200);
+    expect(seen).toMatchObject({ fallback: false, timeoutMs: 20_000 });
+  });
+
+  it('test calls fetch once on a 429 and answers 502', async () => {
+    const f = fakeFetch(() => status(429));
+    const t = await routes(undefined, f.fetchImpl);
+    await t.store.patch({ apiKey: KEY });
+    const res = await t.admin('POST', '/api/providers/text/test');
+    expect(res.statusCode).toBe(502);
+    expect(res.json().error.code).toBe('UNAVAILABLE');
+    expect(f.calls).toHaveLength(1);
   });
 });
 

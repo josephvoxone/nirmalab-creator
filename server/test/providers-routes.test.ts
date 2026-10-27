@@ -5,6 +5,8 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import { afterEach, describe, expect, it } from 'vitest';
 import { UserAuthStore } from '../src/auth/store.js';
 import { FlowStore } from '../src/flow/store.js';
+import { TextModelConfigStore } from '../src/llm/config.js';
+import { createOpenCodeModel } from '../src/llm/opencode.js';
 import { registerProviderRoutes } from '../src/providers/routes.js';
 
 const KEY = 'sk-or-v1-routes-0123456789abcdefQRST';
@@ -23,7 +25,9 @@ async function setup(handler: (url: string, auth: string | null) => Response = (
     return handler(String(url), new Headers(init?.headers).get('authorization'));
   }) as unknown as typeof fetch;
   server = Fastify();
-  await registerProviderRoutes(server, { userAuthStore: auth, dataDir, flow, fetch: fetchImpl });
+  const textStore = new TextModelConfigStore(dataDir);
+  const text = { store: textStore, model: createOpenCodeModel({ store: textStore, fetch: fetchImpl }) };
+  await registerProviderRoutes(server, { userAuthStore: auth, dataDir, flow, fetch: fetchImpl, text });
   await server.ready();
   const as = (cookie: string) => (method: 'GET' | 'PUT' | 'POST', url: string, payload?: unknown) =>
     server!.inject({ method, url, headers: { cookie }, ...(payload === undefined ? {} : { payload: payload as Record<string, unknown> }) });

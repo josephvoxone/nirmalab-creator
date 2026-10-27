@@ -6,8 +6,8 @@ import type { FlowStore } from '../flow/store.js';
 import { OpenRouterCatalog } from './catalog.js';
 import { OpenRouterError, keyBalance, type FetchLike } from './client.js';
 import { OpenRouterConfigStore, ProviderInputError, isModelId, type OpenRouterPatch } from './config.js';
-import { TextModelConfigStore, type TextModelPatch } from '../llm/config.js';
-import { LlmError, createOpenCodeModel, type TextModel } from '../llm/opencode.js';
+import type { TextModelConfigStore, TextModelPatch } from '../llm/config.js';
+import { LlmError, type TextModel } from '../llm/opencode.js';
 
 export type ProviderRouteOptions = {
   userAuthStore: UserAuthStore;
@@ -15,8 +15,8 @@ export type ProviderRouteOptions = {
   flow: FlowStore;
   fetch?: FetchLike;
   catalog?: OpenRouterCatalog;
-  /** OpenCode Go text model (one store instance per process; built from dataDir + fetch when omitted). */
-  text?: { store: TextModelConfigStore; model: TextModel };
+  /** OpenCode Go text model; `buildApp` owns the one store + client per process. */
+  text: { store: TextModelConfigStore; model: TextModel };
 };
 
 const bad = (reply: FastifyReply, status: number, code: string, message: string) => reply.code(status).send({ error: { code, message } });
@@ -41,8 +41,7 @@ export async function registerProviderRoutes(server: FastifyInstance, options: P
   const fetchImpl = options.fetch ?? fetch;
   const config = new OpenRouterConfigStore(options.dataDir);
   const catalog = options.catalog ?? new OpenRouterCatalog(options.dataDir, { fetch: fetchImpl });
-  const textStore = options.text?.store ?? new TextModelConfigStore(options.dataDir);
-  const textModel = options.text?.model ?? createOpenCodeModel({ store: textStore, fetch: fetchImpl });
+  const { store: textStore, model: textModel } = options.text;
 
   server.get('/api/providers', async (request, reply) => {
     if (!requireAdmin(auth, request, reply)) return undefined;
@@ -145,7 +144,8 @@ export async function registerProviderRoutes(server: FastifyInstance, options: P
     if (!requireAdmin(auth, request, reply)) return undefined;
     const started = Date.now();
     try {
-      const out = await textModel.chat({ messages: [{ role: 'user', content: 'Balas satu kata: ok' }], maxTokens: 16 });
+      // Chosen model only, 20 s: the button answers quickly instead of walking the whole chain.
+      const out = await textModel.chat({ messages: [{ role: 'user', content: 'Balas satu kata: ok' }], maxTokens: 16, fallback: false, timeoutMs: 20_000 });
       return { ok: true, model: out.model, ms: Date.now() - started };
     } catch (error) {
       if (error instanceof LlmError) return bad(reply, error.code === 'NOT_CONFIGURED' ? 400 : 502, error.code, error.message);

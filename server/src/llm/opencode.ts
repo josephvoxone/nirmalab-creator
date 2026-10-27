@@ -2,6 +2,7 @@
  * OpenCode Go text model (OpenAI-compatible chat completions at `https://opencode.ai/zen/go/v1`).
  * The chosen model is tried first, then the rest of the chain: a 429, 5xx, network error or
  * 60 s timeout moves on to the next model; any other 4xx (e.g. a rejected key) stops at once.
+ * A caller abort (`signal`) stops at once, before or during a request.
  * The key is read from `TextModelConfigStore` per call and never logged or put in an error.
  */
 import { randomBytes } from 'node:crypto';
@@ -12,7 +13,16 @@ export type ToolCall = { id: string; type: 'function'; function: { name: string;
 export type ToolSpec = { type: 'function'; function: { name: string; description: string; parameters: object } };
 export type ChatMessage = { role: 'system' | 'user' | 'assistant' | 'tool'; content: string; tool_calls?: ToolCall[]; tool_call_id?: string };
 
-export type ChatInput = { messages: ChatMessage[]; tools?: ToolSpec[]; maxTokens?: number; signal?: AbortSignal };
+export type ChatInput = {
+  messages: ChatMessage[];
+  tools?: ToolSpec[];
+  maxTokens?: number;
+  signal?: AbortSignal;
+  /** `false` = try the chosen model only (the settings Tes button). Default: the whole chain. */
+  fallback?: boolean;
+  /** Per-attempt limit for this call; default the client's `timeoutMs`. */
+  timeoutMs?: number;
+};
 export type ChatOutput = { message: ChatMessage; model: string; usage?: { total_tokens?: number } };
 
 export interface TextModel {
@@ -53,17 +63,19 @@ function parseReply(payload: unknown, model: string): ChatOutput | undefined {
   const msg = body?.choices?.[0]?.message;
   if (!msg || typeof msg !== 'object') return undefined;
   const message: ChatMessage = { role: 'assistant', content: typeof msg.content === 'string' ? msg.content : '' };
-  if (Array.isArray(msg.tool_calls) && msg.tool_calls.length) {
-    message.tool_calls = msg.tool_calls.filter(isToolCall).map(c => ({ id: c.id, type: 'function', function: { name: c.function.name, arguments: c.function.arguments } }));
-  }
+  const calls = Array.isArray(msg.tool_calls) ? msg.tool_calls.filter(isToolCall) : [];
+  if (calls.length) message.tool_calls = calls.map(c => ({ id: c.id, type: 'function', function: { name: c.function.name, arguments: c.function.arguments } }));
   const total = body?.usage?.total_tokens;
   return { message, model, ...(typeof total === 'number' ? { usage: { total_tokens: total } } : {}) };
 }
 
 export function createOpenCodeModel(deps: { store: TextModelConfigStore; fetch: FetchLike; models?: string[]; timeoutMs?: number }): TextModel {
-  const timeoutMs = deps.timeoutMs ?? 60_000;
+  const CANCELLED = 'Permintaan ke model teks dibatalkan.';
 
   async function attempt(key: string, model: string, input: ChatInput): Promise<Attempt> {
+    if (input.signal?.aborted) return { stop: CANCELLED };
+    const timeoutMs = input.timeoutMs ?? deps.timeoutMs ?? 60_000;
+    const tooSlow = `${model}: tidak menjawab dalam ${Math.round(timeoutMs / 1000)} dtk`;
     const controller = new AbortController();
     let timedOut = false;
     const timer = setTimeout(() => { timedOut = true; controller.abort(); }, timeoutMs);
@@ -90,11 +102,18 @@ export function createOpenCodeModel(deps: { store: TextModelConfigStore; fetch: 
       if (res.status >= 500) return { next: `${model}: server error (${res.status})` };
       if (res.status === 401 || res.status === 403) return { stop: `OpenCode Go menolak API key (${res.status}). Periksa key di Pengaturan › Provider › Model teks.` };
       if (!res.ok) return { stop: `OpenCode Go menolak permintaan ke ${model} (${res.status}).` };
-      const reply = parseReply(await res.json().catch(() => undefined), model);
+      let payload: unknown;
+      try {
+        payload = await res.json();
+      } catch {
+        if (input.signal?.aborted) return { stop: CANCELLED };
+        if (timedOut) return { next: tooSlow };
+      }
+      const reply = parseReply(payload, model);
       return reply ? { ok: reply } : { next: `${model}: jawaban tidak terbaca`, bad: true };
     } catch {
-      if (input.signal?.aborted) return { stop: 'Permintaan ke model teks dibatalkan.' };
-      return { next: timedOut ? `${model}: tidak menjawab dalam ${Math.round(timeoutMs / 1000)} dtk` : `${model}: tidak bisa dihubungi` };
+      if (input.signal?.aborted) return { stop: CANCELLED };
+      return { next: timedOut ? tooSlow : `${model}: tidak bisa dihubungi` };
     } finally {
       clearTimeout(timer);
       input.signal?.removeEventListener('abort', onAbort);
@@ -107,10 +126,11 @@ export function createOpenCodeModel(deps: { store: TextModelConfigStore; fetch: 
       const key = await deps.store.key();
       if (!key) throw new LlmError('NOT_CONFIGURED', 'API key OpenCode Go belum diisi. Isi di Pengaturan › Provider › Model teks.');
       const { model: chosen } = await deps.store.view();
-      const chain = [...new Set([chosen, ...(deps.models ?? TEXT_CHAIN)])];
+      const chain = input.fallback === false ? [chosen] : [...new Set([chosen, ...(deps.models ?? TEXT_CHAIN)])];
       const reasons: string[] = [];
       let lastBad = false;
       for (const model of chain) {
+        if (input.signal?.aborted) throw new LlmError('UNAVAILABLE', CANCELLED);
         const result = await attempt(key, model, input);
         if ('ok' in result) return result.ok;
         if ('stop' in result) throw new LlmError('UNAVAILABLE', result.stop);
