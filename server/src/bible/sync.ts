@@ -174,7 +174,7 @@ export function syncBible(next: Storyboard, prev?: Storyboard): Storyboard {
   return refreshIntentPrompts(board, prev);
 }
 
-const cardFor = (board: Storyboard, scene: Scene) => (board.bible?.scenes ?? []).find(c => c.id === scene.id)
+export const cardFor = (board: Storyboard, scene: Scene) => (board.bible?.scenes ?? []).find(c => c.id === scene.id)
   ?? (board.bible?.scenes ?? []).find(c => c.title.trim().toLowerCase() === scene.title.trim().toLowerCase());
 
 /**

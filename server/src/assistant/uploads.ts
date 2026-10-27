@@ -129,12 +129,6 @@ export async function removeUpload(storyDir: string, file: string): Promise<void
   await rm(join(uploadsDir(storyDir), file), { force: true });
 }
 
-/** Copy an existing story image (a sheet, a keyframe) into uploads, so a later redraw cannot change the reference. */
-export async function copyToUploads(storyDir: string, source: string): Promise<Upload | undefined> {
-  const planned = await planCopy(source);
-  return planned ? writePlanned(storyDir, planned) : undefined;
-}
-
 /** The stored file name of an upload id (`up_…`) or file name (`up_….png`, `uploads/up_….png`); undefined when malformed or missing. */
 export function findUpload(storyDir: string, ref: string): string | undefined {
   if (typeof ref !== 'string') return undefined;

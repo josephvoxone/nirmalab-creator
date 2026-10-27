@@ -163,7 +163,7 @@ export class StoryError extends Error {
 export const STALE_MESSAGE = 'Proyek baru diubah di tempat lain — muat ulang.';
 
 const hash = (s: string) => createHash('sha256').update(s).digest('hex').slice(0, 16);
-const BUSY_STATUSES: StoryStatus[] = ['casting', 'framing', 'rendering', 'assembling'];
+export const BUSY_STATUSES: readonly StoryStatus[] = ['casting', 'framing', 'rendering', 'assembling'];
 
 /** Key-order independent JSON (detects real storyboard changes, not re-serialisation). */
 function canonical(value: unknown): string {

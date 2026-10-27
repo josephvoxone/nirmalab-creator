@@ -228,6 +228,8 @@ sheet job (OpenRouter image input) alongside the text; affected keyframes are ma
 berubah" with one action "Gambar ulang keyframe <nama>" (free on Flow). On `cepat` boards the
 reference is sent with OpenRouter clips only.
 
+The per-keyframe "referensi berubah" marker is not built; changing a reference or sheet goes through the existing hash rules and the card states the impact.
+
 9.9 Code names: the service method is `updateStoryboard`; on bible boards `shot.prompt` is rebuilt
 from the intent on every intent edit so TOKEN-based cast detection keeps working.
 

@@ -19,11 +19,12 @@
 import { ShotCompileError, lintPrompt, type ShotIntent } from '../bible/compiler.js';
 import type { CharacterCard } from '../bible/story.js';
 import { LOOK_IDS, lookById } from '../bible/styles.js';
+import { cardFor } from '../bible/sync.js';
 import { LlmError, type TextModel, type ToolSpec } from '../llm/opencode.js';
 import { usdLabel } from '../providers/catalog.js';
 import { CATALOG, composeStyle, resolveLook } from '../stories/looks.js';
 
-import { STALE_MESSAGE, StoryError, type StoryRecord, type StoryService } from '../stories/service.js';
+import { BUSY_STATUSES, STALE_MESSAGE, StoryError, type StoryRecord, type StoryService } from '../stories/service.js';
 import type { SnapshotStore } from '../stories/snapshots.js';
 import {
   CREDITS_PER_SHOT, LOCATION_KEY, MAX_SCENES, compileBoardShot, normalizeScenes, promptFromIntent, sceneOf, shotCast,
@@ -169,9 +170,6 @@ const uniqueId = (taken: Iterable<string>, base: string): string => {
 };
 
 /** The bible card of a board scene: same id, else same title (as sync does). */
-const cardOf = (board: Storyboard, scene: Scene) => board.bible?.scenes.find(c => c.id === scene.id)
-  ?? board.bible?.scenes.find(c => c.title.trim().toLowerCase() === scene.title.trim().toLowerCase());
-
 const compileIssues = (board: Storyboard, shot: Shot): string[] => {
   try {
     compileBoardShot(board, shot);
@@ -184,7 +182,6 @@ const compileIssues = (board: Storyboard, shot: Shot): string[] => {
 
 const imageEngine = (board: Storyboard) => board.engine?.image?.provider === 'openrouter' ? board.engine.image : undefined;
 const videoEngine = (board: Storyboard) => board.engine?.video?.provider === 'openrouter' ? board.engine.video : undefined;
-const BUSY_STATUSES = ['casting', 'framing', 'rendering', 'assembling'];
 
 function toFailure(error: unknown): ActionResult {
   if (error instanceof ActionInputError || error instanceof BreakdownError) return fail(error.message);
@@ -356,7 +353,7 @@ function summary(board: Storyboard, record: StoryRecord, estimate: Estimate & { 
     ...(level ? { shortened: true } : {}),
     ...(b.bible?.logline ? { logline: clip(b.bible.logline, caps.line ? 200 : 100) } : {}),
     scenes: b.scenes!.map((s, i) => {
-      const card = cardOf(b, s);
+      const card = cardFor(b, s);
       const goal = card?.goal ?? s.summary;
       return {
         n: i + 1, id: s.id, title: clip(s.title, caps.title),
@@ -760,7 +757,7 @@ export const ACTIONS: Record<ActionName, Action> = {
       const flat = b.scenes!.find(s => s.id === scene.id)!;
       // Replace drops every shot of the scene: never over a take the user already has (paid clip or keyframe).
       if (mode === 'replace' && flat.shots.some(id => hasDoneTake(record.shots.find(s => s.id === id)))) return fail(REPLACE_REFUSED_MESSAGE);
-      if (!cardOf(b, flat)?.goal?.trim()) bad(`Scene ${scene.n} belum punya tujuan di bible — isi dulu (edit_scene goal).`);
+      if (!cardFor(b, flat)?.goal?.trim()) bad(`Scene ${scene.n} belum punya tujuan di bible — isi dulu (edit_scene goal).`);
       const keep = mode === 'replace' ? b.shots.length - flat.shots.length : b.shots.length;
       if (keep + (count as number) > 30) bad(`Proyek maksimal 30 shot — sekarang ${b.shots.length}.`);
       if (!ctx.model || !(await ctx.model.configured())) return fail(NO_MODEL_MESSAGE, 'NOT_CONFIGURED');
@@ -794,7 +791,7 @@ export const ACTIONS: Record<ActionName, Action> = {
         const { id, n } = sceneRef(b, target);
         const scene = b.scenes!.find(s => s.id === id)!;
         const key = location ? (() => { const l = resolveLocation(b, location); return 'error' in l ? bad(l.error) : l.key; })() : location;
-        const card = cardOf(b, scene);
+        const card = cardFor(b, scene);
         if (title !== undefined) scene.title = title;
         if (key !== undefined) { if (key) scene.location = key; else delete scene.location; }
         if (b.bible) {
@@ -852,7 +849,7 @@ export const ACTIONS: Record<ActionName, Action> = {
         const heir = i > 0 ? b.scenes![i - 1]! : b.scenes![0]!;
         heir.shots = i > 0 ? [...heir.shots, ...gone!.shots] : [...gone!.shots, ...heir.shots];
         if (b.bible) {
-          const card = cardOf({ ...b, scenes: [gone!] }, gone!);
+          const card = cardFor({ ...b, scenes: [gone!] }, gone!);
           if (card) b.bible.scenes = b.bible.scenes.filter(c => c !== card);
         }
         return { board: normalizeScenes(b), label: `Scene ${n} dihapus${gone!.shots.length ? ` (${gone!.shots.length} shot pindah ke scene sebelahnya)` : ''}` };
@@ -1201,4 +1198,3 @@ export function toolSpecs(): ToolSpec[] {
 }
 
 /** Range text for prompts ("Shot yang ada: 1–12"). */
-export { rangeText };

@@ -70,7 +70,7 @@ export function mcpTools(): Tool[] {
     },
     {
       name: 'create_project',
-      description: 'Create a new project from a premise (the app drafts a storyboard with its own free text model; nothing is rendered). Returns project_id and title; then call get_project.',
+      description: 'Create a new project from a premise (the app drafts a storyboard with the configured text model, which can take a minute; nothing is rendered). Returns project_id and title; then call get_project.',
       inputSchema: {
         type: 'object',
         properties: {
