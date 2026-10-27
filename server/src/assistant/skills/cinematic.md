@@ -31,6 +31,9 @@ what makes a shot look filmed instead of generated.
 7. **Visible, generatable details only.** Avoid readable text, many fingers, mirrors, crowds doing
    different things — models break on them.
 8. **Emotion is shown by the body or the light**, e.g. "shoulders drop, breath out", not "sad".
+9. **Every character who is visible is named by TOKEN in `subject` or `action`** ("YESUS kneels
+   beside RAKA"), never only in `startState`/`endState` or as "the pair": the character's sheet is
+   attached from subject and action only, so anyone else is drawn from words and looks different.
 
 ## Scene breakdown (when splitting a scene into shots)
 - Open with an establishing or orienting shot unless the previous shot already placed us.

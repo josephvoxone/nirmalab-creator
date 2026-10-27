@@ -184,6 +184,15 @@ export function compileShot(input: {
   if (!endState) issues.push('mandatory slot endState is empty');
   if (startState && endState && startState.toLowerCase() === endState.toLowerCase()) issues.push('shot has no state change: startState equals endState');
   if (/\band then\b|\bthen\b|;\s*then\b/i.test(action)) issues.push('action must be one verb chain, not "and then"');
+  // A character's sheet reaches the frame only through subject/action (the cast is read from them):
+  // one mentioned only in a state is drawn from words alone and drifts from their reference.
+  const said = (text: string | undefined, word: string) => !!text && new RegExp(`(^|[^A-Za-z0-9_])${word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}($|[^A-Za-z0-9_])`).test(text);
+  for (const c of bible.characters ?? []) {
+    const mentioned = (text: string | undefined) => said(text, c.token) || (!!c.name?.trim() && said(text, c.name.trim()));
+    if ((mentioned(shot.startState) || mentioned(shot.endState)) && !mentioned(shot.subject) && !mentioned(shot.action)) {
+      warnings.push(`${c.token} appears in startState/endState but not in subject or action: the frame gets no reference of ${c.name}; name every visible character in subject or action`);
+    }
+  }
 
   const lens = lensFor(look, framingId);
   if (!lens) issues.push('mandatory slot lens is empty (the look has no lenses)');

@@ -186,7 +186,8 @@ function check(board: Storyboard, sceneId: string, count: number, mode: Breakdow
   shots.forEach((shot, i) => {
     shot.prompt = promptFromIntent(preview, shot);
     try {
-      compileBoardShot(preview, shot);
+      // A character the frame would draw without its sheet is a problem for the model to fix, not a note.
+      for (const warning of compileBoardShot(preview, shot).warnings) if (/subject or action/.test(warning)) issues.push(`shot ${i + 1}: ${warning}`);
     } catch (error) {
       if (!(error instanceof ShotCompileError)) throw error;
       for (const issue of error.issues) issues.push(`shot ${i + 1}: ${issue}`);

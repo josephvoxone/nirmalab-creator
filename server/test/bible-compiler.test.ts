@@ -268,6 +268,16 @@ describe('warnings', () => {
     expect(out.videoPrompt.startsWith('Medium shot, the camera stays still.')).toBe(true);
   });
 
+  it('warns when a character is only in the start/end state: the frame would get no reference of them', () => {
+    const hidden = compile('film-real', 'action', { startState: 'KAPAS hides in the basket', endState: 'the basket is held against her chest' });
+    expect(hidden.warnings.join()).toMatch(/KAPAS .*subject or action/);
+    // Named by its display name works the same way.
+    expect(compile('film-real', 'action', { endState: 'Kapas peeks out of the basket' }).warnings.join()).toMatch(/KAPAS .*subject or action/);
+    // Named in the action: it is in the cast, no warning.
+    const named = compile('film-real', 'action', { action: 'lifts the woven basket with KAPAS inside', startState: 'KAPAS hides in the basket' });
+    expect(named.warnings.join()).not.toMatch(/subject or action/);
+  });
+
   it('warns when emotion is missing but still compiles', () => {
     const out = compile('film-real', 'action', { emotion: undefined });
     expect(out.warnings.join()).toMatch(/emotion/);

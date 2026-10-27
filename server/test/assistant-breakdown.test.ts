@@ -181,6 +181,17 @@ describe('breakdown_scene action', () => {
     expect(readFileSync(join(t.dataDir, 'stories', story.id, 'storyboard.json'), 'utf8')).toBe(before);
   });
 
+  it('a character that is only in startState/endState is sent back once: every visible character must be in subject or action', async () => {
+    const t = serviceSetup();
+    const story = await t.service.create(withPlaceholder());
+    const hidden = { ...intent(0), startState: 'KAPAS sleeps in the basket' };
+    const model = fakeModel([JSON.stringify([hidden, intent(1)]), JSON.stringify([{ ...hidden, action: 'carries the basket with KAPAS toward the market gate' }, intent(1)])]);
+    const r = await ACTIONS.breakdown_scene.run(ctxFor(t, model), story.id, { scene: 2, count: 2 });
+    expect(r).toMatchObject({ ok: true });
+    expect(model.calls).toHaveLength(2);
+    expect(JSON.stringify(model.calls[1]!.messages)).toMatch(/KAPAS .*subject or action/);
+  });
+
   it('an invalid intent gets one retry, then a plain error with nothing inserted', async () => {
     const t = serviceSetup();
     const story = await t.service.create(withPlaceholder());
