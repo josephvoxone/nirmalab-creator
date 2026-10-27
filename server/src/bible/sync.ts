@@ -43,7 +43,8 @@ function syncCharacters(board: Storyboard, prev: Storyboard | undefined): void {
     const spec = characters[card.token];
     if (spec === undefined) {
       if (before && hadSpec(card.token)) dropped.add(card.token); // removed on the board side
-      else if (!before) characters[card.token] = lookFromAnchors(card); // new card: sheets + TOKENs need it
+      // A new card, or one that predates the cast sync (never had a board entry): sheets + TOKENs need it.
+      else characters[card.token] = lookFromAnchors(card);
       continue;
     }
     if (before && !same(anchorsOf(before), anchorsOf(card))) characters[card.token] = withLook(spec, lookFromAnchors(card));

@@ -31,6 +31,17 @@ describe('syncBible: characters', () => {
     expect(laras.characters!.LARAS).toBe('Laras, two red braids');
   });
 
+  it('a card that predates the cast sync (no board entry before or now) gets one on the next save', () => {
+    // Shape of an older production board: bible card PAK_TUA, no board.characters at all.
+    const base = bibleBoard();
+    const old: Storyboard = { ...base, characters: undefined, bible: { ...base.bible!, characters: [{ token: 'PAK_TUA', name: 'Pak Tua', anchors: ['topi jerami lebar', 'kemeja biru lusuh'], want: 'a', need: 'b', arc: 'c' }] } };
+    const out = syncBible(old, old);
+    expect(out.characters).toEqual({ PAK_TUA: 'Pak Tua, topi jerami lebar, kemeja biru lusuh' });
+    // A cast entry the user removed on the board side (it existed before) stays removed.
+    const removed = syncBible({ ...base, characters: { KAPAS: base.characters!.KAPAS! } }, base);
+    expect(removed.characters!.LARAS).toBeUndefined();
+  });
+
   it('a new bible character gets a board character (sheet + TOKEN expansion work)', () => {
     const prev = bibleBoard();
     const next: Storyboard = { ...prev, bible: { ...prev.bible!, characters: [...prev.bible!.characters, { token: 'BAPAK', name: 'Pak Darto', anchors: ['a grey moustache', 'a brown sarong'], want: 'a', need: 'b', arc: 'c' }] } };
