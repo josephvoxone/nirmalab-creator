@@ -42,6 +42,13 @@ export function defaultMode(board: Storyboard, sceneId: string): BreakdownMode {
   return shots.every(isPlaceholder) ? 'replace' : 'append';
 }
 
+export const REPLACE_REFUSED_MESSAGE = 'Scene ini punya klip/keyframe jadi — pakai mode Tambah di akhir.';
+
+/** A take the user already has (done clip or done keyframe): replace mode would drop it. */
+export function hasDoneTake(take: { status?: string; frame?: { status?: string } } | undefined): boolean {
+  return take?.status === 'done' || take?.frame?.status === 'done';
+}
+
 /** A JSON array of intents from a model reply: bare, inside ```json fences, or as {shots:[…]}. */
 export function parseIntents(text: string): unknown[] | undefined {
   const raw = String(text ?? '').trim();

@@ -354,6 +354,19 @@ describe('structure actions', () => {
     expect((await t.service.get(story.id))!.rev).toBe(2);
     expect(errOf(await run(ctxFor(t), story.id, 'set_look', { family: 'tidak-ada' }))).toMatch(/look/i);
   });
+
+  it('set_look refuses a pick that is not a catalog id (no silent fallback), and the schema lists the ids', async () => {
+    const t = serviceSetup();
+    const story = await t.service.create(twoScenes());
+    const before = readFileSync(boardFile(t, story.id), 'utf8');
+    const err = errOf(await run(ctxFor(t), story.id, 'set_look', { palette: 'warm golden tones' }));
+    expect(err).toContain('palette');
+    expect(err).toContain(CATALOG.palettes[1]!.id);
+    expect(readFileSync(boardFile(t, story.id), 'utf8')).toBe(before);
+    const schema = ACTIONS.set_look.schema as { properties: Record<string, { enum?: string[] }> };
+    expect(schema.properties.palette!.enum).toEqual(CATALOG.palettes.map(o => o.id));
+    expect(okOf(await run(ctxFor(t), story.id, 'set_look', { palette: CATALOG.palettes[1]!.id })).changed).toBe(true);
+  });
 });
 
 describe('spending actions need confirm', () => {

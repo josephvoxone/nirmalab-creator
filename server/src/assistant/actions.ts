@@ -22,6 +22,7 @@ import { LOOK_IDS, lookById } from '../bible/styles.js';
 import { LlmError, type TextModel, type ToolSpec } from '../llm/opencode.js';
 import { usdLabel } from '../providers/catalog.js';
 import { CATALOG, composeStyle, resolveLook } from '../stories/looks.js';
+
 import { STALE_MESSAGE, StoryError, type StoryRecord, type StoryService } from '../stories/service.js';
 import type { SnapshotStore } from '../stories/snapshots.js';
 import {
@@ -29,9 +30,15 @@ import {
   validateStoryboard, type Engine, type Scene, type Shot, type Storyboard
 } from '../stories/storyboard.js';
 import { cameraId, cameraIds, FRAMING_IDS, MOVE_IDS, type CameraKind } from './camera.js';
-import { BreakdownError, MAX_BREAKDOWN, MIN_BREAKDOWN, breakdownScene, defaultMode, withSceneShots, type BreakdownMode } from './breakdown.js';
+import { BreakdownError, MAX_BREAKDOWN, MIN_BREAKDOWN, REPLACE_REFUSED_MESSAGE, breakdownScene, defaultMode, hasDoneTake, withSceneShots, type BreakdownMode } from './breakdown.js';
 import { planReference, rangeText, resolveCharacter, resolveLocation, resolveScene, resolveShot, sceneNumber, shotNumber, type Ref } from './resolve.js';
 import { removeUpload, writePlanned, type PlannedUpload } from './uploads.js';
+/** Studio look picks and their catalog lists: the only ids set_look accepts. */
+const LOOK_PICKS: ReadonlyArray<readonly [string, ReadonlyArray<{ id: string }>]> = [
+  ['style', CATALOG.styles], ['genre', CATALOG.genres], ['era', CATALOG.eras], ['camera', CATALOG.cameras], ['lens', CATALOG.lenses],
+  ['aperture', CATALOG.apertures], ['palette', CATALOG.palettes], ['lighting', CATALOG.lighting], ['tempo', CATALOG.tempos]
+];
+
 
 // ------------------------------------------------------------------ types
 
@@ -731,6 +738,8 @@ export const ACTIONS: Record<ActionName, Action> = {
       const brief = str(input, 'brief', { max: 500 });
       const b = normalizeScenes(board);
       const flat = b.scenes!.find(s => s.id === scene.id)!;
+      // Replace drops every shot of the scene: never over a take the user already has (paid clip or keyframe).
+      if (mode === 'replace' && flat.shots.some(id => hasDoneTake(record.shots.find(s => s.id === id)))) return fail(REPLACE_REFUSED_MESSAGE);
       if (!cardOf(b, flat)?.goal?.trim()) bad(`Scene ${scene.n} belum punya tujuan di bible — isi dulu (edit_scene goal).`);
       const keep = mode === 'replace' ? b.shots.length - flat.shots.length : b.shots.length;
       if (keep + (count as number) > 30) bad(`Proyek maksimal 30 shot — sekarang ${b.shots.length}.`);
@@ -959,8 +968,7 @@ export const ACTIONS: Record<ActionName, Action> = {
     description: `Change the visual look of the whole project: family (one of ${LOOK_IDS.join(', ')}) and optional variant, or studio picks (style, genre, era, camera, lens, aperture, palette, lighting, tempo ids). Every sheet, keyframe and clip whose prompt changes must be made again, so only do this when the user asked for it.`,
     schema: obj({
       family: { type: 'string', enum: LOOK_IDS }, variant: { type: 'string' },
-      style: { type: 'string' }, genre: { type: 'string' }, era: { type: 'string' }, camera: { type: 'string' }, lens: { type: 'string' },
-      aperture: { type: 'string' }, palette: { type: 'string' }, lighting: { type: 'string' }, tempo: { type: 'string' }
+      ...Object.fromEntries(LOOK_PICKS.map(([key, list]) => [key, { type: 'string', enum: list.map(o => o.id) }]))
     }),
     spends: false,
     run: (ctx, storyId, input) => guarded(ctx, storyId, async () => {
@@ -970,6 +978,11 @@ export const ACTIONS: Record<ActionName, Action> = {
         if (value !== undefined) picks[key] = value;
       }
       if (!Object.keys(picks).length) bad('Sebut family (mis. film-real) atau pilihan look lain.');
+      // Catalog ids only: an unknown pick would silently fall back to a default and re-render every take.
+      for (const [key, list] of LOOK_PICKS) {
+        const value = picks[key];
+        if (value !== undefined && !list.some(o => o.id === value)) bad(`${key} "${value}" tidak ada di katalog. Pilihan: ${list.map(o => o.id).join(', ')}.`);
+      }
       if (picks.family && !lookById(picks.variant && picks.variant !== picks.family ? `${picks.family}:${picks.variant}` : picks.family)) {
         bad(`Look "${picks.family}${picks.variant ? `:${picks.variant}` : ''}" tidak ada. Family yang ada: ${LOOK_IDS.join(', ')}.`);
       }

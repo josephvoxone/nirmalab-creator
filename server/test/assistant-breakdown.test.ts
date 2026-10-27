@@ -3,12 +3,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { ACTIONS, type ActionContext } from '../src/assistant/actions.js';
-import { BreakdownError, breakdownScene, parseIntents } from '../src/assistant/breakdown.js';
+import { BreakdownError, REPLACE_REFUSED_MESSAGE, breakdownScene, parseIntents } from '../src/assistant/breakdown.js';
 import { buildApp } from '../src/app.js';
 import type { ChatInput, ChatOutput, TextModel } from '../src/llm/opencode.js';
 import { STALE_MESSAGE } from '../src/stories/service.js';
 import { compileBoardShot, validateStoryboard, type Storyboard } from '../src/stories/storyboard.js';
-import { bibleBoard, serviceSetup } from './bible-board.js';
+import { bibleBoard, renderedStory, serviceSetup } from './bible-board.js';
 
 /** Scripted text model: each call returns the next reply and records what it was sent. */
 function fakeModel(replies: string[]): TextModel & { calls: ChatInput[] } {
@@ -159,6 +159,19 @@ describe('breakdown_scene action', () => {
     const board = await t.service.readStoryboard(story.id);
     expect(board.scenes![0]!.shots.slice(0, 2)).toEqual(['01-laras', '02-kapas']);
     expect(board.scenes![0]!.shots).toHaveLength(4);
+  });
+
+  it('replace is refused over a scene with a done clip or keyframe (paid takes are never dropped)', async () => {
+    const t = serviceSetup();
+    const story = await renderedStory(t, withPlaceholder());
+    expect(story.shots.find(s => s.id === '01-laras')!.status).toBe('done');
+    const before = readFileSync(join(t.dataDir, 'stories', story.id, 'storyboard.json'), 'utf8');
+    const model = fakeModel([JSON.stringify([intent(0), intent(1)])]);
+    const r = await ACTIONS.breakdown_scene.run(ctxFor(t, model), story.id, { scene: 1, count: 2, mode: 'replace' });
+    expect(r.ok).toBe(false);
+    expect((r as { error: string }).error).toBe(REPLACE_REFUSED_MESSAGE);
+    expect(model.calls).toHaveLength(0);
+    expect(readFileSync(join(t.dataDir, 'stories', story.id, 'storyboard.json'), 'utf8')).toBe(before);
   });
 
   it('an invalid intent gets one retry, then a plain error with nothing inserted', async () => {
