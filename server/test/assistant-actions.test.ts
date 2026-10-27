@@ -345,6 +345,21 @@ describe('structure actions', () => {
     expect(board.bible!.characters.map(c => c.token)).toEqual(['LARAS', 'KAPAS', 'IBU']);
   });
 
+  it('edit_character says what must be made again when a rename or new anchors invalidate paid clips', async () => {
+    const t = serviceSetup();
+    const story = await renderedStory(t, bibleBoard());
+    expect(story.shots.filter(s => s.status === 'done')).toHaveLength(2);
+    const r = okOf(await run(ctxFor(t), story.id, 'edit_character', { token: 'LARAS', name: 'Larasati' }));
+    const after = (await t.service.get(story.id))!;
+    const redone = after.shots.filter(s => s.status !== 'done').length;
+    expect(redone).toBeGreaterThan(0);
+    expect(r.label).toContain(`${redone} klip`);
+    expect(r.label).toContain(`±${redone * 10} kredit Flow`);
+    // A change that keeps every take says nothing about re-rendering.
+    const r2 = okOf(await run(ctxFor(t), story.id, 'edit_character', { token: 'LARAS', want: 'menjual semua ikan sebelum siang' }));
+    expect(r2.label).not.toMatch(/dibuat ulang/);
+  });
+
   it('set_look changes the look family and bumps rev', async () => {
     const t = serviceSetup();
     const story = await t.service.create(twoScenes());

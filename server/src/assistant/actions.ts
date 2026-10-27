@@ -208,6 +208,26 @@ async function guarded(ctx: ActionContext, storyId: string, fn: (record: StoryRe
   }
 }
 
+/**
+ * Append what an edit sent back to be made again: paid clips (with their cost) and keyframes whose
+ * take was done before and is not done after. Says nothing when every take was kept.
+ */
+function withRedoNote<R extends ActionResult & { ok: true }>(result: R, before: StoryRecord | undefined, after: StoryRecord | undefined, board: Storyboard): R {
+  if (!before || !after) return result;
+  const was = new Map(before.shots.map(s => [s.id, s]));
+  let clips = 0;
+  let frames = 0;
+  for (const now of after.shots) {
+    const old = was.get(now.id);
+    if (old?.status === 'done' && now.status !== 'done') clips += 1;
+    if (old?.frame?.status === 'done' && now.frame?.status !== 'done') frames += 1;
+  }
+  if (!clips && !frames) return result;
+  const cost = videoEngine(board) ? 'biaya OpenRouter' : `±${clips * CREDITS_PER_SHOT} kredit Flow`;
+  const parts = [clips ? `${clips} klip (${cost})` : '', frames ? `${frames} keyframe (gratis di Flow)` : ''].filter(Boolean);
+  return { ...result, label: `${result.label} — ${parts.join(' dan ')} perlu dibuat ulang` };
+}
+
 /** True when an undo id belongs to this story (`u_<story hex>_…`). */
 const ownsUndo = (undoId: string | undefined, storyId: string) => !!undoId && undoId.startsWith(`u_${storyId.slice('story_'.length)}_`);
 
@@ -858,6 +878,7 @@ export const ACTIONS: Record<ActionName, Action> = {
       const arc = str(input, 'arc', { max: 300, allowEmpty: true });
       const look = str(input, 'look', { max: 600 });
       const pre = await ctx.stories.readStoryboard(storyId);
+      const before = await ctx.stories.get(storyId);
       if (!pre.bible && (anchors || want || need || arc !== undefined || input.reference !== undefined)) bad('Proyek tanpa bible: ubah name atau look saja (anchors dan referensi butuh bible).');
       if (pre.bible && look !== undefined) bad('Di proyek bible tampilan karakter diatur lewat anchors, bukan look.');
       // reference: null clears the card's reference; a value is planned here and copied only once the edit is valid.
@@ -884,9 +905,11 @@ export const ACTIONS: Record<ActionName, Action> = {
         board.characters = { ...(board.characters ?? {}), [token]: { name: name ?? current.name, look: look ?? current.look } };
         return { board, label: `Karakter ${name ?? current.name} diubah` };
       }, referenceHooks(ctx, storyId, reference));
-      if (!result.ok || !reference) return result;
+      if (!result.ok) return result;
+      const told = withRedoNote(result, before, await ctx.stories.get(storyId), pre);
+      if (!reference) return told;
       const note = imageEngine(pre) ? 'Referensi disimpan; dipakai saat sheet dibuat (make_sheet).' : FLOW_REFERENCE_NOTE;
-      return { ...result, label: `${result.label}. ${note}` };
+      return { ...told, label: `${told.label}. ${note}` };
     })
   },
 
