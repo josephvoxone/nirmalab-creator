@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { createReadStream, existsSync, statSync } from 'node:fs';
+import { join } from 'node:path';
 import { sendImage, sendPoster, type MediaCache } from '../media/images.js';
 import { requireAdmin, sessionUser } from '../auth/routes.js';
 import type { UserAuthStore } from '../auth/store.js';
@@ -9,6 +10,9 @@ import type { CoverService } from './covers.js';
 import { StoryError, type StoryService } from './service.js';
 import { ShotCompileError } from '../bible/compiler.js';
 import { SHOT_ID, compileBoardShot, validateEngine, type Shot, type Storyboard } from './storyboard.js';
+import { ACTIONS, type ActionContext, type ActionResult } from '../assistant/actions.js';
+import { MAX_UPLOAD_BYTES, NOT_IMAGE_MESSAGE, TOO_LARGE_MESSAGE, UPLOAD_FILE, UPLOAD_TYPES, UploadError, mimeOfFile, saveUpload, uploadsDir } from '../assistant/uploads.js';
+import type { TextModel } from '../llm/opencode.js';
 
 const STATUS: Record<StoryError['code'], number> = { INVALID: 400, NOT_FOUND: 404, BUSY: 409, BUDGET: 409, STALE: 409 };
 
@@ -43,6 +47,16 @@ const notFound = (reply: FastifyReply, what = 'Shot') => reply.code(404).send({ 
 
 const badRequest = (reply: FastifyReply, message: string) => reply.code(400).send({ error: { code: 'INVALID', message } });
 
+const ACTION_STATUS: Record<string, number> = { INVALID: 400, NOT_FOUND: 404, BUSY: 409, BUDGET: 409, STALE: 409, UNAVAILABLE: 503, FAILED: 503 };
+
+/** An action result over HTTP: a plain error keeps its code; `needsConfirm` is a normal 200 the UI answers with confirm. */
+function sendAction(reply: FastifyReply, result: ActionResult, ok: () => Promise<Record<string, unknown>>) {
+  if (result.ok) return ok().then(body => reply.send({ label: result.label, changed: result.changed ?? false, ...body }));
+  if ('needsConfirm' in result) return reply.send({ needsConfirm: true, label: result.label, estimate: result.estimate });
+  const code = result.code ?? 'INVALID';
+  return reply.code(ACTION_STATUS[code] ?? 400).send({ error: { code, message: result.error } });
+}
+
 /** Optional `scene`/`shot` id of a partial run: absent, or a well-formed id (existence is checked by the service → 404). */
 function runTarget(body: { scene?: unknown; shot?: unknown } | undefined): { scene?: string; shot?: string } | string {
   const out: { scene?: string; shot?: string } = {};
@@ -62,9 +76,20 @@ const asBoard = (value: unknown): Storyboard => {
 
 export async function registerStoryRoutes(
   server: FastifyInstance,
-  options: { userAuthStore: UserAuthStore; stories: StoryService; generateText: TextGenerator; covers?: CoverService; media: MediaCache }
+  options: {
+    userAuthStore: UserAuthStore; stories: StoryService; generateText: TextGenerator; covers?: CoverService; media: MediaCache;
+    /** Assistant text model (scene breakdown); absent = breakdown answers that no model is set. */
+    textModel?: TextModel;
+    /** OpenRouter prices for spending estimates. */
+    price?: ActionContext['price'];
+  }
 ): Promise<void> {
   const { userAuthStore: auth, stories } = options;
+  /** One UI click = one turn: its own snapshot, scoped to the story in the URL. */
+  const uiContext = (userId: string): ActionContext => ({
+    stories, snapshots: stories.snapshots, userId, source: 'ui', turn: {},
+    ...(options.textModel ? { model: options.textModel } : {}), ...(options.price ? { price: options.price } : {})
+  });
   const member = (request: Parameters<typeof sessionUser>[1], reply: FastifyReply) => {
     const user = sessionUser(auth, request);
     if (!user) void reply.code(401).send({ error: { code: 'UNAUTHORIZED', message: 'Unauthorized' } });
@@ -257,6 +282,80 @@ export async function registerStoryRoutes(
     try {
       if (!(await stories.get(request.params.id))) return notFound(reply, 'Story');
       return await sendPng(request, reply, stories.castPath(request.params.id, request.params.token), options.media);
+    } catch (error) { return fail(reply, error); }
+  });
+
+  /** "Pecah jadi shot": the AI shot planner for one scene (same action the assistant uses). */
+  server.post<{ Params: { id: string; sceneId: string }; Body: { count?: unknown; brief?: unknown; mode?: unknown } }>('/api/stories/:id/scenes/:sceneId/breakdown', async (request, reply) => {
+    const user = requireAdmin(auth, request, reply);
+    if (!user) return undefined;
+    try {
+      if (!(await stories.get(request.params.id))) return notFound(reply, 'Story');
+      const ctx = uiContext(user.id);
+      const body = request.body ?? {};
+      const result = await ACTIONS.breakdown_scene.run(ctx, request.params.id, {
+        scene: request.params.sceneId,
+        ...(body.count !== undefined ? { count: body.count } : {}),
+        ...(body.brief !== undefined ? { brief: body.brief } : {}),
+        ...(body.mode !== undefined ? { mode: body.mode } : {})
+      });
+      return await sendAction(reply, result, async () => ({
+        undoId: ctx.turn.undoId, story: await stories.get(request.params.id), storyboard: await stories.readStoryboard(request.params.id)
+      }));
+    } catch (error) { return fail(reply, error); }
+  });
+
+  /** "Buat sheet": one sheet job for one character. Without `confirm: true` it only answers the estimate. */
+  server.post<{ Params: { id: string; token: string }; Body: { confirm?: unknown; reference?: unknown } }>('/api/stories/:id/cast/:token/sheet', async (request, reply) => {
+    const user = requireAdmin(auth, request, reply);
+    if (!user) return undefined;
+    try {
+      if (!(await stories.get(request.params.id))) return notFound(reply, 'Story');
+      const result = await ACTIONS.make_sheet.run(uiContext(user.id), request.params.id, {
+        token: request.params.token, confirm: request.body?.confirm === true,
+        ...(typeof request.body?.reference === 'string' ? { reference: request.body.reference } : {})
+      });
+      return await sendAction(reply, result, async () => ({ story: await stories.get(request.params.id) }));
+    } catch (error) { return fail(reply, error); }
+  });
+
+  // Image uploads (references, start frames): raw body, the type proven by its bytes, 10 MB.
+  await server.register(async scope => {
+    scope.addContentTypeParser([...UPLOAD_TYPES], { parseAs: 'buffer', bodyLimit: MAX_UPLOAD_BYTES }, (_request, body, done) => done(null, body));
+    scope.setErrorHandler((error: { statusCode?: number; message?: string }, _request, reply) => {
+      if (error.statusCode === 413) return reply.code(413).send({ error: { code: 'TOO_LARGE', message: TOO_LARGE_MESSAGE } });
+      if (error.statusCode === 415 || error.statusCode === 400) return reply.code(400).send({ error: { code: 'INVALID', message: NOT_IMAGE_MESSAGE } });
+      return fail(reply, error);
+    });
+    scope.post<{ Params: { id: string } }>('/api/stories/:id/uploads', {
+      bodyLimit: MAX_UPLOAD_BYTES,
+      // Checked before the body is read: nobody but an admin gets to stream 10 MB at the server.
+      onRequest: async (request, reply) => { if (!requireAdmin(auth, request, reply)) return reply; return undefined; }
+    }, async (request, reply) => {
+      try {
+        if (!(await stories.get(request.params.id))) return notFound(reply, 'Story');
+        const body = request.body;
+        if (!Buffer.isBuffer(body)) return badRequest(reply, NOT_IMAGE_MESSAGE);
+        const upload = await saveUpload(stories.storyDir(request.params.id), body);
+        return reply.code(201).send({
+          id: upload.id, url: `/api/stories/${request.params.id}/uploads/${upload.file}`, w: upload.w, h: upload.h, bytes: upload.bytes
+        });
+      } catch (error) {
+        if (error instanceof UploadError) return reply.code(error.code === 'TOO_LARGE' ? 413 : 400).send({ error: { code: error.code === 'TOO_LARGE' ? 'TOO_LARGE' : 'INVALID', message: error.message } });
+        return fail(reply, error);
+      }
+    });
+  });
+
+  server.get<{ Params: { id: string; file: string } }>('/api/stories/:id/uploads/:file', async (request, reply) => {
+    if (!requireAdmin(auth, request, reply)) return undefined;
+    if (!UPLOAD_FILE.test(request.params.file)) return notFound(reply, 'Upload');
+    try {
+      if (!(await stories.get(request.params.id))) return notFound(reply, 'Story');
+      const file = join(uploadsDir(stories.storyDir(request.params.id)), request.params.file);
+      if (!existsSync(file)) return notFound(reply, 'Upload');
+      return reply.header('content-type', mimeOfFile(request.params.file)!).header('cache-control', 'private, max-age=3600')
+        .header('content-length', statSync(file).size).send(createReadStream(file));
     } catch (error) { return fail(reply, error); }
   });
 

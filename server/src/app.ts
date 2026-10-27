@@ -169,7 +169,15 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
     { timeoutMs: 120_000 }
   )).text);
   const covers = new CoverService({ dataDir: options.dataDir, flow: flowStore, webDist: options.webDist });
-  await registerStoryRoutes(server, { userAuthStore, stories, generateText, covers, media });
+  await registerStoryRoutes(server, {
+    userAuthStore, stories, generateText, covers, media,
+    // Project actions (breakdown, sheets): the shared text model and OpenRouter prices for estimates.
+    textModel,
+    price: {
+      usdPerClip: async model => { try { return (await catalog.find('video', model))?.usdPerClip ?? null; } catch { return null; } },
+      usdPerImage: async model => { try { return (await catalog.find('image', model))?.usdPerImage ?? null; } catch { return null; } }
+    }
+  });
   await registerTrendRoutes(server, { userAuthStore, dataDir: options.dataDir, stories, env });
   const reconcileMs = options.stories?.reconcileMs ?? 5000;
   if (reconcileMs > 0) {

@@ -32,6 +32,8 @@ export type CharacterCard = {
   arc: string;
   /** Character sheet asset id (konsisten mode). */
   sheet?: string;
+  /** Uploaded reference image (`uploads/up_….ext` in the story dir); sent with OpenRouter sheet jobs. */
+  reference?: string;
 };
 
 export type BibleLocation = {
@@ -162,6 +164,9 @@ export function validateBible(input: unknown): string[] {
     if (!anchors.length) errors.push(`karakter ${token}: anchors wajib diisi (minimal satu fakta visual)`);
     for (const anchor of anchors) {
       if (anchorIsGeneric(anchor)) errors.push(`karakter ${token}: anchor "${anchor.trim()}" terlalu umum — sebut bentuk, proporsi, satu ciri atau material`);
+    }
+    if (c?.reference !== undefined && !(typeof c.reference === 'string' && /^uploads\/up_[a-f0-9]{16}\.(png|jpg|webp)$/.test(c.reference))) {
+      errors.push(`karakter ${token}: referensi harus gambar unggahan proyek ini`);
     }
   }
 

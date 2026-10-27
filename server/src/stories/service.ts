@@ -22,6 +22,7 @@ import { AUDIT_GATE, AuditParseError, MAX_AUDIT_IMAGES, type AuditDimensions, ty
 
 import { composeStyle, resolveLook } from './looks.js';
 import { usdLabel } from '../providers/catalog.js';
+import { uploadPath } from '../assistant/uploads.js';
 
 const MIN_IMAGE_BYTES = 10_000;
 
@@ -106,8 +107,11 @@ export type StoryRecord = {
   video?: { bytes: number; finishedAtMs: number };
   /** A final video exists but the storyboard changed after it (order or content). */
   videoStale?: boolean;
-  /** Shots of the current/last prepare or render run (partial runs per scene or shot). */
-  run?: { shots: string[] };
+  /**
+   * Shots of the current/last prepare or render run (partial runs per scene or shot). `cast` = a
+   * sheet-only run (`makeSheet`): exactly these cast sheets, no keyframes.
+   */
+  run?: { shots: string[]; cast?: string[] };
   events: Array<{ atMs: number; message: string }>;
   /** User id that created the story; every Flow job it queues is attributed to them. */
   createdBy?: string;
@@ -219,6 +223,11 @@ export class StoryService {
 
   castPath(id: string, token: string): string {
     return join(this.storyDir(id), `cast-${token}.png`);
+  }
+
+  /** Absolute path of a stored upload reference (`uploads/up_….ext`) of this story; undefined when malformed or missing. */
+  referencePath(id: string, rel: unknown): string | undefined {
+    return uploadPath(this.storyDir(id), rel);
   }
 
   /** Serialise all mutations of one story (in-process); disk state makes it restart-safe. */
@@ -564,14 +573,20 @@ export class StoryService {
         characters: shotCast(board, shot).map(c => ({ name: c.name, look: c.look })),
         // OpenRouter animates the approved keyframe file (first_frame); Flow animates its own media.
         ...(engine.provider === 'openrouter'
-          ? (state.frame?.status === 'done' ? { startImage: this.framePath(record.id, shot.id) } : {})
+          ? (state.frame?.status === 'done' ? { startImage: this.framePath(record.id, shot.id) } : this.startUpload(record, shot))
           : state.frame?.mediaId ? { startFrame: { mediaId: state.frame.mediaId, caption: state.frame.caption ?? '' } } : {})
-      } : {})
+      } : engine.provider === 'openrouter' ? this.startUpload(record, shot) : {})
     });
     state.jobId = job.id;
     state.promptHash = hashFor(board, shot);
     state.status = 'queued';
     state.error = undefined;
+  }
+
+  /** OpenRouter only: an uploaded start frame of the shot (`shot.startFrame`), when it still exists. */
+  private startUpload(record: StoryRecord, shot: Shot): { startImage?: string } {
+    const file = this.referencePath(record.id, shot.startFrame);
+    return file ? { startImage: file } : {};
   }
 
   /** Shot ids of a run: one shot, one scene, or (neither) the whole story. */
@@ -849,8 +864,35 @@ export class StoryService {
     return this.startPrep(id, options);
   }
 
+  /**
+   * One character sheet for one cast token (konsisten only): exactly one image job, no keyframes.
+   * A done sheet is made again (its take goes to the archive). `opts.reference` = an upload of this
+   * story (`uploads/…`) sent with this job on OpenRouter; without it the bible card's reference is used.
+   */
+  async makeSheet(id: string, token: string, opts: { reference?: string } = {}): Promise<StoryRecord> {
+    return this.withLock(id, async () => {
+      const record = await this.require(id);
+      if (record.mode !== 'konsisten') throw new StoryError('INVALID', 'Lembar karakter hanya untuk mode konsisten');
+      if (BUSY_STATUSES.includes(record.status)) throw new StoryError('BUSY', 'Story sedang diproses; tunggu selesai atau gagal dulu');
+      const board = await this.readStoryboard(id);
+      const cast = (record.cast ?? []).find(c => c.token === token);
+      if (!cast) throw new StoryError('INVALID', `Karakter ${token} belum muncul di shot mana pun — belum ada sheet untuk dibuat`);
+      const reference = opts.reference === undefined ? undefined : this.referencePath(id, opts.reference);
+      if (opts.reference !== undefined && !reference) throw new StoryError('INVALID', 'Referensi tidak ditemukan di proyek ini');
+      this.archiveTake(record, `cast:${token}`, cast);
+      Object.assign(cast, { status: 'pending', attempts: 0, error: undefined, lastError: undefined });
+      await this.queueCast(record, board, cast, reference);
+      record.run = { shots: [], cast: [token] };
+      record.status = 'casting';
+      record.error = undefined;
+      await this.save(record, `Membuat lembar karakter ${cast.name}`);
+      return record;
+    });
+  }
+
   /** Cast tokens needed by the run's shots. */
   private runCast(record: StoryRecord, board: Storyboard): CastState[] {
+    if (record.run?.cast) return (record.cast ?? []).filter(c => record.run!.cast!.includes(c.token));
     const run = this.runIds(record);
     const tokens = new Set(board.shots.filter(s => run.has(s.id) && !s.reuse).flatMap(s => shotCast(board, s).map(c => c.token)));
     return (record.cast ?? []).filter(c => tokens.has(c.token));
@@ -879,8 +921,13 @@ export class StoryService {
     });
   }
 
-  /** Review step: draw one frame again (free), optionally with a new shot prompt. */
-  async redrawFrame(id: string, shotId: string, prompt?: string): Promise<StoryRecord> {
+  /**
+   * Review step: draw one frame again (free on Flow), optionally with a new shot prompt (legacy
+   * boards). `opts.note` is a one-off extra instruction for this take only (like an audit repair:
+   * the frame hash does not change); `opts.reference` (`uploads/…`) is sent as an extra image
+   * reference with OpenRouter image engines.
+   */
+  async redrawFrame(id: string, shotId: string, prompt?: string, opts: { note?: string; reference?: string } = {}): Promise<StoryRecord> {
     return this.withLock(id, async () => {
       const record = await this.require(id);
       if (!['review', 'failed', 'draft', 'done'].includes(record.status)) throw new StoryError('BUSY', 'Story sedang diproses');
@@ -895,13 +942,18 @@ export class StoryService {
       // Checked before anything is written: a refusal leaves board and rev as they were.
       const needed = new Set(shotCast(board, shot).map(c => c.token));
       if ((record.cast ?? []).some(c => needed.has(c.token) && c.status !== 'done')) throw new StoryError('INVALID', 'Lembar karakter belum siap');
+      const reference = opts.reference === undefined ? undefined : this.referencePath(id, opts.reference);
+      if (opts.reference !== undefined && !reference) throw new StoryError('INVALID', 'Referensi tidak ditemukan di proyek ini');
       if (prompt !== undefined) {
         await this.writeJson(join(this.storyDir(id), 'storyboard.json'), board);
         record.rev += 1;
         Object.assign(state, { status: 'pending', attempts: 0, error: undefined });
       }
       state.frame = { status: 'pending', attempts: 0 };
-      await this.queueFrame(record, board, shotId);
+      const note = opts.note?.trim();
+      if (note) state.auditRepair = [state.auditRepair, note].filter(Boolean).join(' ');
+      await this.queueFrame(record, board, shotId, reference);
+      if (note) state.auditRepair = undefined;
       record.run = { shots: [shotId] };
       record.status = 'framing';
       record.error = undefined;
@@ -920,18 +972,27 @@ export class StoryService {
     }
   }
 
-  private async queueCast(record: StoryRecord, board: Storyboard, cast: CastState): Promise<void> {
+  /**
+   * One sheet job. OpenRouter image engines also get the character's reference image: `reference`
+   * (an absolute upload path) when given, else the upload stored on the bible card. Flow cannot
+   * take arbitrary uploads, so it gets the text only.
+   */
+  private async queueCast(record: StoryRecord, board: Storyboard, cast: CastState, reference?: string): Promise<void> {
     const member = castOf(board).find(c => c.token === cast.token)!;
     const prompt = sheetPromptFor(member, board);
+    const engine = this.engine(board, 'image');
+    const card = board.bible?.characters?.find(c => c.token === cast.token);
+    const ref = engine.provider === 'openrouter' ? reference ?? this.referencePath(record.id, card?.reference) : undefined;
     const job = await this.deps.flow.createJob({
-      prompt, kind: 'character', group: record.id, aspect: '16:9', durationSec: 6, ...this.owner(record), ...this.engine(board, 'image'),
+      prompt, kind: 'character', group: record.id, aspect: '16:9', durationSec: 6, ...this.owner(record), ...engine,
       technique: `story:${record.id}/cast:${cast.token}`,
-      characters: [{ name: member.name, look: member.look }]
+      characters: [{ name: member.name, look: member.look }],
+      ...(ref ? { references: [ref] } : {})
     });
     Object.assign(cast, { jobId: job.id, status: 'queued', promptHash: sheetHashFor(member, board), error: undefined });
   }
 
-  private async queueFrame(record: StoryRecord, board: Storyboard, shotId: string): Promise<void> {
+  private async queueFrame(record: StoryRecord, board: Storyboard, shotId: string, reference?: string): Promise<void> {
     const shot = board.shots.find(s => s.id === shotId)!;
     const state = record.shots.find(s => s.id === shotId)!;
     const base = this.compiled(() => framePromptFor(board, shot), shot.id);
@@ -942,7 +1003,7 @@ export class StoryService {
       technique: `story:${record.id}/frame:${shot.id}`,
       characters: shotCast(board, shot).map(c => ({ name: c.name, look: c.look })),
       // OpenRouter gets the approved cast sheets as input references.
-      ...(engine.provider === 'openrouter' ? { references: shotCast(board, shot).map(c => this.castPath(record.id, c.token)) } : {})
+      ...(engine.provider === 'openrouter' ? { references: [...(reference ? [reference] : []), ...shotCast(board, shot).map(c => this.castPath(record.id, c.token))] } : {})
     });
     state.frame = { ...(state.frame ?? { attempts: 0 }), status: 'queued', jobId: job.id, promptHash: frameHashFor(board, shot), error: undefined } as TakeState;
   }
@@ -1209,6 +1270,12 @@ export class StoryService {
       if (!cast.every(c => c.status === 'done')) {
         for (const c of cast) if (c.status === 'pending') { await this.queueCast(record, board, c); changed = true; }
         if (changed) await this.save(record, `${cast.filter(c => c.status === 'done').length}/${cast.length} karakter siap`);
+        return record;
+      }
+      if (record.run?.cast && !record.run.shots.length) {
+        // A sheet-only run (makeSheet) ends here: no keyframe is drawn without being asked for.
+        record.status = idleStatus(record);
+        await this.save(record, 'Lembar karakter siap');
         return record;
       }
       await this.queueFrames(record, board);

@@ -25,6 +25,8 @@ export type Shot = {
   transition?: string;
   /** Bible boards: what the shot must do. Prompts are compiled from this, never from prose. */
   intent?: ShotIntent;
+  /** An uploaded start frame (`uploads/up_….ext`); used by OpenRouter video engines only. */
+  startFrame?: string;
 };
 
 export type CharacterSpec = string | { name: string; look: string };
@@ -85,6 +87,8 @@ export const SCENE_ID = SHOT_ID;
 export const LOCATION_KEY = /^[A-Z][A-Z0-9_]{1,30}$/;
 export const MAX_SCENES = 20;
 export const MAX_LOCATIONS = 20;
+/** A stored upload of the story (assistant/uploads.ts writes them): references and start frames. */
+export const UPLOAD_REF = /^uploads\/up_[a-f0-9]{16}\.(png|jpg|webp)$/;
 
 const hasKey = (obj: object | undefined, key: string | undefined) => !!obj && typeof key === 'string' && Object.prototype.hasOwnProperty.call(obj, key);
 
@@ -362,6 +366,7 @@ export function validateStoryboard(board: Storyboard): string[] {
     if (!SHOT_ID.test(shot.id ?? '')) { errors.push(`invalid shot id "${shot.id}" (lowercase letters, digits, dashes)`); continue; }
     if (seen.has(shot.id)) errors.push(`${shot.id}: duplicate shot id`);
     seen.add(shot.id);
+    if (shot.startFrame !== undefined && !(typeof shot.startFrame === 'string' && UPLOAD_REF.test(shot.startFrame))) errors.push(`${shot.id}: startFrame must be an upload of this story (uploads/up_….png)`);
     if (shot.reuse) {
       if (!/^job_[a-f0-9]{16}$/.test(shot.reuse.jobId ?? '')) errors.push(`${shot.id}: reuse.jobId must be a Flow job id`);
       continue;
