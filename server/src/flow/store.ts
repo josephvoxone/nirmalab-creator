@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { writePrivateJsonFile } from '../lib/private-json-file.js';
 import { isModelId, type ProviderId } from '../providers/config.js';
+import { AXCEL_MODELS, isAxcelModel } from '../providers/axcel.js';
 import { CREDITS_PER_SHOT } from '../stories/storyboard.js';
 
 export type FlowAccountStatus = 'ready' | 'cooldown' | 'error';
@@ -377,7 +378,9 @@ export class FlowStore {
     startImage?: string;
   }): Promise<FlowJob> {
     const openrouter = input.provider === 'openrouter';
+    const axcel = input.provider === 'axcel';
     if (openrouter && !isModelId(input.model)) throw new FlowInputError('model is required for provider openrouter (e.g. google/veo-3.1-fast)');
+    if (axcel && !isAxcelModel(input.model)) throw new FlowInputError(`model is required for provider axcel (one of: ${AXCEL_MODELS.join(', ')})`);
     return this.serialize(async () => {
       const state = await this.read();
       const prompt = input.prompt.trim();
@@ -397,8 +400,8 @@ export class FlowStore {
         createdAtMs: Date.now(),
         ...(input.technique === undefined ? {} : { technique: input.technique }),
         ...(input.createdBy ? { createdBy: input.createdBy.slice(0, 80) } : {}),
-        ...(openrouter ? {
-          provider: 'openrouter' as const,
+        ...(openrouter || axcel ? {
+          provider: (openrouter ? 'openrouter' : 'axcel') as ProviderId,
           model: input.model!,
           ...(input.references?.length ? { references: input.references.slice(0, 8) } : {}),
           ...(input.startImage ? { startImage: input.startImage } : {})

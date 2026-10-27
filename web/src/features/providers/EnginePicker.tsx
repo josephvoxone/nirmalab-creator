@@ -7,7 +7,7 @@ import { cn } from '@/lib/utils';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuLabel, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Choice } from '../../ui/controls.js';
 import type { Engine, MediaKind } from './providersClient.js';
-import { engineFor, openRouterOption, type EngineCatalog } from './useEngines.js';
+import { axcelOption, engineFor, openRouterOption, type EngineCatalog } from './useEngines.js';
 
 export const FLOW_LABEL = 'Google Flow · gratis';
 
@@ -24,24 +24,26 @@ type Props = {
 
 function useOptions(props: Props) {
   const option = openRouterOption(props.catalog, props.kind, props.value);
+  const axcel = axcelOption(props.catalog, props.kind, props.value);
   const options = [
     { value: 'flow' as const, label: FLOW_LABEL },
-    { value: 'openrouter' as const, label: option.label, hint: option.hint, disabled: !option.available }
+    { value: 'openrouter' as const, label: option.label, hint: option.hint, disabled: !option.available },
+    { value: 'axcel' as const, label: axcel.label, hint: axcel.hint, disabled: !axcel.available }
   ];
-  return { option, options };
+  return { option, axcel, options };
 }
 
 export function EngineChoice(props: Props) {
-  const { option, options } = useOptions(props);
+  const { option, axcel, options } = useOptions(props);
   return (
     <Choice label={props.label ?? 'Mesin'} showLabel={props.showLabel} size="sm" disabled={props.disabled} className={cn('max-w-full min-w-44', props.className)}
-      value={props.value.provider} options={options} onChange={p => props.onChange(engineFor(p, option))} />
+      value={props.value.provider} options={options} onChange={p => props.onChange(engineFor(p, option, axcel))} />
   );
 }
 
 /** Composer-footer pick (same look as ComposerPick), with a disabled OpenRouter row + its hint. */
 export function EngineMenu(props: Props) {
-  const { option, options } = useOptions(props);
+  const { option, axcel, options } = useOptions(props);
   const label = props.label ?? 'Mesin';
   const shown = options.find(o => o.value === props.value.provider)?.label;
   return (
@@ -52,7 +54,7 @@ export function EngineMenu(props: Props) {
         <ChevronDown className="size-3 opacity-60" />
       </DropdownMenuTrigger>
       <DropdownMenuContent side="top" align="start" className="w-72">
-        <DropdownMenuRadioGroup value={props.value.provider} onValueChange={next => props.onChange(engineFor(next as Engine['provider'], option))}>
+        <DropdownMenuRadioGroup value={props.value.provider} onValueChange={next => props.onChange(engineFor(next as Engine['provider'], option, axcel))}>
           <DropdownMenuLabel className="text-[11px]">{label}</DropdownMenuLabel>
           {options.map(o => (
             <DropdownMenuRadioItem key={o.value} value={o.value} disabled={o.disabled} closeOnClick className={cn('text-[13px]', o.hint && 'items-start py-1.5')}>

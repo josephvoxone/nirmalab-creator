@@ -5,8 +5,8 @@
 import { join } from 'node:path';
 import { readPrivateJsonFile, writePrivateJsonFile } from '../lib/private-json-file.js';
 
-export type ProviderId = 'flow' | 'openrouter';
-export type Engine = { provider: 'flow' } | { provider: 'openrouter'; model: string };
+export type ProviderId = 'flow' | 'openrouter' | 'axcel';
+export type Engine = { provider: 'flow' } | { provider: 'openrouter'; model: string } | { provider: 'axcel'; model: string };
 export type EngineKind = 'image' | 'video';
 
 export type OpenRouterDefaults = { image?: string; video?: string };

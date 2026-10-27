@@ -15,8 +15,8 @@ import { useSession } from '../../lib/session.js';
 import { Choice, inputClass } from '../../ui/controls.js';
 import { LoadingState, describeError } from '../../ui/states.js';
 import {
-  fitsStory, fmtUsd, providersApi, savedKeyText, sortVideoModels,
-  type Balance, type ModelInfo, type Models, type OpenRouterPatch, type OpenRouterState, type Providers
+  AXCEL_DEFAULT_MODEL, fitsStory, fmtUsd, providersApi, savedKeyText, sortVideoModels,
+  type AxcelState, type Balance, type ModelInfo, type Models, type OpenRouterPatch, type OpenRouterState, type Providers
 } from '../providers/providersClient.js';
 import { TextModelPanel } from './TextModelPanel.js';
 
@@ -236,6 +236,73 @@ function OpenRouterCard(props: { api: Api; state: OpenRouterState; onState: (s: 
   );
 }
 
+
+/* ---------- Axcel (Gold plan, through the Mac bridge) ---------- */
+
+function AxcelTokenForm(props: { busy: boolean; onSave: (token: string) => Promise<boolean> }) {
+  const [token, setToken] = useState('');
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    const value = token.trim();
+    if (!value) return;
+    if (await props.onSave(value)) setToken('');
+  };
+  return (
+    <form className="flex items-end gap-2" onSubmit={e => void submit(e)}>
+      <label className="flex flex-1 flex-col gap-1 text-[12px] text-muted-foreground">Token bridge Axcel (dari ~/.config/opencreator/axcel-bridge.env)
+        <input className={inputClass} type="password" autoComplete="off" spellCheck={false}
+          placeholder="AXCEL_BRIDGE_TOKEN" value={token} onChange={e => setToken(e.target.value)} />
+      </label>
+      <Button type="submit" size="lg" disabled={props.busy || !token.trim()}><KeyRound /> {props.busy ? 'Menyimpan…' : 'Simpan token'}</Button>
+    </form>
+  );
+}
+
+/**
+ * Axcel has no public API: the Mac bridge (`bridge/axcel.mjs`) drives the logged-in Chrome and the
+ * server talks to that bridge. So this card only needs the bridge URL + token, and shows which
+ * account/plan the bridge is currently using.
+ */
+function AxcelCard(props: { api: Api; state: AxcelState; onState: (next: AxcelState) => void }) {
+  const state = props.state;
+  const [busy, setBusy] = useState<'token' | 'test' | undefined>();
+  const [error, setError] = useState('');
+  const health = state.health;
+
+  const save = async (token: string) => {
+    setBusy('token'); setError('');
+    try { props.onState(await props.api.saveAxcel({ token })); return true; }
+    catch (e) { setError(describeError(e)); return false; }
+    finally { setBusy(undefined); }
+  };
+  const test = async () => {
+    setBusy('test'); setError('');
+    try {
+      const { health: live } = await props.api.testAxcel();
+      props.onState({ ...state, health: live ?? null, error: undefined });
+    } catch (e) { setError(describeError(e)); }
+    finally { setBusy(undefined); }
+  };
+
+  return (
+    <Section id="prov-axcel" title="Axcel (Gold)" hint="Langganan Axcel diakses lewat bridge di Mac yang memakai sesi Chrome kamu. Tanpa biaya per klip; giliran mengikuti batas harian Axcel.">
+      {!state.configured ? <AxcelTokenForm busy={busy === 'token'} onSave={save} /> : (
+        <div className="flex flex-col">
+          <Row title="Token bridge" hint={savedKeyText(state.tokenHint)}>
+            <Button size="sm" variant="ghost" className="text-destructive" onClick={() => void props.api.saveAxcel({ token: null }).then(props.onState)}>Hapus</Button>
+          </Row>
+          <Row title="Koneksi" hint={health?.akun ? `${health.akun} · paket ${health.plan ?? '—'}${health.planAktif ? ' aktif' : ' tidak aktif'}` : state.url}>
+            <Button size="sm" variant="glass" disabled={busy === 'test'} onClick={() => void test()}><PlugZap /> {busy === 'test' ? 'Mengetes…' : 'Tes koneksi'}</Button>
+          </Row>
+          <Row title="Model" hint={`Gambar: ${AXCEL_DEFAULT_MODEL.image} · Video: ${AXCEL_DEFAULT_MODEL.video}${health?.refMedia ? ' · referensi video/audio tersedia' : ''}`}>{null}</Row>
+        </div>
+      )}
+      {state.error && <ErrorLine>Bridge Axcel: {state.error}</ErrorLine>}
+      {error && <ErrorLine>{error}</ErrorLine>}
+    </Section>
+  );
+}
+
 /* ---------- the tab ---------- */
 
 export function ProviderPanel(props: { onOpenFlow: () => void }) {
@@ -265,6 +332,7 @@ export function ProviderPanel(props: { onOpenFlow: () => void }) {
             <FlowSummary flow={data.flow} onManage={props.onOpenFlow} />
             <OpenRouterCard api={api} state={data.openrouter ?? { configured: false, defaults: {} }} onState={openrouter => setData(d => (d ? { ...d, openrouter } : d))} />
             <TextModelPanel />
+            <AxcelCard api={api} state={data.axcel ?? { configured: false, url: 'http://127.0.0.1:8899' }} onState={axcel => setData(d => (d ? { ...d, axcel } : d))} />
           </>
         )}
     </>

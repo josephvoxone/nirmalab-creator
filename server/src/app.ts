@@ -23,6 +23,7 @@ import { StoryService, type StoryDeps } from './stories/service.js';
 import { openRouterBalance } from './providers/balance.js';
 import { OpenRouterCatalog } from './providers/catalog.js';
 import { registerProviderRoutes } from './providers/routes.js';
+import { AxcelClient, AxcelConfigStore, AxcelWorker } from './providers/axcel.js';
 import { registerQuotaRoutes } from './quota.js';
 import { OpenRouterWorker } from './providers/worker.js';
 import { registerTrendRoutes } from './trends/routes.js';
@@ -165,6 +166,17 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   if (workerMs > 0) {
     const stopWorker = new OpenRouterWorker({ dataDir: options.dataDir, store: flowStore, fetch: providerFetch, catalog }).start(workerMs);
     server.addHook('onClose', async () => stopWorker());
+    // Axcel renders through the Mac bridge (no key: it reuses the browser session), so it runs
+    // whenever a bridge token is configured — the client resolves per tick.
+    const axcelConfig = new AxcelConfigStore(options.dataDir);
+    const axcelWorker = new AxcelWorker({
+      store: flowStore,
+      client: async () => {
+        const settings = await axcelConfig.settings();
+        return settings.token ? new AxcelClient(providerFetch, { url: settings.url, token: settings.token }) : undefined;
+      }
+    }).start(workerMs);
+    server.addHook('onClose', async () => axcelWorker());
   }
 
   // Drafts: the OpenCode Go text model when configured, else Pollinations (same generator for the session route and MCP).

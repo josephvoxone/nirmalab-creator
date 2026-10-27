@@ -17,7 +17,7 @@ import { errorText } from '../settings/settingsClient.js';
 import { readPrefs } from '../../lib/prefs.js';
 import { CATEGORIES, TemplateCover, type CatTemplate } from '../templates/shared.js';
 import { fmtUsd, type Engine, type EngineSet } from '../providers/providersClient.js';
-import { engineFor, estimateUsd, openRouterOption, useEngines } from '../providers/useEngines.js';
+import { axcelOption, engineFor, estimateUsd, openRouterOption, useEngines } from '../providers/useEngines.js';
 import { EngineMenu } from '../providers/EnginePicker.js';
 
 type Mode = 'konsisten' | 'cepat';
@@ -56,9 +56,10 @@ export default function HomePage() {
   const engines = useEngines(fetchImpl);
   const [provider, setProvider] = useState<Engine['provider']>('flow');
   const videoOption = openRouterOption(engines, 'video');
+  const imageOption = openRouterOption(engines, 'image');
   const engine: Required<EngineSet> = {
-    image: engineFor(provider, openRouterOption(engines, 'image')),
-    video: engineFor(provider, videoOption)
+    image: engineFor(provider, imageOption, axcelOption(engines, 'image')),
+    video: engineFor(provider, videoOption, axcelOption(engines, 'video'))
   };
 
   const shotsFor = useCallback((tempoId: string | undefined) => {

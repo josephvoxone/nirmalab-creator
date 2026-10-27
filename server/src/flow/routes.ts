@@ -8,6 +8,7 @@ import { requireAdmin } from '../auth/routes.js';
 import { MediaCache, sendImage } from '../media/images.js';
 import type { UserAuthStore } from '../auth/store.js';
 import { usdLabel } from '../providers/catalog.js';
+import { AXCEL_MODELS, isAxcelModel } from '../providers/axcel.js';
 import { isModelId } from '../providers/config.js';
 import { FLOW_ROTATIONS, FlowInputError, FlowStore, type FlowAccountPatch, type FlowRotation } from './store.js';
 
@@ -182,9 +183,12 @@ export async function registerFlowRoutes(server: FastifyInstance, options: FlowR
       const prompt = typeof request.body?.prompt === 'string' ? request.body.prompt : '';
       if (!prompt.trim()) return bad(reply, 400, 'INVALID_INPUT', 'prompt is required');
       const provider = request.body?.provider ?? 'flow';
-      if (provider !== 'flow' && provider !== 'openrouter') return bad(reply, 400, 'INVALID_INPUT', 'provider must be flow or openrouter');
+      if (provider !== 'flow' && provider !== 'openrouter' && provider !== 'axcel') return bad(reply, 400, 'INVALID_INPUT', 'provider must be flow, openrouter or axcel');
       if (provider === 'openrouter' && !isModelId(request.body?.model)) {
         return bad(reply, 400, 'INVALID_INPUT', 'model is required for provider openrouter (e.g. google/veo-3.1-fast)');
+      }
+      if (provider === 'axcel' && !isAxcelModel(request.body?.model)) {
+        return bad(reply, 400, 'INVALID_INPUT', `model is required for provider axcel (one of: ${AXCEL_MODELS.join(', ')})`);
       }
       if (provider === 'openrouter' && request.body?.kind !== 'image' && request.body?.force !== true && options.openRouter) {
         const [price, balance] = await Promise.all([
@@ -197,7 +201,10 @@ export async function registerFlowRoutes(server: FastifyInstance, options: FlowR
         }
       }
       const job = await store.createJob({
-        ...(provider === 'openrouter' ? { provider, model: request.body!.model as string } : {}),
+        ...(provider === 'flow' ? {} : { provider, model: request.body!.model as string }),
+        // Axcel's renderer sometimes parks a job at `progress 40` for over an hour, so one attempt
+        // and fail over — three attempts would keep the user waiting ~70 min for nothing.
+        ...(provider === 'axcel' ? { maxAttempts: 1 } : {}),
         prompt,
         // Studio queues stills or clips; character/keyframe jobs belong to stories only.
         kind: request.body?.kind === 'image' ? 'image' : 'video',
@@ -283,7 +290,11 @@ export async function registerFlowRoutes(server: FastifyInstance, options: FlowR
         ...(header('x-flow-caption') ? { caption: header('x-flow-caption') } : {}),
         ...(header('x-flow-character-id') ? { flowCharacterId: header('x-flow-character-id') } : {})
       };
-      const updated = await store.completeJob(job.id, { filePath, bytes: body.byteLength, provider: 'flow', ...(Object.keys(result).length ? { result } : {}) });
+      // The bridge reports which engine produced the file (Flow today, Axcel through the same
+      // upload path); anything unknown falls back to the job's own provider.
+      const claimed = String(request.headers['x-nirmalab-provider'] || '');
+      const provider = claimed === 'axcel' || claimed === 'openrouter' ? claimed : 'flow';
+      const updated = await store.completeJob(job.id, { filePath, bytes: body.byteLength, provider, ...(Object.keys(result).length ? { result } : {}) });
       return { job: updated };
     });
 

@@ -16,12 +16,14 @@ export const MODELS: Models = {
 
 export const CONFIGURED: Providers = {
   flow: { accounts: 3, credits: 450, online: true },
-  openrouter: { configured: true, keyHint: '••••c0de', defaults: { image: 'google/gemini-2.5-flash-image', video: 'google/veo-3.1-lite' } }
+  openrouter: { configured: true, keyHint: '••••c0de', defaults: { image: 'google/gemini-2.5-flash-image', video: 'google/veo-3.1-lite' } },
+  axcel: { configured: true, url: 'http://127.0.0.1:8899', tokenHint: '••••9f2a', health: { akun: 'joseph@example.com', plan: 'gold', planAktif: true, refMedia: true } }
 };
 
 export const UNCONFIGURED: Providers = {
   flow: { accounts: 2, credits: 120, online: false },
-  openrouter: { configured: false, defaults: {} }
+  openrouter: { configured: false, defaults: {} },
+  axcel: { configured: false, url: 'http://127.0.0.1:8899' }
 };
 
 const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });

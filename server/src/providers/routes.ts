@@ -3,6 +3,7 @@ import type { FastifyInstance, FastifyReply } from 'fastify';
 import { requireAdmin } from '../auth/routes.js';
 import type { UserAuthStore } from '../auth/store.js';
 import type { FlowStore } from '../flow/store.js';
+import { AxcelClient, AxcelConfigStore, AxcelError, AxcelInputError, isAxcelModel } from './axcel.js';
 import { OpenRouterCatalog } from './catalog.js';
 import { OpenRouterError, keyBalance, type FetchLike } from './client.js';
 import { OpenRouterConfigStore, ProviderInputError, isModelId, type OpenRouterPatch } from './config.js';
@@ -47,14 +48,76 @@ export async function registerProviderRoutes(server: FastifyInstance, options: P
     if (!requireAdmin(auth, request, reply)) return undefined;
     const accounts = await options.flow.listAccounts();
     const known = accounts.filter(a => typeof a.credits === 'number');
+    const axcelConfig = new AxcelConfigStore(options.dataDir);
+    const axcelSettings = await axcelConfig.settings();
+    let axcelHealth = null;
+    let axcelError: string | undefined;
+    if (axcelSettings.token) {
+      try {
+        axcelHealth = await new AxcelClient(fetchImpl, { url: axcelSettings.url, token: axcelSettings.token }).health(20_000);
+      } catch (error) {
+        axcelError = error instanceof AxcelError ? error.message : 'Axcel bridge tidak bisa dihubungi';
+      }
+    }
     return {
       flow: {
         accounts: accounts.length,
         credits: known.length ? known.reduce((sum, a) => sum + (a.credits ?? 0), 0) : null,
         online: (await options.flow.bridgeStatus()).online
       },
-      openrouter: await config.view()
+      openrouter: await config.view(),
+      axcel: await axcelConfig.view(axcelHealth, axcelError)
     };
+  });
+
+  server.put<{ Body: Record<string, unknown> | undefined }>('/api/providers/axcel', async (request, reply) => {
+    if (!requireAdmin(auth, request, reply)) return undefined;
+    const body = request.body && typeof request.body === 'object' ? request.body : {};
+    const patch: { url?: string | null; token?: string | null } = {};
+    for (const key of ['url', 'token'] as const) {
+      if (!(key in body)) continue;
+      const value = body[key];
+      if (value !== null && typeof value !== 'string') return bad(reply, 400, 'INVALID_INPUT', `${key} harus berupa teks atau null`);
+      patch[key] = value as string | null;
+    }
+    const axcelConfig = new AxcelConfigStore(options.dataDir);
+    try {
+      const view = await axcelConfig.update(patch);
+      const settings = await axcelConfig.settings();
+      if (!settings.token) return view;
+      try {
+        const health = await new AxcelClient(fetchImpl, { url: settings.url, token: settings.token }).health(60_000);
+        return await axcelConfig.view(health);
+      } catch (error) {
+        return await axcelConfig.view(null, error instanceof AxcelError ? error.message : 'Axcel bridge tidak bisa dihubungi');
+      }
+    } catch (error) {
+      if (error instanceof AxcelInputError) return bad(reply, 400, 'INVALID_INPUT', error.message);
+      throw error;
+    }
+  });
+
+  server.post('/api/providers/axcel/test', async (request, reply) => {
+    if (!requireAdmin(auth, request, reply)) return undefined;
+    const settings = await new AxcelConfigStore(options.dataDir).settings();
+    if (!settings.token) return bad(reply, 400, 'NOT_CONFIGURED', 'Token bridge Axcel belum diisi');
+    try {
+      return { ok: true, health: await new AxcelClient(fetchImpl, { url: settings.url, token: settings.token }).health() };
+    } catch (error) {
+      return bad(reply, 400, 'AXCEL_FAILED', error instanceof AxcelError ? error.message : 'Axcel bridge tidak bisa dihubungi');
+    }
+  });
+
+  server.get('/api/providers/axcel/models', async (request, reply) => {
+    if (!requireAdmin(auth, request, reply)) return undefined;
+    const settings = await new AxcelConfigStore(options.dataDir).settings();
+    if (!settings.token) return bad(reply, 400, 'NOT_CONFIGURED', 'Token bridge Axcel belum diisi');
+    try {
+      const models = await new AxcelClient(fetchImpl, { url: settings.url, token: settings.token }).models();
+      return { models: models.filter(m => isAxcelModel(m.id)) };
+    } catch (error) {
+      return bad(reply, 502, 'UPSTREAM', error instanceof AxcelError ? error.message : 'Katalog Axcel tidak bisa dimuat');
+    }
   });
 
   server.put<{ Body: Record<string, unknown> | undefined }>('/api/providers/openrouter', async (request, reply) => {

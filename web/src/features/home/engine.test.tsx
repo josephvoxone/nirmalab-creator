@@ -52,6 +52,20 @@ describe('Home · Mesin', () => {
     });
   });
 
+  it('Axcel shows the plan and sends its fixed models', async () => {
+    const { drafts } = app();
+    const box = await screen.findByRole('textbox', { name: /prompt/i });
+    await userEvent.click(screen.getByRole('button', { name: /^mesin/i }));
+    await userEvent.click(await screen.findByRole('menuitemradio', { name: 'Axcel · Gold · Seedance 2.0' }));
+    expect(await screen.findByRole('button', { name: 'Mesin: Axcel · Gold · Seedance 2.0' })).toBeInTheDocument();
+    await userEvent.type(box, 'Kucing menunggu{Enter}');
+    await waitFor(() => expect(drafts).toHaveLength(1));
+    expect(drafts[0].engine).toEqual({
+      image: { provider: 'axcel', model: 'Nano Banana Pro' },
+      video: { provider: 'axcel', model: 'Seedance 2.0' }
+    });
+  });
+
   it.each([['not configured', UNCONFIGURED], ['not readable', null]] as const)('OpenRouter is disabled with the setup hint when %s', async (_, providers) => {
     app(providers);
     await screen.findByRole('textbox', { name: /prompt/i });

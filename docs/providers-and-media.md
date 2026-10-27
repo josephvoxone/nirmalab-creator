@@ -6,8 +6,8 @@ Parent writes `GET /api/quota` after S1+S2 land (it composes their functions).
 ## 1. Engines (S1 server, W2 web)
 
 ```ts
-type ProviderId = 'flow' | 'openrouter';
-type Engine = { provider: 'flow' } | { provider: 'openrouter'; model: string };
+type ProviderId = 'flow' | 'openrouter' | 'axcel';
+type Engine = { provider: 'flow' } | { provider: 'openrouter'; model: string } | { provider: 'axcel'; model: string };
 Storyboard.engine?: { image?: Engine; video?: Engine };   // default: flow for both (today's behaviour)
 ```
 - Image engine makes character sheets (`kind: 'character'`) and keyframes / stills (`kind: 'image'`).
@@ -26,6 +26,29 @@ Storyboard.engine?: { image?: Engine; video?: Engine };   // default: flow for b
   - Poll `GET /api/v1/videos/{id}` every 10 s up to 15 min (status pending|in_progress|completed|failed|cancelled|expired); download `GET /api/v1/videos/{id}/content?index=0` with the key.
 - Result written under `/data/flow/clips/<jobId>.<ext>` and completed through the same store method the bridge uses (so stories/Studio collect it unchanged). Errors → the store's fail path with a plain message (402 → "Saldo OpenRouter habis", 401 → "API key OpenRouter ditolak").
 - Model capabilities come from `GET /api/v1/videos/models` and `GET /api/v1/images/models` (public), cached 1 h on disk.
+
+
+### Axcel worker (Mac bridge, plan Gold)
+- Axcel (`axcel.cloud`) has **no public API**. The client half lives in `server/src/providers/axcel.ts`;
+  the calls are made by `bridge/axcel.mjs` on the Mac, which mints the Cloudflare Turnstile tokens in
+  the user's logged-in Chrome (`X-Axcel-Token` header + `turnstile` in the generate body) — see
+  `bridge/README.md`.
+- `POST /api/flow/jobs` accepts `provider: 'axcel'` with `model` one of `Seedance 2.0`, `Seedance 2.5`,
+  `Veo 3.1 Fast`, `Nano Banana Pro`, `Seedream 5.0 Pro` (Axcel's own names, not OpenRouter slugs).
+- Worker: one job at a time, claims `provider: 'axcel'`; image/character → `op: 't2i'` (references → `i2i`),
+  video → `t2v` (keyframe → `i2v`, uploaded through `POST /uploads` first). Body shape, captured from the
+  web app: `{model, op, prompt, ratio, duration, resolution, audio, inputs, idempotencyKey, bahasa, turnstile}`.
+  `duration` snaps to the model's list (closest to the job's `durationSec`), `resolution` is 480 today,
+  `audio: true` for video (narration lives in the prompt).
+- Result: the bridge waits, downloads the signed media URL (needs a browser User-Agent) into
+  `~/Documents/nirmalab/flow/axcel/<jobId>.<mp4|png>` and the worker completes the job with that path
+  (same store method as Flow/OpenRouter, so stories and Studio collect it unchanged).
+- No per-clip price: the Gold plan is a flat subscription, so no budget check; Axcel's own refusal
+  (daily quota, moderation) arrives as a fail message, `final` when a retry cannot help.
+- Provider API: `GET /api/providers` adds `axcel: { configured, url, tokenHint?, health?, error? }`;
+  `PUT /api/providers/axcel {url?, token?}`; `POST /api/providers/axcel/test`;
+  `GET /api/providers/axcel/models`. Token stored in `/data/providers/axcel.json` (0600), env
+  `AXCEL_BRIDGE_TOKEN` / `AXCEL_BRIDGE_URL` win.
 
 ### Provider API (admin)
 | Method | Path | Body | Returns |
