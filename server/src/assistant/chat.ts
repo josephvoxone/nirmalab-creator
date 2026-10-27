@@ -421,11 +421,20 @@ export async function claimPending(stories: StoryService, storyId: string, pendi
   });
 }
 
+/** Give a claimed entry back (the re-plan hit a temporary refusal such as BUSY): it can be run again. */
+export async function releasePending(stories: StoryService, storyId: string, pendingId: string): Promise<void> {
+  await updateTurns(stories.storyDir(storyId), turns => {
+    const entry = turns.flatMap(t => t.pending ?? []).find(p => p.id === pendingId);
+    if (entry) delete entry.used;
+  });
+}
+
 const sameEstimate = (a: Estimate | undefined, b: Estimate | undefined) => JSON.stringify(a ?? {}) === JSON.stringify(b ?? {});
 
 /**
  * Claim a pending entry, then re-plan the stored call without confirmation: it runs only when the
  * plan still has the label and estimate the user approved (else 409 `COST_CHANGED`, nothing runs).
+ * A busy story gives the claim back, so the same Jalankan works once the running job ends.
  */
 export async function confirmPending(deps: AssistantDeps, req: { storyId: string; userId: string; pendingId: string; clientRev?: number }): Promise<TurnPending> {
   const pending = await claimPending(deps.stories, req.storyId, req.pendingId, req.clientRev);
@@ -433,10 +442,15 @@ export async function confirmPending(deps: AssistantDeps, req: { storyId: string
   try {
     plan = await runAction(contextFor(deps, req.userId), req.storyId, pending.name, pending.input);
   } catch (error) {
+    if (tooBusy(error)) await releasePending(deps.stories, req.storyId, pending.id);
     throw new AssistantError(409, tooBusy(error) ? 'BUSY' : 'STALE', tooBusy(error) ? BUSY_MESSAGE : PENDING_STALE_MESSAGE);
   }
   if (!('needsConfirm' in plan)) {
-    if (!plan.ok) throw new AssistantError(409, plan.code === 'BUSY' ? 'BUSY' : 'STALE', plan.error);
+    if (!plan.ok && plan.code === 'BUSY') {
+      await releasePending(deps.stories, req.storyId, pending.id);
+      throw new AssistantError(409, 'BUSY', plan.error);
+    }
+    if (!plan.ok) throw new AssistantError(409, 'STALE', plan.error);
     throw new AssistantError(409, 'COST_CHANGED', COST_CHANGED_MESSAGE);
   }
   if (plan.label !== pending.label || !sameEstimate(plan.estimate, pending.estimate)) throw new AssistantError(409, 'COST_CHANGED', COST_CHANGED_MESSAGE);
@@ -469,9 +483,12 @@ export async function runPending(deps: AssistantDeps, req: { storyId: string; us
       for (const piece of deltaChunks(text)) emit('delta', { text: piece });
     } else {
       text = 'needsConfirm' in result ? 'Aksi ini masih minta persetujuan — minta ulang.' : result.error;
+      // Busy is temporary: the approval stays usable once the running job ends.
+      if ('code' in result && result.code === 'BUSY') await releasePending(stories, storyId, pending.id);
       emit('error', { message: text, ...('code' in result && result.code ? { code: result.code } : {}) });
     }
   } catch (error) {
+    if (tooBusy(error)) await releasePending(stories, storyId, pending.id);
     text = tooBusy(error) ? BUSY_MESSAGE : `Gagal: ${clip(error instanceof Error ? error.message : String(error), 200)}`;
     emit('error', { message: text });
   }

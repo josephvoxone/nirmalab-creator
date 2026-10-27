@@ -572,6 +572,25 @@ describe('the user approves exactly the cost that runs', () => {
     expect(await s.flow.listJobs()).toHaveLength(0);
   });
 
+  it('a busy story refuses the confirm but keeps the approval usable (no "Sudah dijalankan" afterwards)', async () => {
+    const model = fakeModel([call('render', { scene: 1 }), say('Perlu persetujuan.')]);
+    const s = await setup(model);
+    const pending = named(sse((await s.post({ message: 'render scene 1' })).body), 'pending')[0]!;
+    const recordFile = join(s.dataDir, 'stories', s.id, 'story.json');
+    const original = readFileSync(recordFile, 'utf8');
+    const busy = JSON.parse(original) as { status: string };
+    busy.status = 'assembling';
+    writeFileSync(recordFile, JSON.stringify(busy));
+    const res = await s.post({ confirm: pending.id });
+    // Busy is found by the run itself: the SSE stream carries one error event with code BUSY.
+    expect(named(sse(res.body), 'error')).toEqual([expect.objectContaining({ code: 'BUSY' })]);
+    expect(await s.flow.listJobs()).toHaveLength(0);
+    expect((await s.history()).turns.find(t => t.pending)!.pending[0].used).toBeUndefined();
+    writeFileSync(recordFile, original);
+    expect((await s.post({ confirm: pending.id })).statusCode).toBe(200);
+    expect(await s.flow.listJobs()).toHaveLength(2);
+  });
+
   it('a confirm id of another story → 404 and nothing runs', async () => {
     const model = fakeModel([call('render', { scene: 1 }), say('Perlu persetujuan.')]);
     const s = await setup(model);
