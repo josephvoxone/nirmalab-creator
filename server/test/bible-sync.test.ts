@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { bibleSceneErrors, syncBible } from '../src/bible/sync.js';
 import { StoryError } from '../src/stories/service.js';
-import { hashFor, promptFromIntent, type Storyboard } from '../src/stories/storyboard.js';
+import { castOf, hashFor, promptFromIntent, validateStoryboard, type Storyboard } from '../src/stories/storyboard.js';
 import { bibleBoard, renderedStory, serviceSetup } from './bible-board.js';
 
 const card = (board: Storyboard, token: string) => board.bible!.characters.find(c => c.token === token)!;
@@ -17,7 +17,8 @@ describe('syncBible: characters', () => {
     const prev = bibleBoard();
     const next = withCard(prev, 'LARAS', { want: 'pulang cepat', need: 'teman', arc: 'sendiri menjadi bersama', name: 'Laras Ayu' });
     const out = syncBible(next, prev);
-    expect(out.characters!.LARAS).toBe('a girl with two black braids');
+    // The look (sheet) stays frozen; the new name reaches the cast (Flow picks a character by it).
+    expect(out.characters!.LARAS).toEqual({ name: 'Laras Ayu', look: 'a girl with two black braids' });
     expect(out.characters!.KAPAS).toEqual({ name: 'Kapas', look: 'a cream rabbit with a red scarf' });
   });
 
@@ -45,7 +46,9 @@ describe('syncBible: characters', () => {
   it('a new bible character gets a board character (sheet + TOKEN expansion work)', () => {
     const prev = bibleBoard();
     const next: Storyboard = { ...prev, bible: { ...prev.bible!, characters: [...prev.bible!.characters, { token: 'BAPAK', name: 'Pak Darto', anchors: ['a grey moustache', 'a brown sarong'], want: 'a', need: 'b', arc: 'c' }] } };
-    expect(syncBible(next, prev).characters!.BAPAK).toBe('Pak Darto, a grey moustache, a brown sarong');
+    expect(syncBible(next, prev).characters!.BAPAK).toEqual({ name: 'Pak Darto', look: 'Pak Darto, a grey moustache, a brown sarong' });
+    const tokenNamed = { ...next, bible: { ...next.bible!, characters: [...prev.bible!.characters, { token: 'DARTO', name: 'Darto', anchors: ['a grey moustache'], want: 'a', need: 'b', arc: 'c' }] } };
+    expect(syncBible(tokenNamed, prev).characters!.DARTO).toBe('Darto, a grey moustache');   // name = titleCase(token): plain string as before
   });
 
   it('does not touch the inputs', () => {
@@ -121,6 +124,35 @@ describe('syncBible: locations and scenes', () => {
     expect(bibleSceneErrors(syncBible(added, prev), prev)).toEqual(['scene Ke Hutan: tujuan (goal) wajib di proyek bible']);
     const carded: Storyboard = { ...added, bible: { ...added.bible!, scenes: [...added.bible!.scenes, { id: 'hutan', title: 'Ke Hutan', goal: 'Kapas kabur ke hutan' }] } };
     expect(bibleSceneErrors(syncBible(carded, prev), prev)).toEqual([]);
+  });
+});
+
+describe('cast display names', () => {
+  it('a bible name that differs from the token reaches the cast (Flow + prompts); a token-shaped name keeps the plain look string', () => {
+    const board = bibleBoard();
+    const synced = syncBible(board) as Storyboard;
+    expect(typeof synced.characters!.LARAS).toBe('string');             // "Laras" = titleCase(LARAS): unchanged format, unchanged hashes
+    const named = bibleBoard();
+    named.bible!.characters[0]!.name = 'Laras Sederhana';
+    delete named.characters!.LARAS;                                      // a fresh card (new project)
+    const s2 = syncBible(named) as Storyboard;
+    expect(castOf(s2).find(c => c.token === 'LARAS')?.name).toBe('Laras Sederhana');
+  });
+
+  it('renaming a card without touching its anchors renames the cast member', () => {
+    const prev = syncBible(bibleBoard()) as Storyboard;
+    const next = JSON.parse(JSON.stringify(prev)) as Storyboard;
+    next.bible!.characters[0]!.name = 'Laras Sukses';
+    const s = syncBible(next, prev) as Storyboard;
+    expect(castOf(s).find(c => c.token === 'LARAS')?.name).toBe('Laras Sukses');
+    expect(castOf(s).find(c => c.token === 'LARAS')?.look).toBe(castOf(prev).find(c => c.token === 'LARAS')?.look);   // sheet look frozen
+  });
+
+  it('validateStoryboard rejects cast names that equal or word-prefix each other, also on boards without a bible', () => {
+    const board: Storyboard = { title: 't', mode: 'konsisten', characters: { NADIA: 'a woman in white', NADIA_SUKSES: 'a woman in black' }, shots: [{ id: 'a', prompt: 'NADIA and NADIA_SUKSES meet.', narration: 'Dua wajah.' }] };
+    expect(validateStoryboard(board).join()).toMatch(/karakter NADIA_SUKSES: nama "Nadia Sukses" bentrok dengan "Nadia" \(NADIA\)/);
+    board.characters = { NADIA_SEDERHANA: 'a woman in white', NADIA_SUKSES: 'a woman in black' };
+    expect(validateStoryboard(board)).toEqual([]);
   });
 });
 

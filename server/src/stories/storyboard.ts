@@ -163,7 +163,7 @@ export function narrationWords(text: string | undefined): number {
   return (text ?? '').trim().split(/\s+/).filter(Boolean).length;
 }
 
-const titleCase = (token: string) => token.toLowerCase().split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+export const titleCase = (token: string) => token.toLowerCase().split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
 
 function member(token: string, spec: CharacterSpec): CastMember {
   return typeof spec === 'string' ? { token, name: titleCase(token), look: spec } : { token, name: spec.name || titleCase(token), look: spec.look };
@@ -388,6 +388,16 @@ export function validateStoryboard(board: Storyboard): string[] {
   if (!board?.title?.trim()) errors.push('title is empty');
   // A bible is validated on save (spec §9.8: strict on rules, loose on unfinished slots).
   if (board?.bible !== undefined) errors.push(...validateBible(board.bible));
+  // Flow picks a character by its cast name (prefix fallback), and prompts say that name.
+  const cast: CastMember[] = [];
+  for (const [token, spec] of Object.entries(board?.characters ?? {})) {
+    if (!spec) continue;
+    const m = member(token, spec);
+    const name = m.name.trim().replace(/\s+/g, ' ').toLowerCase();
+    const clash = cast.find(o => { const n = o.name.trim().replace(/\s+/g, ' ').toLowerCase(); return n === name || n.startsWith(`${name} `) || name.startsWith(`${n} `); });
+    if (clash) errors.push(`karakter ${token}: nama "${m.name.trim()}" bentrok dengan "${clash.name.trim()}" (${clash.token}) — Flow memilih karakter lewat nama, jadi nama tidak boleh sama atau mengawali nama lain`);
+    else cast.push(m);
+  }
   if (!Array.isArray(board?.shots) || board.shots.length === 0) {
     errors.push('storyboard has no shots');
     return errors;

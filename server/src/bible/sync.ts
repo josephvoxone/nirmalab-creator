@@ -15,7 +15,7 @@
  * Legacy boards (no bible) are returned untouched. Pure: no IO, inputs are not mutated.
  */
 import type { CharacterSpec, Location, Scene, Shot, Storyboard } from '../stories/storyboard.js';
-import { promptFromIntent } from '../stories/storyboard.js';
+import { promptFromIntent, titleCase } from '../stories/storyboard.js';
 import type { BibleLocation, CharacterCard, SceneCard } from './story.js';
 
 const clone = <T>(value: T): T => (value === undefined ? value : JSON.parse(JSON.stringify(value)) as T);
@@ -28,6 +28,17 @@ export const lookFromAnchors = (card: CharacterCard) => `${card.name.trim()}, ${
 
 function withLook(spec: CharacterSpec, look: string): CharacterSpec {
   return typeof spec === 'string' ? look : { ...spec, look };
+}
+
+/**
+ * Carry the card's name into its cast entry. A name equal to titleCase(TOKEN) keeps a plain look
+ * string (the format existing boards have, so no hash moves); any other name becomes `{ name, look }`,
+ * because the cast name is what Flow picks the character by and what prompts say.
+ */
+function named(card: CharacterCard, spec: CharacterSpec): CharacterSpec {
+  const name = card.name.trim();
+  if (typeof spec === 'string') return name === titleCase(card.token) ? spec : { name, look: spec };
+  return { ...spec, name };
 }
 
 function syncCharacters(board: Storyboard, prev: Storyboard | undefined): void {
@@ -44,10 +55,11 @@ function syncCharacters(board: Storyboard, prev: Storyboard | undefined): void {
     if (spec === undefined) {
       if (before && hadSpec(card.token)) dropped.add(card.token); // removed on the board side
       // A new card, or one that predates the cast sync (never had a board entry): sheets + TOKENs need it.
-      else characters[card.token] = lookFromAnchors(card);
+      else characters[card.token] = named(card, lookFromAnchors(card));
       continue;
     }
-    if (before && !same(anchorsOf(before), anchorsOf(card))) characters[card.token] = withLook(spec, lookFromAnchors(card));
+    if (before && !same(anchorsOf(before), anchorsOf(card))) characters[card.token] = named(card, withLook(spec, lookFromAnchors(card)));
+    else if (before && before.name?.trim() !== card.name?.trim()) characters[card.token] = named(card, spec); // look (sheet) frozen
   }
   // A card removed from the bible in this edit takes its cast entry with it.
   const tokens = new Set(cards.map(c => c.token));
