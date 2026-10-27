@@ -28,6 +28,10 @@ const CACHE_MAX_AGE = 30 * DAY;
 const CLIP_GRACE = 60 * 60_000;
 const JOB_FILE = /^(job_[a-f0-9]{16})\./;
 const JOB_REF = /job_[a-f0-9]{16}/g;
+const UPLOAD_REF = /up_[a-f0-9]{16}/g;
+const UPLOAD_NAME = /^(up_[a-f0-9]{16})\.(png|jpg|webp)$/;
+/** Chat uploads nothing refers to (no sent turn, card, start frame or undo point) go after a week. */
+const UPLOAD_MAX_AGE = 7 * DAY;
 const MEDIA_FILE = /\.(mp4|png|jpe?g|webp|img)$/i;
 
 type Entry = { path: string; st: Stats };
@@ -97,8 +101,9 @@ async function sha1(file: string): Promise<string> {
 const unchanged = (a: Stats, b: Stats) => a.ino === b.ino && a.dev === b.dev && a.size === b.size && a.mtimeMs === b.mtimeMs;
 
 /**
- * Remove final.mp4.prev (not while assembling), image cache files older than 30 days and
- * clips of jobs that are gone or failed (never one a story references or links), then turn
+ * Remove final.mp4.prev (not while assembling), image cache files older than 30 days, chat
+ * uploads no story file refers to after 7 days, and clips of jobs that are gone or failed (never
+ * one a story, its history or one of its undo snapshots references or links), then turn
  * byte-identical story copies of clips into hard links.
  */
 export async function cleanupStorage(dataDir: string, deps: CleanupDeps): Promise<CleanupResult> {
@@ -122,12 +127,25 @@ export async function cleanupStorage(dataDir: string, deps: CleanupDeps): Promis
   for (const name of storyDirs) {
     const dir = join(storiesDir, name);
     let status: string | undefined;
-    for (const json of ['story.json', 'storyboard.json']) {
+    const uploadRefs = new Set<string>();
+    let unreadable = false;
+    const snapshots = (await list(join(dir, 'snapshots'))).map(e => e.path).filter(p => p.endsWith('.json'));
+    for (const json of [join(dir, 'story.json'), join(dir, 'storyboard.json'), join(dir, 'assistant.json'), ...snapshots]) {
       try {
-        const text = await readFile(join(dir, json), 'utf8');
+        const text = await readFile(json, 'utf8');
         for (const id of text.match(JOB_REF) ?? []) refs.add(id);
-        if (json === 'story.json') status = (JSON.parse(text) as { status?: string }).status;
-      } catch { /* missing/corrupt: keep everything of this story */ }
+        for (const id of text.match(UPLOAD_REF) ?? []) uploadRefs.add(id);
+        if (json.endsWith(`${sep}story.json`)) status = (JSON.parse(text) as { status?: string }).status;
+      } catch (error) {
+        // missing assistant.json is normal; any other unreadable file: keep every upload of this story
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT' || !json.endsWith('assistant.json')) unreadable = true;
+      }
+    }
+    if (!unreadable) {
+      for (const entry of await list(join(dir, 'uploads'))) {
+        const id = entry.path.slice(entry.path.lastIndexOf(sep) + 1).match(UPLOAD_NAME)?.[1];
+        if (id && !uploadRefs.has(id) && entry.st.mtimeMs < now - UPLOAD_MAX_AGE) await remove(entry);
+      }
     }
     for (const entry of await list(dir)) {
       const name = entry.path.slice(dir.length + 1);

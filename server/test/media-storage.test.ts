@@ -95,6 +95,28 @@ describe('cleanupStorage', () => {
     expect(res.freedBytes).toBe(3000 + 2000 + 4000 + 700 + 6000 + 500);
   });
 
+  it('keeps clips an undo snapshot points to; removes chat uploads nothing refers to after 7 days', async () => {
+    const f = fixture();
+    const S = 'stories/story_aaaaaaaaaaaaaaaa';
+    const U = (n: number) => `up_${String(n).padStart(16, '0')}`;
+    // A paid take only an undo snapshot remembers (its job record pruned): undo must still find it.
+    const snapClip = put(f.root, `flow/clips/${J(7)}.mp4`, 2500, 40 * DAY);
+    put(f.root, `${S}/snapshots/u_aaaaaaaaaaaaaaaa_1_0001.json`, Buffer.from(JSON.stringify({ record: { shots: [{ id: '05-e', status: 'done', jobId: J(7) }] } })));
+    const stray = put(f.root, `${S}/uploads/${U(1)}.png`, 800, 8 * DAY);
+    const sent = put(f.root, `${S}/uploads/${U(2)}.png`, 800, 8 * DAY);
+    const card = put(f.root, `${S}/uploads/${U(3)}.jpg`, 800, 8 * DAY);
+    const recent = put(f.root, `${S}/uploads/${U(4)}.webp`, 800, 2 * DAY);
+    const inSnapshot = put(f.root, `${S}/uploads/${U(5)}.png`, 800, 8 * DAY);
+    writeFileSync(join(f.root, S, 'assistant.json'), JSON.stringify({ turns: [{ role: 'user', attachments: [{ id: U(2) }] }] }));
+    writeFileSync(join(f.root, S, 'storyboard.json'), JSON.stringify({ bible: { characters: [{ token: 'A', reference: `uploads/${U(3)}.jpg` }] } }));
+    put(f.root, `${S}/snapshots/u_aaaaaaaaaaaaaaaa_2_0002.json`, Buffer.from(JSON.stringify({ storyboard: { shots: [{ startFrame: `uploads/${U(5)}.png` }] } })));
+
+    await cleanupStorage(f.root, { jobs: async () => f.jobs, now: () => NOW });
+    expect(existsSync(snapClip)).toBe(true);
+    expect(existsSync(stray)).toBe(false);
+    for (const kept of [sent, card, recent, inSnapshot]) expect(existsSync(kept), kept).toBe(true);
+  });
+
   it('is idempotent: a second run frees nothing', async () => {
     const f = fixture();
     await cleanupStorage(f.root, { jobs: async () => f.jobs, now: () => NOW });

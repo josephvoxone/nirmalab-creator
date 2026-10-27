@@ -447,6 +447,23 @@ export class StoryService {
     return this.snapshots.restore(id, undoId, currentRev);
   }
 
+  /**
+   * The result file of a finished take. The Flow store keeps only its newest 500 jobs, but results
+   * stay in `flow/clips/<jobId>.<ext>` (the janitor keeps every file a story references), so a
+   * pruned job record never makes a paid take count as lost. A job that is known but not done
+   * (failed, re-queued) has no usable result.
+   */
+  private async resultFile(jobId: string): Promise<string | undefined> {
+    const job = await this.deps.flow.getJob(jobId);
+    if (job) return job.status === 'done' && job.resultPath && existsSync(job.resultPath) ? job.resultPath : undefined;
+    if (!/^job_[a-f0-9]{16}$/.test(jobId)) return undefined;
+    for (const ext of ['mp4', 'png', 'jpg', 'webp']) {
+      const file = join(this.deps.dataDir, 'flow', 'clips', `${jobId}.${ext}`);
+      if (existsSync(file)) return file;
+    }
+    return undefined;
+  }
+
   /** Keep a displaced paid take (done, with a job) in the archive, newest first. */
   private archiveTake(record: StoryRecord, key: string, take: TakeState | undefined): void {
     if (take?.status !== 'done' || !take.jobId) return;
@@ -463,9 +480,9 @@ export class StoryService {
     const list = record.takeArchive?.[key] ?? [];
     for (const take of list) {
       if (take.promptHash !== promptHash || !take.jobId) continue;
-      const job = await this.deps.flow.getJob(take.jobId);
-      if (job?.status !== 'done' || !job.resultPath || !existsSync(job.resultPath)) continue;
-      links.push([job.resultPath, target]);
+      const file = await this.resultFile(take.jobId);
+      if (!file) continue;
+      links.push([file, target]);
       const rest = list.filter(t => t !== take);
       const archive = { ...record.takeArchive };
       if (rest.length) archive[key] = rest; else delete archive[key];
@@ -498,9 +515,9 @@ export class StoryService {
     // false = the restored take's media is gone; the newer file must not pass for it.
     const relink = async (take: TakeState | undefined, now: TakeState | undefined, target: string): Promise<boolean> => {
       if (take?.status !== 'done' || !take.jobId || take.jobId === now?.jobId) return true;
-      const job = await this.deps.flow.getJob(take.jobId);
-      if (job?.resultPath && existsSync(job.resultPath)) {
-        await linkOrCopy(job.resultPath, target);
+      const file = await this.resultFile(take.jobId);
+      if (file) {
+        await linkOrCopy(file, target);
         return true;
       }
       await rm(target, { force: true });

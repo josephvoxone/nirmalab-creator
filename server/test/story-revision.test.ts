@@ -137,6 +137,40 @@ describe('undo snapshots', () => {
     expect(files.sort()).toEqual(ids.slice(5).map(id => `${id}.json`).sort());
   });
 
+  it('undo and redo keep paid takes even after the Flow job records were pruned (500-job cap): the clip file is enough', async () => {
+    const t = serviceSetup();
+    const done = await renderedStory(t, bibleBoard());
+    const j1 = done.shots[1]!.jobId!;
+    const edit = (b: Storyboard): Storyboard => ({
+      ...b, shots: b.shots.map(s => (s.id === '02-kapas' ? { ...s, intent: { ...s.intent!, subject: 'KAPAS', action: 'peeks out of the woven basket' } } : s))
+    });
+    const taken = await t.service.snapshots.take(done.id, 'ubah intent');
+    const edited = await t.service.updateStoryboard(done.id, edit(await t.service.readStoryboard(done.id)), { rev: taken.rev });
+    await t.service.snapshots.commit(taken.undoId, edited.rev);
+    await t.service.render(done.id, { force: true });
+    await finishQueued(t, 'video');
+    const rendered = (await t.service.reconcile(done.id))!;
+    const paid = rendered.shots[1]!;
+    const shotFile = t.service.shotPath(done.id, '02-kapas');
+    const paidBytes = readFileSync(shotFile);
+    const firstBytes = readFileSync(join(t.dataDir, 'flow', 'clips', `${j1}.mp4`));
+
+    // The store forgot every job (files stay in flow/clips, as in production after 500 newer jobs).
+    const flowFile = join(t.dataDir, 'flow', 'flow.json');
+    const state = JSON.parse(readFileSync(flowFile, 'utf8'));
+    writeFileSync(flowFile, JSON.stringify({ ...state, jobs: [] }));
+    expect(await t.flow.getJob(j1)).toBeUndefined();
+
+    const outcome = await t.service.restoreSnapshot(done.id, taken.undoId, rendered.rev);
+    expect(outcome).toMatchObject({ result: 'ok', attention: [] });
+    expect((await t.service.get(done.id))!.shots[1]).toMatchObject({ status: 'done', jobId: j1 });
+    expect(readFileSync(shotFile).equals(firstBytes)).toBe(true);
+
+    const again = await t.service.updateStoryboard(done.id, edit(await t.service.readStoryboard(done.id)), { rev: (await t.service.get(done.id))!.rev });
+    expect(again.shots[1]).toMatchObject({ status: 'done', jobId: paid.jobId, promptHash: paid.promptHash });
+    expect(readFileSync(shotFile).equals(paidBytes)).toBe(true);
+  });
+
   it('undo after a paid render keeps the paid take: re-applying the same edit reinstates it (no new job)', async () => {
     const t = serviceSetup();
     const done = await renderedStory(t, bibleBoard());
