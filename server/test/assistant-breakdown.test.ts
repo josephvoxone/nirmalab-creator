@@ -6,6 +6,7 @@ import { ACTIONS, type ActionContext } from '../src/assistant/actions.js';
 import { BreakdownError, breakdownScene, parseIntents } from '../src/assistant/breakdown.js';
 import { buildApp } from '../src/app.js';
 import type { ChatInput, ChatOutput, TextModel } from '../src/llm/opencode.js';
+import { STALE_MESSAGE } from '../src/stories/service.js';
 import { compileBoardShot, validateStoryboard, type Storyboard } from '../src/stories/storyboard.js';
 import { bibleBoard, serviceSetup } from './bible-board.js';
 
@@ -159,6 +160,25 @@ describe('breakdown_scene action', () => {
     expect(await t.service.snapshots.list(story.id)).toHaveLength(0);
   });
 
+  it('a concurrent edit during the model call → STALE, nothing inserted, no snapshot', async () => {
+    const t = serviceSetup();
+    const story = await t.service.create(withPlaceholder());
+    const model = fakeModel([JSON.stringify([intent(0), intent(1), intent(2)])]);
+    const chat = model.chat;
+    model.chat = async input => {
+      const board = await t.service.readStoryboard(story.id);
+      await t.service.updateStoryboard(story.id, { ...board, title: 'Pasar Siang' });
+      return chat(input);
+    };
+    const r = await ACTIONS.breakdown_scene.run(ctxFor(t, model), story.id, { scene: 2, count: 3 });
+    expect(r).toMatchObject({ ok: false, error: STALE_MESSAGE, code: 'STALE' });
+    const board = await t.service.readStoryboard(story.id);
+    expect(board.title).toBe('Pasar Siang');
+    expect(board.scenes!.find(s => s.id === 'gang')!.shots).toEqual(['shot-3']);
+    expect(board.shots).toHaveLength(3);
+    expect(await t.service.snapshots.list(story.id)).toHaveLength(0);
+  });
+
   it('legacy boards, missing model and a bad count are plain errors', async () => {
     const t = serviceSetup();
     const legacy = await t.service.create({ title: 'Kucing', shots: [{ id: 'a', prompt: 'Medium shot of a kitten.', narration: 'Mimi menunggu.' }] });
@@ -195,5 +215,40 @@ describe('breakdown route', () => {
     const bad = await server.inject({ method: 'POST', url: `/api/stories/${id}/scenes/nope/breakdown`, headers: { cookie }, payload: { count: 2 } });
     expect(bad.statusCode).toBe(400);
     expect(bad.json().error.message).toMatch(/Scene/);
+  });
+
+  it('the route resolves the scene by id first, then by number', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'nc-bd-'));
+    const model = fakeModel([JSON.stringify([intent(0), intent(1)])]);
+    const server = await buildApp({
+      dataDir,
+      env: { OPENCREATOR_ADMIN_EMAIL: 'admin@x.io', OPENCREATOR_ADMIN_PASSWORD: 'admin-pass-1' },
+      stories: { reconcileMs: 0, probe: async () => ({ durationSec: 6, hasAudio: true }), assemble: async () => undefined },
+      providers: { workerMs: 0 },
+      media: { cleanupMs: 0 },
+      text: { model }
+    });
+    const login = await server.inject({ method: 'POST', url: '/api/auth/login', payload: { email: 'admin@x.io', password: 'admin-pass-1' } });
+    const cookie = String(login.headers['set-cookie']).split(';')[0]!;
+    // Scene 2 has the id "1": "/scenes/1/" means that scene, not scene number 1.
+    const b = withPlaceholder();
+    const board = {
+      ...b,
+      scenes: b.scenes!.map(s => (s.id === 'gang' ? { ...s, id: '1' } : s)),
+      bible: { ...b.bible!, scenes: b.bible!.scenes.map(s => (s.id === 'gang' ? { ...s, id: '1' } : s)) }
+    };
+    const id = (await server.inject({ method: 'POST', url: '/api/stories', headers: { cookie }, payload: { storyboard: board } })).json().story.id;
+    const res = await server.inject({ method: 'POST', url: `/api/stories/${id}/scenes/1/breakdown`, headers: { cookie }, payload: { count: 2 } });
+    expect(res.statusCode).toBe(200);
+    const scenes = res.json().storyboard.scenes as Array<{ id: string; shots: string[] }>;
+    expect(scenes.find(s => s.id === 'pasar')!.shots).toEqual(['01-laras', '02-kapas']);
+    expect(scenes.find(s => s.id === '1')!.shots).toHaveLength(2);
+    expect(scenes.find(s => s.id === '1')!.shots).not.toContain('shot-3');
+    // A number still works when no scene has that id.
+    const byNumber = await server.inject({ method: 'POST', url: `/api/stories/${id}/scenes/2/breakdown`, headers: { cookie }, payload: { count: 2 } });
+    expect(byNumber.statusCode).toBe(200);
+    const after = byNumber.json().storyboard.scenes as Array<{ id: string; shots: string[] }>;
+    expect(after.find(s => s.id === 'pasar')!.shots).toEqual(['01-laras', '02-kapas']);
+    expect(after.find(s => s.id === '1')!.shots).toHaveLength(4);
   });
 });

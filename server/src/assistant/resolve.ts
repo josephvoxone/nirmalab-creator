@@ -8,7 +8,7 @@
  */
 import { normalizeScenes, type CharacterSpec, type Storyboard } from '../stories/storyboard.js';
 import type { CharacterCard } from '../bible/story.js';
-import { copyToUploads, findUpload } from './uploads.js';
+import { findUpload, planCopy, writePlanned, type PlannedUpload } from './uploads.js';
 
 export type Ref = number | string;
 export type Resolved = { id: string; n: number } | { error: string };
@@ -82,11 +82,12 @@ export function resolveLocation(board: Storyboard, ref: unknown): { key: string 
 export type MediaPaths = { storyDir: string; framePath: (shotId: string) => string; castPath: (token: string) => string };
 
 /**
- * A reference as an upload file of this story (`uploads/up_….ext`): an upload id/file name, or a
- * pointer to project media ("keyframe shot 2", "sheet LARAS"), which is copied into uploads so a
- * later redraw cannot change what the reference shows.
+ * A reference as an upload file of this story (`uploads/up_….ext`), planned without writing: an
+ * upload id/file name resolves to itself; a pointer to project media ("keyframe shot 2", "sheet
+ * LARAS") is read and given a fresh upload name, and `pending` holds the copy to write once the
+ * caller has decided to keep it (so a later redraw cannot change what the reference shows).
  */
-export async function resolveReference(board: Storyboard, ref: unknown, paths: MediaPaths): Promise<{ rel: string } | { error: string }> {
+export async function planReference(board: Storyboard, ref: unknown, paths: MediaPaths): Promise<{ rel: string; pending?: PlannedUpload } | { error: string }> {
   const text = typeof ref === 'string' ? ref.trim() : '';
   const usage = 'Referensi harus id unggahan (up_…), "keyframe shot N" atau "sheet NAMA".';
   if (!text) return { error: usage };
@@ -98,15 +99,23 @@ export async function resolveReference(board: Storyboard, ref: unknown, paths: M
   if (frame) {
     const shot = resolveShot(board, frame[1]!.trim());
     if ('error' in shot) return { error: `Referensi: ${shot.error}` };
-    const copied = await copyToUploads(paths.storyDir, paths.framePath(shot.id));
-    return copied ? { rel: `uploads/${copied.file}` } : { error: `Referensi tidak ada: keyframe shot ${shot.n} belum dibuat.` };
+    const planned = await planCopy(paths.framePath(shot.id));
+    return planned ? { rel: `uploads/${planned.file}`, pending: planned } : { error: `Referensi tidak ada: keyframe shot ${shot.n} belum dibuat.` };
   }
   const sheet = /^(?:sheet|lembar(?:\s+karakter)?)\s+(.+)$/i.exec(text);
   if (sheet) {
     const who = resolveCharacter(board, sheet[1]!.trim());
     if ('error' in who) return { error: `Referensi: ${who.error}` };
-    const copied = await copyToUploads(paths.storyDir, paths.castPath(who.token));
-    return copied ? { rel: `uploads/${copied.file}` } : { error: `Referensi tidak ada: sheet ${who.name} belum dibuat.` };
+    const planned = await planCopy(paths.castPath(who.token));
+    return planned ? { rel: `uploads/${planned.file}`, pending: planned } : { error: `Referensi tidak ada: sheet ${who.name} belum dibuat.` };
   }
   return { error: usage };
+}
+
+/** `planReference` + write the copy now (media pointers land in uploads immediately). */
+export async function resolveReference(board: Storyboard, ref: unknown, paths: MediaPaths): Promise<{ rel: string } | { error: string }> {
+  const plan = await planReference(board, ref, paths);
+  if ('error' in plan) return plan;
+  if (plan.pending) await writePlanned(paths.storyDir, plan.pending);
+  return { rel: plan.rel };
 }

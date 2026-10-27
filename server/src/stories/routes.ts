@@ -11,6 +11,7 @@ import { StoryError, type StoryService } from './service.js';
 import { ShotCompileError } from '../bible/compiler.js';
 import { SHOT_ID, compileBoardShot, validateEngine, type Shot, type Storyboard } from './storyboard.js';
 import { ACTIONS, type ActionContext, type ActionResult } from '../assistant/actions.js';
+import { sceneNumber } from '../assistant/resolve.js';
 import { MAX_UPLOAD_BYTES, NOT_IMAGE_MESSAGE, TOO_LARGE_MESSAGE, UPLOAD_FILE, UPLOAD_TYPES, UploadError, mimeOfFile, saveUpload, uploadsDir } from '../assistant/uploads.js';
 import type { TextModel } from '../llm/opencode.js';
 
@@ -293,8 +294,11 @@ export async function registerStoryRoutes(
       if (!(await stories.get(request.params.id))) return notFound(reply, 'Story');
       const ctx = uiContext(user.id);
       const body = request.body ?? {};
+      // The URL names a scene id; only when no scene has that id is it read as a number ("2").
+      const board = await stories.readStoryboard(request.params.id);
+      const byId = sceneNumber(board, request.params.sceneId);
       const result = await ACTIONS.breakdown_scene.run(ctx, request.params.id, {
-        scene: request.params.sceneId,
+        scene: byId > 0 ? byId : request.params.sceneId,
         ...(body.count !== undefined ? { count: body.count } : {}),
         ...(body.brief !== undefined ? { brief: body.brief } : {}),
         ...(body.mode !== undefined ? { mode: body.mode } : {})
@@ -305,14 +309,15 @@ export async function registerStoryRoutes(
     } catch (error) { return fail(reply, error); }
   });
 
-  /** "Buat sheet": one sheet job for one character. Without `confirm: true` it only answers the estimate. */
+  /** "Buat sheet": one sheet job for one character. Without `confirm: true` (the user's click) it only answers the estimate. */
   server.post<{ Params: { id: string; token: string }; Body: { confirm?: unknown; reference?: unknown } }>('/api/stories/:id/cast/:token/sheet', async (request, reply) => {
     const user = requireAdmin(auth, request, reply);
     if (!user) return undefined;
     try {
       if (!(await stories.get(request.params.id))) return notFound(reply, 'Story');
-      const result = await ACTIONS.make_sheet.run(uiContext(user.id), request.params.id, {
-        token: request.params.token, confirm: request.body?.confirm === true,
+      const ctx: ActionContext = { ...uiContext(user.id), confirmed: request.body?.confirm === true };
+      const result = await ACTIONS.make_sheet.run(ctx, request.params.id, {
+        token: request.params.token,
         ...(typeof request.body?.reference === 'string' ? { reference: request.body.reference } : {})
       });
       return await sendAction(reply, result, async () => ({ story: await stories.get(request.params.id) }));
@@ -354,7 +359,7 @@ export async function registerStoryRoutes(
       if (!(await stories.get(request.params.id))) return notFound(reply, 'Story');
       const file = join(uploadsDir(stories.storyDir(request.params.id)), request.params.file);
       if (!existsSync(file)) return notFound(reply, 'Upload');
-      return reply.header('content-type', mimeOfFile(request.params.file)!).header('cache-control', 'private, max-age=3600')
+      return reply.header('content-type', mimeOfFile(request.params.file)!).header('x-content-type-options', 'nosniff').header('cache-control', 'private, max-age=3600')
         .header('content-length', statSync(file).size).send(createReadStream(file));
     } catch (error) { return fail(reply, error); }
   });

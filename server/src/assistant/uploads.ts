@@ -7,7 +7,7 @@
  */
 import { randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 export const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
@@ -102,12 +102,37 @@ export async function saveUpload(storyDir: string, buf: Buffer): Promise<Upload>
   return { id, file, w: info.w, h: info.h, bytes: buf.length, mime: info.mime };
 }
 
-/** Copy an existing story image (a sheet, a keyframe) into uploads, so a later redraw cannot change the reference. */
-export async function copyToUploads(storyDir: string, source: string): Promise<Upload | undefined> {
+/** A copy that is decided but not written yet: the bytes are read, the id and file name are fixed. */
+export type PlannedUpload = Upload & { buf: Buffer };
+
+/** Read an existing story image (a sheet, a keyframe) and pick its upload name; writes nothing. */
+export async function planCopy(source: string): Promise<PlannedUpload | undefined> {
   if (!existsSync(source)) return undefined;
   const buf = await readFile(source);
-  if (!imageInfo(buf) || buf.length > MAX_UPLOAD_BYTES) return undefined;
-  return saveUpload(storyDir, buf);
+  const info = imageInfo(buf);
+  if (!info || buf.length > MAX_UPLOAD_BYTES) return undefined;
+  const id = `up_${randomBytes(8).toString('hex')}`;
+  return { id, file: `${id}.${info.ext}`, w: info.w, h: info.h, bytes: buf.length, mime: info.mime, buf };
+}
+
+/** Write a planned copy under its fixed name. */
+export async function writePlanned(storyDir: string, planned: PlannedUpload): Promise<Upload> {
+  await mkdir(uploadsDir(storyDir), { recursive: true, mode: 0o700 });
+  await writeFile(join(uploadsDir(storyDir), planned.file), planned.buf, { mode: 0o600 });
+  const { buf: _buf, ...upload } = planned;
+  return upload;
+}
+
+/** Remove one upload file (a copy whose edit failed); a malformed or missing name is ignored. */
+export async function removeUpload(storyDir: string, file: string): Promise<void> {
+  if (!UPLOAD_FILE.test(file)) return;
+  await rm(join(uploadsDir(storyDir), file), { force: true });
+}
+
+/** Copy an existing story image (a sheet, a keyframe) into uploads, so a later redraw cannot change the reference. */
+export async function copyToUploads(storyDir: string, source: string): Promise<Upload | undefined> {
+  const planned = await planCopy(source);
+  return planned ? writePlanned(storyDir, planned) : undefined;
 }
 
 /** The stored file name of an upload id (`up_…`) or file name (`up_….png`, `uploads/up_….png`); undefined when malformed or missing. */

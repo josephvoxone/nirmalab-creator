@@ -1,12 +1,14 @@
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { ACTIONS, toolSpecs, type ActionContext, type ActionName, type ActionResult } from '../src/assistant/actions.js';
+import { ACTIONS, runAction, toolSpecs, type ActionContext, type ActionName, type ActionResult } from '../src/assistant/actions.js';
 import { resolveScene, resolveShot } from '../src/assistant/resolve.js';
 import { imageInfo } from '../src/assistant/uploads.js';
 import { buildApp } from '../src/app.js';
 import { FlowStore } from '../src/flow/store.js';
+import { STALE_MESSAGE } from '../src/stories/service.js';
+import type { SnapshotStore } from '../src/stories/snapshots.js';
 import { compileBoardShot, validateStoryboard, type Storyboard } from '../src/stories/storyboard.js';
 import { bibleBoard, finishQueued, renderedStory, serviceSetup } from './bible-board.js';
 
@@ -230,7 +232,7 @@ describe('scope', () => {
     const ctx = ctxFor(t);
     expect(errOf(await run(ctx, a.id, 'edit_shot', { shot: '03-gang', prompt: 'Close-up of a kitten.' }))).toMatch(/Shot yang ada: 1–2/);
     expect(errOf(await run(ctx, a.id, 'remove_shot', { shot: '02-kapas' }))).toMatch(/tidak ada/);
-    expect(errOf(await run(ctx, a.id, 'render', { shot: '03-gang', confirm: true }))).toMatch(/tidak ada/);
+    expect(errOf(await run(ctxFor(t, { confirmed: true }), a.id, 'render', { shot: '03-gang' }))).toMatch(/tidak ada/);
     // A turn id that belongs to B is never committed by an edit of A.
     const bTurn = await t.service.snapshots.take(b.id, 'b');
     const mixed = ctxFor(t, { turn: { undoId: bTurn.undoId } });
@@ -310,8 +312,10 @@ describe('structure actions', () => {
   it('set_look changes the look family and bumps rev', async () => {
     const t = serviceSetup();
     const story = await t.service.create(twoScenes());
-    const r = okOf(await run(ctxFor(t), story.id, 'set_look', { family: 'film-real' }));
-    expect(r.ok).toBe(true);
+    const r = okOf(await run(ctxFor(t), story.id, 'set_look', { family: 'noir' }));
+    expect(r.changed).toBe(true);
+    expect((await t.service.readStoryboard(story.id)).look!.family).toBe('noir');
+    expect((await t.service.get(story.id))!.rev).toBe(2);
     expect(errOf(await run(ctxFor(t), story.id, 'set_look', { family: 'tidak-ada' }))).toMatch(/look/i);
   });
 });
@@ -325,18 +329,24 @@ describe('spending actions need confirm', () => {
     expect((r as { label: string }).label).toMatch(/20/);
     expect(await t.flow.listJobs()).toHaveLength(0);
     expect((await t.service.get(story.id))!.status).toBe('draft');
-    okOf(await run(ctxFor(t), story.id, 'render', { scene: 1, confirm: true }));
+    okOf(await run(ctxFor(t, { confirmed: true }), story.id, 'render', { scene: 1 }));
     const jobs = await t.flow.listJobs();
     expect(jobs.map(j => j.technique).sort()).toEqual([`story:${story.id}/01-laras`, `story:${story.id}/02-kapas`]);
   });
 
-  it('confirm must be literally true', async () => {
+  it('confirmation comes from the caller (ctx.confirmed === true), never from model input', async () => {
     const t = serviceSetup();
     const story = await t.service.create(twoScenes());
-    for (const confirm of ['true', 1, 'ya']) {
-      expect(await run(ctxFor(t), story.id, 'render', { shot: 1, confirm })).toMatchObject({ needsConfirm: true });
+    // A model that writes confirm:true itself gets the question back, and nothing is queued.
+    expect(await run(ctxFor(t), story.id, 'render', { shot: 1, confirm: true })).toMatchObject({ needsConfirm: true });
+    expect(await runAction(ctxFor(t), story.id, 'render', { shot: 1, confirm: true })).toMatchObject({ needsConfirm: true });
+    for (const confirmed of ['true', 1, 'ya']) {
+      expect(await run(ctxFor(t, { confirmed } as unknown as Partial<ActionContext>), story.id, 'render', { shot: 1 })).toMatchObject({ needsConfirm: true });
     }
     expect(await t.flow.listJobs()).toHaveLength(0);
+    // The caller confirmed: a confirm:false the model added is ignored too.
+    okOf(await runAction(ctxFor(t, { confirmed: true }), story.id, 'render', { shot: 1, confirm: false }));
+    expect(await t.flow.listJobs()).toHaveLength(1);
   });
 
   it('render on an OpenRouter video engine estimates USD from usdPerClip', async () => {
@@ -355,7 +365,7 @@ describe('spending actions need confirm', () => {
     expect(await run(ctxFor(t), story.id, 'prepare', {})).toMatchObject({ needsConfirm: true, estimate: { credits: 0 } });
     expect(await run(ctxFor(t), story.id, 'assemble', {})).toMatchObject({ needsConfirm: true, estimate: { credits: 0 } });
     expect(await t.flow.listJobs()).toHaveLength(0);
-    okOf(await run(ctxFor(t), story.id, 'prepare', { confirm: true }));
+    okOf(await run(ctxFor(t, { confirmed: true }), story.id, 'prepare', {}));
     expect((await t.flow.listJobs()).every(j => j.kind === 'character')).toBe(true);
   });
 
@@ -371,7 +381,7 @@ describe('make_sheet', () => {
     const story = await t.service.create(konsistenBoard());
     expect(await run(ctxFor(t), story.id, 'make_sheet', { token: 'KAPAS' })).toMatchObject({ needsConfirm: true, estimate: { credits: 0 } });
     expect(await t.flow.listJobs()).toHaveLength(0);
-    okOf(await run(ctxFor(t), story.id, 'make_sheet', { token: 'KAPAS', confirm: true }));
+    okOf(await run(ctxFor(t, { confirmed: true }), story.id, 'make_sheet', { token: 'KAPAS' }));
     const jobs = await t.flow.listJobs();
     expect(jobs).toHaveLength(1);
     expect(jobs[0]).toMatchObject({ kind: 'character', technique: `story:${story.id}/cast:KAPAS` });
@@ -389,7 +399,7 @@ describe('make_sheet', () => {
   it('a cepat board has no sheets', async () => {
     const t = serviceSetup();
     const story = await t.service.create(twoScenes());
-    expect(errOf(await run(ctxFor(t), story.id, 'make_sheet', { token: 'LARAS', confirm: true }))).toMatch(/konsisten/);
+    expect(errOf(await run(ctxFor(t, { confirmed: true }), story.id, 'make_sheet', { token: 'LARAS' }))).toMatch(/konsisten/);
   });
 });
 
@@ -408,7 +418,7 @@ describe('references', () => {
     expect(card.reference).toBe(`uploads/${up.file}`);
     // A reference adds, it never re-draws: the sheet hash (and so the cast take) is untouched.
     expect((await t.service.get(story.id))!.cast!.find(c => c.token === 'KAPAS')!.status).toBe('pending');
-    okOf(await run(ctxFor(t), story.id, 'make_sheet', { token: 'KAPAS', confirm: true }));
+    okOf(await run(ctxFor(t, { confirmed: true }), story.id, 'make_sheet', { token: 'KAPAS' }));
     const [job] = await t.flow.listJobs();
     expect(job!.provider).toBe('openrouter');
     expect(job!.references).toEqual([join(t.service.storyDir(story.id), 'uploads', up.file)]);
@@ -420,6 +430,7 @@ describe('references', () => {
     const up = await upload(t, story.id);
     const r = okOf(await run(ctxFor(t), story.id, 'edit_character', { token: 'LARAS', reference: up.id }));
     expect(r.label).toContain('Referensi disimpan; Flow memakai sheet yang dibuat');
+    expect((await t.service.readStoryboard(story.id)).bible!.characters.find(c => c.token === 'LARAS')!.reference).toBe(`uploads/${up.file}`);
   });
 
   it('an unknown or traversal reference is refused', async () => {
@@ -452,7 +463,7 @@ describe('references', () => {
     const board = await t.service.readStoryboard(story.id);
     const added = board.shots.at(-1)!;
     expect(added.startFrame).toBe(`uploads/${up.file}`);
-    okOf(await run(ctxFor(t), story.id, 'render', { shot: 4, confirm: true }));
+    okOf(await run(ctxFor(t, { confirmed: true }), story.id, 'render', { shot: 4 }));
     const [job] = await t.flow.listJobs();
     expect(job!.startImage).toBe(join(t.service.storyDir(story.id), 'uploads', up.file));
 
@@ -475,7 +486,7 @@ describe('references', () => {
     const before = (await t.flow.listJobs()).length;
     expect(await run(ctxFor(t), story.id, 'redraw_frame', { shot: 1, reference: up.id })).toMatchObject({ needsConfirm: true });
     expect((await t.flow.listJobs()).length).toBe(before);
-    okOf(await run(ctxFor(t), story.id, 'redraw_frame', { shot: 1, reference: up.id, note: 'Keep the basket in her left hand.', confirm: true }));
+    okOf(await run(ctxFor(t, { confirmed: true }), story.id, 'redraw_frame', { shot: 1, reference: up.id, note: 'Keep the basket in her left hand.' }));
     const jobs = await t.flow.listJobs();
     const frame = jobs.find(j => j.technique === `story:${story.id}/frame:01-laras` && j.status === 'queued')!;
     expect(frame.references![0]).toBe(join(t.service.storyDir(story.id), 'uploads', up.file));
@@ -527,11 +538,13 @@ describe('toolSpecs', () => {
       expect(spec.type).toBe('function');
       expect((spec.function.parameters as { type: string }).type).toBe('object');
       expect(spec.function.description.length).toBeGreaterThan(20);
-      if (ACTIONS[spec.function.name as ActionName].spends) {
-        expect(spec.function.description).toMatch(/confirm/);
-        expect((spec.function.parameters as { properties: Record<string, unknown> }).properties.confirm).toBeTruthy();
-      }
+      if (ACTIONS[spec.function.name as ActionName].spends) expect(spec.function.description).toMatch(/confirm/);
     }
+    // No tool lets the model confirm a cost itself: no `confirm` property anywhere in any schema.
+    const keys = (value: unknown): string[] => (value && typeof value === 'object'
+      ? Object.entries(value as Record<string, unknown>).flatMap(([k, v]) => [k, ...keys(v)]) : []);
+    for (const spec of specs) expect(keys(spec.function.parameters)).not.toContain('confirm');
+    expect(JSON.stringify(specs)).not.toMatch(/"confirm"/);
     expect(specs.find(s => s.function.name === 'edit_shot')!.function.description).toMatch(/number/);
   });
 });
@@ -564,6 +577,7 @@ describe('story routes: uploads, sheet, scope', () => {
     const got = await server.inject({ url: body.url, headers: { cookie } });
     expect(got.statusCode).toBe(200);
     expect(got.headers['content-type']).toBe('image/png');
+    expect(got.headers['x-content-type-options']).toBe('nosniff');
     expect(got.rawPayload.equals(png(768, 1376))).toBe(true);
     // JPEG and WebP are accepted too, by their bytes.
     expect((await server.inject({ method: 'POST', url: `/api/stories/${id}/uploads`, headers: { cookie, 'content-type': 'image/jpeg' }, payload: jpeg(640, 480) })).json()).toMatchObject({ w: 640, h: 480 });
@@ -607,9 +621,181 @@ describe('story routes: uploads, sheet, scope', () => {
   });
 });
 
+// ------------------------------------------------------------------ review fix round 1
+
+const storyFile = (t: T, id: string) => join(t.dataDir, 'stories', id, 'story.json');
+const uploadsOf = (t: T, id: string) => { const dir = join(t.service.storyDir(id), 'uploads'); return existsSync(dir) ? readdirSync(dir) : []; };
+/** The real snapshot store with some methods replaced (same files, same `this`). */
+const snapshotsWith = (t: T, over: Partial<Record<keyof SnapshotStore, unknown>>) => Object.assign(Object.create(t.service.snapshots), over) as SnapshotStore;
+/** A take() that lets another writer change the board right after the snapshot (between take and write). */
+const racingTake = (t: T, taken: string[]) => async (storyId: string, label: string) => {
+  const out = await t.service.snapshots.take(storyId, label);
+  taken.push(out.undoId);
+  const board = await t.service.readStoryboard(storyId);
+  await t.service.updateStoryboard(storyId, { ...board, title: 'Pasar Siang' });
+  return out;
+};
+
+/** Bible board with a third, intent-less prose shot (made before the bible existed). */
+const withProseShot = (): Storyboard => {
+  const b = bibleBoard();
+  return {
+    ...b,
+    scenes: [{ ...b.scenes![0]!, shots: [...b.scenes![0]!.shots, '03-prose'] }],
+    shots: [...b.shots, { id: '03-prose', prompt: 'Wide shot, the camera stays still. LARAS walks past the fish stalls at dawn.', narration: 'Laras berjalan pulang.' }]
+  };
+};
+
+describe('edit_shot on an intent-less shot of a bible board', () => {
+  it('a narration edit keeps the prose prompt byte-identical, attaches no intent and keeps the paid clip', async () => {
+    const t = serviceSetup();
+    const done = await renderedStory(t, withProseShot());
+    expect(done.shots.find(s => s.id === '03-prose')!.status).toBe('done');
+    const jobs = (await t.flow.listJobs()).length;
+    const prompt = withProseShot().shots[2]!.prompt;
+    const r = okOf(await run(ctxFor(t), done.id, 'edit_shot', { shot: 3, narration: 'Laras pulang lewat gang.' }));
+    expect(r.changed).toBe(true);
+    const shot = (await t.service.readStoryboard(done.id)).shots.find(s => s.id === '03-prose')!;
+    expect(shot.prompt).toBe(prompt);
+    expect(shot.intent).toBeUndefined();
+    expect(shot.narration).toBe('Laras pulang lewat gang.');
+    const record = (await t.service.get(done.id))!;
+    expect(record.shots.find(s => s.id === '03-prose')!.status).toBe('done');
+    expect((await t.flow.listJobs()).length).toBe(jobs);
+  });
+
+  it('intent fields on an intent-less shot need all four slots at once', async () => {
+    const t = serviceSetup();
+    const story = await t.service.create(withProseShot());
+    const before = readFileSync(boardFile(t, story.id), 'utf8');
+    expect(errOf(await run(ctxFor(t), story.id, 'edit_shot', { shot: 3, action: 'walks home' })))
+      .toBe('Shot 3 belum punya niat — isi subjek, aksi, keadaan awal dan akhir sekaligus.');
+    expect(readFileSync(boardFile(t, story.id), 'utf8')).toBe(before);
+    okOf(await run(ctxFor(t), story.id, 'edit_shot', {
+      shot: 3, subject: 'LARAS', action: 'walks past the fish stalls', startState: 'she stands at the first stall', endState: 'she reaches the market gate', framing: 'wide', move: 'static'
+    }));
+    const shot = (await t.service.readStoryboard(story.id)).shots.find(s => s.id === '03-prose')!;
+    expect(shot.intent).toMatchObject({ subject: 'LARAS', endState: 'she reaches the market gate' });
+    expect(() => compileBoardShot(withProseShot(), shot)).not.toThrow();
+  });
+});
+
+describe('mutate: commit and stale edges', () => {
+  it('a commit failure after the board was written still reports the change', async () => {
+    const t = serviceSetup();
+    const story = await t.service.create(twoScenes());
+    const snapshots = snapshotsWith(t, { commit: async () => { throw new Error('disk full'); } });
+    const r = okOf(await run(ctxFor(t, { snapshots }), story.id, 'edit_shot', { shot: 2, emotion: 'lega' }));
+    expect(r.changed).toBe(true);
+    expect((await t.service.readStoryboard(story.id)).shots[1]!.intent!.emotion).toBe('lega');
+    expect((await t.service.get(story.id))!.rev).toBe(2);
+  });
+
+  it('STALE between take and write → plain error, the snapshot is discarded, no orphan upload', async () => {
+    const t = serviceSetup();
+    const story = await t.service.create(konsistenBoard());
+    writeFileSync(t.service.castPath(story.id, 'LARAS'), png(1024, 576, 20_000));
+    const taken: string[] = [];
+    const snapshots = snapshotsWith(t, { take: racingTake(t, taken) });
+    const error = errOf(await run(ctxFor(t, { snapshots }), story.id, 'edit_character', { token: 'KAPAS', reference: 'sheet LARAS' }));
+    expect(error).toBe(STALE_MESSAGE);
+    expect(taken).toHaveLength(1);
+    expect(await t.service.snapshots.get(taken[0]!)).toBeUndefined();
+    expect(await t.service.snapshots.list(story.id)).toHaveLength(0);
+    expect(uploadsOf(t, story.id)).toEqual([]);
+    expect((await t.service.readStoryboard(story.id)).title).toBe('Pasar Siang');
+  });
+});
+
+describe('plans have no side effects', () => {
+  it('needsConfirm with a media-pointer reference copies nothing into uploads', async () => {
+    const t = serviceSetup();
+    const story = await t.service.create(konsistenBoard({ image: { provider: 'openrouter', model: 'google/gemini-2.5-flash-image' } }));
+    writeFileSync(t.service.castPath(story.id, 'LARAS'), png(1024, 576, 20_000));
+    expect(await run(ctxFor(t), story.id, 'make_sheet', { token: 'KAPAS', reference: 'sheet LARAS' })).toMatchObject({ needsConfirm: true });
+    expect(uploadsOf(t, story.id)).toEqual([]);
+    // A refused edit does not copy either.
+    expect(errOf(await run(ctxFor(t), story.id, 'edit_character', { token: 'NOPE', reference: 'sheet LARAS' }))).toMatch(/NOPE/);
+    expect(uploadsOf(t, story.id)).toEqual([]);
+    // Confirmed: the copy is made and sent.
+    okOf(await run(ctxFor(t, { confirmed: true }), story.id, 'make_sheet', { token: 'KAPAS', reference: 'sheet LARAS' }));
+    expect(uploadsOf(t, story.id)).toHaveLength(1);
+    const [job] = await t.flow.listJobs();
+    expect(job!.references).toEqual([join(t.service.storyDir(story.id), 'uploads', uploadsOf(t, story.id)[0]!)]);
+  });
+
+  it('edit_character {reference: null} clears the card reference', async () => {
+    const t = serviceSetup();
+    const story = await t.service.create(konsistenBoard());
+    writeFileSync(t.service.castPath(story.id, 'LARAS'), png(1024, 576, 20_000));
+    okOf(await run(ctxFor(t), story.id, 'edit_character', { token: 'KAPAS', reference: 'sheet LARAS' }));
+    expect((await t.service.readStoryboard(story.id)).bible!.characters.find(c => c.token === 'KAPAS')!.reference).toBeTruthy();
+    const r = okOf(await run(ctxFor(t), story.id, 'edit_character', { token: 'KAPAS', reference: null }));
+    expect(r.changed).toBe(true);
+    expect((await t.service.readStoryboard(story.id)).bible!.characters.find(c => c.token === 'KAPAS')!.reference).toBeUndefined();
+  });
+});
+
+describe('render and redraw edges', () => {
+  it('konsisten render: a missing keyframe only blocks when its shot will actually be rendered', async () => {
+    const t = serviceSetup();
+    const story = await t.service.create(konsistenBoard());
+    const record = JSON.parse(readFileSync(storyFile(t, story.id), 'utf8'));
+    // Shot 1: clip already paid, keyframe since redrawn (not done). Shot 2: keyframe done, clip still to render.
+    record.shots[0].status = 'done';
+    record.shots[0].frame = { status: 'pending', attempts: 0 };
+    record.shots[1].frame = { status: 'done', attempts: 1 };
+    writeFileSync(storyFile(t, story.id), JSON.stringify(record));
+    expect(await run(ctxFor(t), story.id, 'render', {})).toMatchObject({ needsConfirm: true, estimate: { credits: 10 } });
+    // Shot 2's own keyframe missing still refuses.
+    record.shots[1].frame = { status: 'pending', attempts: 0 };
+    writeFileSync(storyFile(t, story.id), JSON.stringify(record));
+    expect(errOf(await run(ctxFor(t), story.id, 'render', {}))).toMatch(/Keyframe shot 2 belum siap/);
+  });
+
+  it('redraw_frame {note} keeps a pending audit repair of the shot', async () => {
+    const t = serviceSetup();
+    const story = await t.service.create(konsistenBoard());
+    await t.service.prepare(story.id);
+    await finishQueued(t, 'character');
+    await t.service.reconcile(story.id);
+    await finishQueued(t, 'image');
+    await t.service.reconcile(story.id);
+    const record = JSON.parse(readFileSync(storyFile(t, story.id), 'utf8'));
+    record.shots[0].auditRepair = 'Keep the scarf red.';
+    writeFileSync(storyFile(t, story.id), JSON.stringify(record));
+    okOf(await run(ctxFor(t, { confirmed: true }), story.id, 'redraw_frame', { shot: 1, note: 'Keep the basket in her left hand.' }));
+    const frame = (await t.flow.listJobs()).find(j => j.technique === `story:${story.id}/frame:01-laras` && j.status === 'queued')!;
+    expect(frame.prompt).toContain('Keep the basket in her left hand.');
+    expect(JSON.parse(readFileSync(storyFile(t, story.id), 'utf8')).shots[0].auditRepair).toBe('Keep the scarf red.');
+  });
+});
+
+describe('get_project worst case', () => {
+  it('20 scenes, 20 locations and 30 shots stay within 6500 chars', async () => {
+    const t = serviceSetup();
+    const b = bibleBoard();
+    const long = 'y'.repeat(300);
+    const keys = Array.from({ length: 20 }, (_, i) => `LOKASI_PANJANG_${String.fromCharCode(65 + i)}`);
+    const locations = Object.fromEntries(keys.map(k => [k, { name: `Lokasi ${k} ${'n'.repeat(40)}`, look: `a very long location description ${long}` }]));
+    const shots = Array.from({ length: 30 }, (_, i) => ({ ...b.shots[0]!, id: `s-${i + 1}`, narration: 'Laras pergi ke pasar pagi itu bersama Kapas.', intent: { ...b.shots[0]!.intent!, action: `stands still behind the fish stall ${long}` } }));
+    const scenes = Array.from({ length: 20 }, (_, i) => ({ id: `scene-${i + 1}`, title: `Scene ${i + 1} ${'t'.repeat(70)}`, location: keys[i]!, shots: shots.filter((_, j) => j % 20 === i).map(s => s.id) }));
+    const bible = {
+      ...b.bible!,
+      locations: keys.map(k => ({ key: k, name: locations[k]!.name, lookdev: locations[k]!.look })),
+      scenes: scenes.map(s => ({ id: s.id, title: s.title, goal: `Laras melakukan sesuatu yang penting ${'g'.repeat(250)}`, location: s.location }))
+    };
+    const board = { ...b, locations, scenes, shots, bible };
+    expect(validateStoryboard(board)).toEqual([]);
+    const story = await t.service.create(board);
+    const r = okOf(await run(ctxFor(t), story.id, 'get_project'));
+    expect(JSON.stringify(r.data).length).toBeLessThanOrEqual(6500);
+  });
+});
+
 // Keep the fixture helpers honest: the konsisten board must be valid as written.
 describe('fixtures', () => {
   it('boards validate', () => {
-    for (const b of [twoScenes(), konsistenBoard(), legacyBoard()]) expect(validateStoryboard(b)).toEqual([]);
+    for (const b of [twoScenes(), konsistenBoard(), legacyBoard(), withProseShot()]) expect(validateStoryboard(b)).toEqual([]);
   });
 });

@@ -11,8 +11,10 @@
  *   read, so a concurrent edit is refused (STALE) instead of overwritten.
  * - Bible boards edit intent fields, never prompt text (the compiler writes prompts). Legacy boards
  *   edit only the one shot's prose and are never upgraded to a bible.
- * - Spending (Flow credits, OpenRouter money, queued jobs) needs `confirm: true`; without it the
- *   action returns `{ needsConfirm, label, estimate }` and queues nothing.
+ * - Spending (Flow credits, OpenRouter money, queued jobs) needs `ctx.confirmed === true`, set by
+ *   the caller (the user agreed in the app / MCP client), never by model input: a `confirm` key in
+ *   the input is stripped and ignored. Without it the action returns `{ needsConfirm, label,
+ *   estimate }` and queues nothing.
  */
 import { ShotCompileError, lintPrompt, type ShotIntent } from '../bible/compiler.js';
 import type { CharacterCard } from '../bible/story.js';
@@ -27,7 +29,8 @@ import {
   validateStoryboard, type Engine, type Scene, type Shot, type Storyboard
 } from '../stories/storyboard.js';
 import { BreakdownError, MAX_BREAKDOWN, MIN_BREAKDOWN, breakdownScene, defaultMode, withSceneShots, type BreakdownMode } from './breakdown.js';
-import { rangeText, resolveCharacter, resolveLocation, resolveReference, resolveScene, resolveShot, sceneNumber, shotNumber, type Ref } from './resolve.js';
+import { planReference, rangeText, resolveCharacter, resolveLocation, resolveScene, resolveShot, sceneNumber, shotNumber, type Ref } from './resolve.js';
+import { removeUpload, writePlanned, type PlannedUpload } from './uploads.js';
 
 // ------------------------------------------------------------------ types
 
@@ -43,6 +46,12 @@ export type ActionContext = {
    * first change), `rev` = the revision right after this turn's last change.
    */
   turn: { undoId?: string; rev?: number };
+  /**
+   * The user agreed to this spending call. Set by the caller only (chat: the user posted the
+   * pending id; MCP: the client's own `confirm` argument; UI: the confirm click) — never derived
+   * from model input. Anything but `true` means "ask first".
+   */
+  confirmed?: boolean;
   /** OpenRouter price lookup for estimates (null/absent = unknown price). */
   price?: { usdPerClip(model: string): Promise<number | null>; usdPerImage?(model: string): Promise<number | null> };
 };
@@ -201,39 +210,55 @@ type Edit = (board: Storyboard) => { board: Storyboard; label: string };
  * Apply one board edit with the turn's snapshot discipline. `edit` is pure: it runs once on the
  * current board first (bad input fails before any snapshot), then again on the board read after
  * the snapshot. `baseRev` = the revision the edit was planned on (breakdown): a different one is STALE.
+ * `prepare` runs once the dry run passed (e.g. write a reference copy the edit points at);
+ * `cleanup` undoes it when the edit fails or changes nothing.
  */
-async function mutate(ctx: ActionContext, storyId: string, edit: Edit, opts: { baseRev?: number } = {}): Promise<ActionResult> {
+async function mutate(
+  ctx: ActionContext, storyId: string, edit: Edit,
+  opts: { baseRev?: number; prepare?: () => Promise<void>; cleanup?: () => Promise<void> } = {}
+): Promise<ActionResult> {
   const dry = edit(clone(await ctx.stories.readStoryboard(storyId)));
   const errors = validateStoryboard(dry.board);
   if (errors.length) bad(errors.join('; '));
-  let undoId: string;
-  let rev: number;
+  let undoId: string | undefined;
   let fresh = false;
-  if (ownsUndo(ctx.turn.undoId, storyId)) {
-    undoId = ctx.turn.undoId!;
-    rev = ctx.turn.rev ?? (await ctx.stories.get(storyId))!.rev;
-  } else {
-    const taken = await ctx.snapshots.take(storyId, dry.label);
-    undoId = taken.undoId;
-    rev = taken.rev;
-    fresh = true;
-  }
+  let record: StoryRecord;
+  let label: string;
+  let rev: number;
   try {
+    await opts.prepare?.();
+    if (ownsUndo(ctx.turn.undoId, storyId)) {
+      undoId = ctx.turn.undoId!;
+      rev = ctx.turn.rev ?? (await ctx.stories.get(storyId))!.rev;
+    } else {
+      const taken = await ctx.snapshots.take(storyId, dry.label);
+      undoId = taken.undoId;
+      rev = taken.rev;
+      fresh = true;
+    }
     if (opts.baseRev !== undefined && opts.baseRev !== rev) throw new StoryError('STALE', STALE_MESSAGE);
     const out = edit(clone(await ctx.stories.readStoryboard(storyId)));
-    const record = await ctx.stories.updateStoryboard(storyId, out.board, { rev });
-    if (record.rev === rev) {
-      if (fresh) await ctx.snapshots.discard(undoId);
-      return { ok: true, label: `${out.label} (tidak ada yang berubah)`, changed: false };
-    }
-    await ctx.snapshots.commit(undoId, record.rev);
-    ctx.turn.undoId = undoId;
-    ctx.turn.rev = record.rev;
-    return { ok: true, label: out.label, changed: true };
+    label = out.label;
+    record = await ctx.stories.updateStoryboard(storyId, out.board, { rev });
   } catch (error) {
-    if (fresh) await ctx.snapshots.discard(undoId).catch(() => undefined);
+    if (fresh && undoId) await ctx.snapshots.discard(undoId).catch(() => undefined);
+    await opts.cleanup?.().catch(() => undefined);
     throw error;
   }
+  if (record.rev === rev) {
+    if (fresh) await ctx.snapshots.discard(undoId!).catch(() => undefined);
+    await opts.cleanup?.().catch(() => undefined);
+    return { ok: true, label: `${label} (tidak ada yang berubah)`, changed: false };
+  }
+  // The board is written: from here on the change stands, whatever happens to the undo record.
+  try {
+    await ctx.snapshots.commit(undoId!, record.rev);
+  } catch (error) {
+    console.warn(`[assistant] ${storyId}: undo snapshot ${undoId} not committed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  ctx.turn.undoId = undoId;
+  ctx.turn.rev = record.rev;
+  return { ok: true, label, changed: true };
 }
 
 // ------------------------------------------------------------------ schemas
@@ -241,7 +266,6 @@ async function mutate(ctx: ActionContext, storyId: string, edit: Edit, opts: { b
 const REF = { anyOf: [{ type: 'integer' }, { type: 'string' }] };
 const SHOT_REF = { ...REF, description: 'Shot number as shown in the app (1..N across all scenes), e.g. 3' };
 const SCENE_REF = { ...REF, description: 'Scene number as shown in the app (1..M), e.g. 2' };
-const CONFIRM = { type: 'boolean', description: 'Set true ONLY after the user explicitly agreed to the shown cost. Without it nothing is queued and the cost is returned.' };
 const INTENT_PROPS = {
   subject: { type: 'string', description: 'Who/what is in frame: a character TOKEN (e.g. LARAS) or a concrete noun phrase' },
   action: { type: 'string', description: 'ONE verb chain in English, no "and then"' },
@@ -259,6 +283,22 @@ const obj = (properties: Record<string, unknown>, required: string[] = []) => ({
 
 const SUMMARY_LIMIT = 5800;
 
+/**
+ * Text caps per shrink level; the summary takes the first level that fits SUMMARY_LIMIT. 0 drops
+ * the field (narration lines and scene goals, location looks); `lean` also drops default values
+ * (status "pending") and keeps two anchors per character. Numbers, ids, keys and tokens are never cut.
+ */
+type Caps = { what: number; line: number; title: number; name: number; look: number; anchors: number; lean?: boolean };
+const SUMMARY_LEVELS: Caps[] = [
+  { what: 140, line: 80, title: 60, name: 60, look: 80, anchors: 4 },
+  { what: 100, line: 60, title: 48, name: 48, look: 60, anchors: 4 },
+  { what: 70, line: 44, title: 40, name: 40, look: 40, anchors: 3 },
+  { what: 48, line: 32, title: 32, name: 32, look: 24, anchors: 3 },
+  { what: 36, line: 24, title: 24, name: 24, look: 0, anchors: 2 },
+  { what: 28, line: 0, title: 20, name: 20, look: 0, anchors: 2, lean: true },
+  { what: 20, line: 0, title: 16, name: 16, look: 0, anchors: 1, lean: true }
+];
+
 async function estimateLeft(ctx: ActionContext, board: Storyboard, record: StoryRecord): Promise<Estimate & { clips: number; images: number }> {
   const reuse = new Set(board.shots.filter(s => s.reuse).map(s => s.id));
   const clips = record.shots.filter(s => !reuse.has(s.id) && s.status !== 'done').length;
@@ -271,7 +311,7 @@ async function estimateLeft(ctx: ActionContext, board: Storyboard, record: Story
   return { ...(typeof usd === 'number' ? { usd: Math.round(clips * usd * 100) / 100 } : {}), clips, images };
 }
 
-function summary(board: Storyboard, record: StoryRecord, estimate: Estimate & { clips: number; images: number }, maxWhat: number, maxLine: number) {
+function summary(board: Storyboard, record: StoryRecord, estimate: Estimate & { clips: number; images: number }, caps: Caps, level: number) {
   const b = normalizeScenes(board);
   const states = new Map(record.shots.map(s => [s.id, s]));
   const sceneN = new Map(b.scenes!.map((s, i) => [s.id, i + 1]));
@@ -286,12 +326,14 @@ function summary(board: Storyboard, record: StoryRecord, estimate: Estimate & { 
     bible: !!b.bible,
     engine: { image: engineName(b.engine?.image), video: engineName(b.engine?.video) },
     look: b.look?.family ? `${b.look.family}${b.look.variant && b.look.variant !== b.look.family ? `:${b.look.variant}` : ''}` : b.look?.style ?? 'default',
-    ...(b.bible?.logline ? { logline: clip(b.bible.logline, 200) } : {}),
+    ...(level ? { shortened: true } : {}),
+    ...(b.bible?.logline ? { logline: clip(b.bible.logline, caps.line ? 200 : 100) } : {}),
     scenes: b.scenes!.map((s, i) => {
       const card = cardOf(b, s);
+      const goal = card?.goal ?? s.summary;
       return {
-        n: i + 1, id: s.id, title: clip(s.title, 60),
-        ...(card?.goal || s.summary ? { goal: clip(card?.goal ?? s.summary, maxLine * 2) } : {}),
+        n: i + 1, id: s.id, title: clip(s.title, caps.title),
+        ...(goal && caps.line ? { goal: clip(goal, caps.line * 2) } : {}),
         ...(s.location ?? card?.location ? { location: s.location ?? card?.location } : {})
       };
     }),
@@ -299,11 +341,12 @@ function summary(board: Storyboard, record: StoryRecord, estimate: Estimate & { 
       const state = states.get(s.id);
       const scene = sceneOf(b, s.id);
       const what = s.intent ? [s.intent.subject, s.intent.action].filter(Boolean).join(' ') || '(intent kosong)' : s.prompt;
+      const status = state?.status ?? 'pending';
       return {
         n: i + 1, id: s.id, scene: scene ? sceneN.get(scene.id) : undefined,
-        what: clip(what, maxWhat),
-        ...(s.silent ? { silent: true } : { narration: clip(s.narration, maxLine) }),
-        status: state?.status ?? 'pending',
+        what: clip(what, caps.what),
+        ...(s.silent ? { silent: true } : caps.line ? { narration: clip(s.narration, caps.line) } : {}),
+        ...(caps.lean && status === 'pending' ? {} : { status }),
         ...(state?.frame ? { frame: state.frame.status } : {}),
         ...(s.reuse ? { reuse: true } : {})
       };
@@ -313,16 +356,17 @@ function summary(board: Storyboard, record: StoryRecord, estimate: Estimate & { 
       const spec = b.characters?.[token];
       const name = card?.name ?? (spec && typeof spec === 'object' ? spec.name : undefined) ?? token;
       return {
-        token, name,
-        ...(card ? { anchors: card.anchors.slice(0, 4).map(a => clip(a, 50)) } : spec ? { look: clip(typeof spec === 'string' ? spec : spec.look, 80) } : {}),
+        token, name: clip(name, caps.name),
+        ...(card ? { anchors: card.anchors.slice(0, caps.anchors).map(a => clip(a, Math.max(24, Math.min(50, caps.title)))) } : spec ? { look: clip(typeof spec === 'string' ? spec : spec.look, caps.look || 40) } : {}),
         sheet: cast.get(token)?.status ?? (record.mode === 'konsisten' ? 'tidak dipakai' : '—'),
         ...(card?.reference ? { reference: card.reference } : {})
       };
     }),
-    locations: [...new Set([...(b.bible?.locations ?? []).map(l => l.key), ...Object.keys(b.locations ?? {})])].map(key => ({
-      key, name: b.locations?.[key]?.name ?? b.bible?.locations.find(l => l.key === key)?.name ?? key,
-      look: clip(b.locations?.[key]?.look ?? b.bible?.locations.find(l => l.key === key)?.lookdev, 80)
-    })),
+    locations: [...new Set([...(b.bible?.locations ?? []).map(l => l.key), ...Object.keys(b.locations ?? {})])].map(key => {
+      const name = b.locations?.[key]?.name ?? b.bible?.locations.find(l => l.key === key)?.name ?? key;
+      const look = b.locations?.[key]?.look ?? b.bible?.locations.find(l => l.key === key)?.lookdev;
+      return { key, name: clip(name, caps.name), ...(caps.look ? { look: clip(look, caps.look) } : {}) };
+    }),
     estimate
   };
 }
@@ -377,10 +421,30 @@ function shotFields(input: ActionInput): ShotFields {
 const PROMPT_ON_BIBLE = 'Di proyek bible, ubah field intent (subject, action, startState, endState, emotion, framing, move), bukan teks prompt.';
 const INTENT_ON_LEGACY = 'Proyek ini belum memakai bible — ubah teks prompt, narration, framing, move atau silent saja (bible dibuat di tab Bible).';
 
-function applyShot(board: Storyboard, shot: Shot, f: ShotFields): Shot {
+const noIntentYet = (n: number) => `Shot ${n} belum punya niat — isi subjek, aksi, keadaan awal dan akhir sekaligus.`;
+
+/** Legacy prose edits of one shot: framing/move swap the catalog camera text, the rest of the prose stays. */
+function applyProse(out: Shot, f: ShotFields): Shot {
+  if (f.framing || f.move) out.prompt = withCamera(out.prompt, f.framing, f.move);
+  if (f.narration !== undefined) out.narration = f.narration;
+  if (f.silent !== undefined) { if (f.silent) out.silent = true; else delete out.silent; }
+  return out;
+}
+
+/**
+ * The edited copy of one shot. Bible boards edit the intent; a bible-board shot without an intent
+ * (prose from before the bible) keeps its prose unless all four mandatory slots are given at once:
+ * a half intent would replace a working prompt with one that cannot compile.
+ */
+function applyShot(board: Storyboard, shot: Shot, f: ShotFields, n = 0): Shot {
   const out = clone(shot);
   if (board.bible) {
     if (f.prompt !== undefined) bad(PROMPT_ON_BIBLE);
+    if (!out.intent) {
+      const i = f.intent;
+      if (!Object.keys(i).length) return applyProse(out, f);
+      if (!i.subject || !i.action || !i.startState || !i.endState) bad(noIntentYet(n));
+    }
     const intent: ShotIntent = { ...(out.intent ?? { subject: '', action: '', startState: '', endState: '' }) };
     for (const key of INTENT_KEYS) {
       const value = f.intent[key];
@@ -396,10 +460,7 @@ function applyShot(board: Storyboard, shot: Shot, f: ShotFields): Shot {
   }
   if (Object.keys(f.intent).length) bad(INTENT_ON_LEGACY);
   if (f.prompt !== undefined) out.prompt = f.prompt;
-  if (f.framing || f.move) out.prompt = withCamera(out.prompt, f.framing, f.move);
-  if (f.narration !== undefined) out.narration = f.narration;
-  if (f.silent !== undefined) { if (f.silent) out.silent = true; else delete out.silent; }
-  return out;
+  return applyProse(out, f);
 }
 
 const hasShotFields = (f: ShotFields) => Object.keys(f.intent).length > 0 || f.framing !== undefined || f.move !== undefined
@@ -410,8 +471,9 @@ const hasShotFields = (f: ShotFields) => Object.keys(f.intent).length > 0 || f.f
 type Plan = { label: string; estimate: Estimate; payload?: Record<string, unknown> };
 
 /**
- * A spending action: `plan` validates and prices (no side effects), `execute` queues. Without
- * `input.confirm === true` the plan is returned as `needsConfirm` and nothing is queued.
+ * A spending action: `plan` validates and prices (no side effects: no file, no job, no write),
+ * `execute` queues. Without `ctx.confirmed === true` (set by the caller, never by model input) the
+ * plan is returned as `needsConfirm` and nothing is queued.
  */
 function spending(def: {
   description: string; schema: object;
@@ -424,7 +486,7 @@ function spending(def: {
       const board = await ctx.stories.readStoryboard(storyId);
       const plan = await def.plan(ctx, storyId, input, record, board);
       if ('ok' in plan) return plan;
-      if (input.confirm !== true) return { ok: false, needsConfirm: true, label: plan.label, estimate: plan.estimate };
+      if (ctx.confirmed !== true) return { ok: false, needsConfirm: true, label: plan.label, estimate: plan.estimate };
       return def.execute(ctx, storyId, input, plan);
     })
   };
@@ -445,12 +507,28 @@ const storyPaths = (ctx: ActionContext, storyId: string) => ({
   castPath: (token: string) => ctx.stories.castPath(storyId, token)
 });
 
-async function referenceOf(ctx: ActionContext, storyId: string, board: Storyboard, input: ActionInput, key: string): Promise<string | undefined> {
+/** A reference decided in a plan; `pending` = a media copy not written yet. */
+type RefPlan = { rel: string; pending?: PlannedUpload };
+
+/** Resolve a reference input without writing anything (media pointers are copied later by `keepReference`). */
+async function referencePlan(ctx: ActionContext, storyId: string, board: Storyboard, input: ActionInput, key: string): Promise<RefPlan | undefined> {
   const value = input[key];
   if (value === undefined || value === null || value === '') return undefined;
-  const r = await resolveReference(board, value, storyPaths(ctx, storyId));
-  return 'error' in r ? bad(r.error) : r.rel;
+  const r = await planReference(board, value, storyPaths(ctx, storyId));
+  return 'error' in r ? bad(r.error) : r;
 }
+
+/** Write the planned copy (once the change is going ahead). */
+const keepReference = async (ctx: ActionContext, storyId: string, plan?: RefPlan) => {
+  if (plan?.pending) await writePlanned(ctx.stories.storyDir(storyId), plan.pending);
+};
+/** Remove a copy whose change failed (an upload the user made is never removed). */
+const dropReference = async (ctx: ActionContext, storyId: string, plan?: RefPlan) => {
+  if (plan?.pending) await removeUpload(ctx.stories.storyDir(storyId), plan.pending.file);
+};
+const referenceHooks = (ctx: ActionContext, storyId: string, plan?: RefPlan) => (plan?.pending
+  ? { prepare: () => keepReference(ctx, storyId, plan), cleanup: () => dropReference(ctx, storyId, plan) }
+  : {});
 
 // ------------------------------------------------------------------ the actions
 
@@ -464,13 +542,11 @@ export const ACTIONS: Record<ActionName, Action> = {
     run: (ctx, storyId) => guarded(ctx, storyId, async record => {
       const board = await ctx.stories.readStoryboard(storyId);
       const estimate = await estimateLeft(ctx, board, record);
-      let maxWhat = 140;
-      let maxLine = 80;
-      let data = summary(board, record, estimate, maxWhat, maxLine);
-      while (JSON.stringify(data).length > SUMMARY_LIMIT && maxWhat > 24) {
-        maxWhat = Math.floor(maxWhat * 0.8);
-        maxLine = Math.max(24, Math.floor(maxLine * 0.85));
-        data = summary(board, record, estimate, maxWhat, maxLine);
+      let level = 0;
+      let data = summary(board, record, estimate, SUMMARY_LEVELS[0]!, 0);
+      while (JSON.stringify(data).length > SUMMARY_LIMIT && level < SUMMARY_LEVELS.length - 1) {
+        level += 1;
+        data = summary(board, record, estimate, SUMMARY_LEVELS[level]!, level);
       }
       return { ok: true, label: `Proyek "${clip(board.title, 60)}" dibaca`, data };
     })
@@ -490,11 +566,13 @@ export const ACTIONS: Record<ActionName, Action> = {
         const i = board.shots.findIndex(s => s.id === id);
         const before = board.shots[i]!;
         if (before.reuse) bad(`Shot ${n} memakai ulang klip lama — tidak bisa diubah.`);
-        const shot = applyShot(board, before, fields);
+        const shot = applyShot(board, before, fields, n);
         board.shots[i] = shot;
         note = '';
-        if (board.bible) {
-          const was = compileIssues(board, before).length === 0 && !!before.intent;
+        // An intent-less prose shot stays prose (prompt untouched); only intent shots are compiled.
+        if (board.bible && shot.intent) {
+          // A prose shot that gets its first intent must compile, like a new shot (add_shot).
+          const was = !before.intent || compileIssues(board, before).length === 0;
           const issues = compileIssues(board, shot);
           if (issues.length && was) bad(`Shot ${n} tidak bisa dikompilasi setelah perubahan ini: ${issues.join('; ')}`);
           if (issues.length) note = ` — belum bisa dirender: ${clip(issues.join('; '), 200)}`;
@@ -519,8 +597,10 @@ export const ACTIONS: Record<ActionName, Action> = {
       if (sceneTarget === undefined && afterTarget === undefined) bad('Sebut scene (nomor) atau after (nomor shot).');
       const fields = shotFields(input);
       const pre = await ctx.stories.readStoryboard(storyId);
-      const start = await referenceOf(ctx, storyId, pre, input, 'startFrame');
-      const startNote = start && !videoEngine(pre) ? ' Start frame tidak disimpan: hanya mesin video OpenRouter yang memakainya.' : '';
+      const start = await referencePlan(ctx, storyId, pre, input, 'startFrame');
+      // Flow cannot use a start frame: nothing is stored, and no copy is made for it.
+      const keep = start && videoEngine(pre) ? start : undefined;
+      const startNote = start && !keep ? ' Start frame tidak disimpan: hanya mesin video OpenRouter yang memakainya.' : '';
       let label = '';
       const result = await mutate(ctx, storyId, board => {
         const b = normalizeScenes(board);
@@ -548,7 +628,7 @@ export const ACTIONS: Record<ActionName, Action> = {
           if (!fields.prompt) bad('Shot baru butuh prompt (teks Inggris) di proyek tanpa bible.');
           shot = applyShot(b, { id, prompt: fields.prompt! }, { ...fields, prompt: undefined });
         }
-        if (start && videoEngine(b)) shot.startFrame = start;
+        if (keep) shot.startFrame = keep.rel;
         b.shots.push(shot);
         scene.shots.splice(at, 0, id);
         const placed = normalizeScenes(b);
@@ -559,7 +639,7 @@ export const ACTIONS: Record<ActionName, Action> = {
         }
         label = `Shot ${shotNumber(placed, id)} ditambahkan di scene ${sceneNumber(placed, scene.id)}`;
         return { board: placed, label };
-      });
+      }, referenceHooks(ctx, storyId, keep));
       return result.ok && startNote ? { ...result, label: `${result.label}.${startNote}` } : result;
     })
   },
@@ -736,7 +816,7 @@ export const ACTIONS: Record<ActionName, Action> = {
       token: { type: 'string', description: 'Character TOKEN (e.g. LARAS) or name' }, name: { type: 'string' },
       anchors: { type: 'array', items: { type: 'string' } }, want: { type: 'string' }, need: { type: 'string' }, arc: { type: 'string' },
       look: { type: 'string', description: 'Legacy (no-bible) projects only: English visual description' },
-      reference: { type: 'string', description: 'Uploaded image id (up_…) or media pointer ("sheet LARAS", "keyframe shot 2")' }
+      reference: { type: ['string', 'null'], description: 'Uploaded image id (up_…) or media pointer ("sheet LARAS", "keyframe shot 2"); null removes the reference' }
     }, ['token']),
     spends: false,
     run: (ctx, storyId, input) => guarded(ctx, storyId, async () => {
@@ -750,8 +830,10 @@ export const ACTIONS: Record<ActionName, Action> = {
       const pre = await ctx.stories.readStoryboard(storyId);
       if (!pre.bible && (anchors || want || need || arc !== undefined || input.reference !== undefined)) bad('Proyek tanpa bible: ubah name atau look saja (anchors dan referensi butuh bible).');
       if (pre.bible && look !== undefined) bad('Di proyek bible tampilan karakter diatur lewat anchors, bukan look.');
-      const reference = await referenceOf(ctx, storyId, pre, input, 'reference');
-      if ([name, anchors, want, need, arc, look, reference].every(v => v === undefined)) bad('Tidak ada yang diubah — sebut name, anchors, want, need, arc atau reference.');
+      // reference: null clears the card's reference; a value is planned here and copied only once the edit is valid.
+      const clearReference = input.reference === null;
+      const reference = clearReference ? undefined : await referencePlan(ctx, storyId, pre, input, 'reference');
+      if ([name, anchors, want, need, arc, look, reference].every(v => v === undefined) && !clearReference) bad('Tidak ada yang diubah — sebut name, anchors, want, need, arc atau reference.');
       const result = await mutate(ctx, storyId, board => {
         const hit = resolveCharacter(board, who);
         if ('error' in hit) bad(hit.error);
@@ -763,14 +845,15 @@ export const ACTIONS: Record<ActionName, Action> = {
           if (want !== undefined) card.want = want;
           if (need !== undefined) card.need = need;
           if (arc !== undefined) card.arc = arc;
-          if (reference) card.reference = reference;
+          if (reference) card.reference = reference.rel;
+          if (clearReference) delete card.reference;
           return { board, label: `Karakter ${card.name} diubah` };
         }
         const spec = board.characters?.[token];
         const current = typeof spec === 'string' ? { name: (hit as { name: string }).name, look: spec } : spec ?? { name: (hit as { name: string }).name, look: '' };
         board.characters = { ...(board.characters ?? {}), [token]: { name: name ?? current.name, look: look ?? current.look } };
         return { board, label: `Karakter ${name ?? current.name} diubah` };
-      });
+      }, referenceHooks(ctx, storyId, reference));
       if (!result.ok || !reference) return result;
       const note = imageEngine(pre) ? 'Referensi disimpan; dipakai saat sheet dibuat (make_sheet).' : FLOW_REFERENCE_NOTE;
       return { ...result, label: `${result.label}. ${note}` };
@@ -878,30 +961,37 @@ export const ACTIONS: Record<ActionName, Action> = {
   },
 
   make_sheet: spending({
-    description: 'Make (or remake) the character sheet of ONE character (konsisten projects): one image job for that character only. Uses the reference stored on the character with OpenRouter image engines. Free on Flow, but it queues a job: set confirm=true only after the user agreed.',
-    schema: obj({ token: { type: 'string', description: 'Character TOKEN or name' }, reference: { type: 'string', description: 'Optional one-off reference: upload id (up_…) or media pointer' }, confirm: CONFIRM }, ['token']),
+    description: 'Make (or remake) the character sheet of ONE character (konsisten projects): one image job for that character only. Uses the reference stored on the character with OpenRouter image engines. Free on Flow, but it queues a job. The first call only returns the cost; the app then asks the user to confirm, and only a confirmed call queues anything (you cannot confirm it yourself).',
+    schema: obj({ token: { type: 'string', description: 'Character TOKEN or name' }, reference: { type: 'string', description: 'Optional one-off reference: upload id (up_…) or media pointer' } }, ['token']),
     plan: async (ctx, storyId, input, record, board) => {
       if (record.mode !== 'konsisten') return fail('Lembar karakter hanya untuk mode konsisten.');
       const hit = resolveCharacter(board, str(input, 'token', { required: true, max: 60 }));
       if ('error' in hit) return fail(hit.error);
       const cast = (record.cast ?? []).find(c => c.token === hit.token);
       if (!cast) return fail(`Karakter ${hit.name} belum muncul di shot mana pun — belum ada sheet untuk dibuat.`);
-      const reference = await referenceOf(ctx, storyId, board, input, 'reference');
+      // Planned only: a media pointer is copied in execute, after the user confirmed.
+      const reference = await referencePlan(ctx, storyId, board, input, 'reference');
       const { estimate, cost } = await imageEstimate(ctx, board, 1);
       const verb = cast.status === 'done' ? 'Buat ulang' : 'Buat';
       const refNote = reference && !imageEngine(board) ? ` ${FLOW_REFERENCE_NOTE}` : '';
-      return { label: `${verb} sheet ${hit.name} (1 gambar, ${cost})${refNote}`, estimate, payload: { token: hit.token, name: hit.name, reference } };
+      return { label: `${verb} sheet ${hit.name} (1 gambar, ${cost})${refNote}`, estimate, payload: { token: hit.token, name: hit.name, reference: reference && imageEngine(board) ? reference : undefined } };
     },
     execute: async (ctx, storyId, _input, plan) => {
-      const { token, name, reference } = plan.payload as { token: string; name: string; reference?: string };
-      const record = await ctx.stories.makeSheet(storyId, token, reference && imageEngine(await ctx.stories.readStoryboard(storyId)) ? { reference } : {});
-      return { ok: true, label: `Sheet ${name} sedang dibuat`, data: { status: record.status } };
+      const { token, name, reference } = plan.payload as { token: string; name: string; reference?: RefPlan };
+      await keepReference(ctx, storyId, reference);
+      try {
+        const record = await ctx.stories.makeSheet(storyId, token, reference ? { reference: reference.rel } : {});
+        return { ok: true, label: `Sheet ${name} sedang dibuat`, data: { status: record.status } };
+      } catch (error) {
+        await dropReference(ctx, storyId, reference).catch(() => undefined);
+        throw error;
+      }
     }
   }),
 
   redraw_frame: spending({
-    description: `Draw the keyframe of ONE shot again (konsisten projects). ${SHOT_DESCRIPTION_RULE} note: a short one-off English instruction for this take (no camera gear, no TOKENs); reference: an uploaded image id or media pointer, sent with OpenRouter image engines. Free on Flow, but it queues a job: set confirm=true only after the user agreed.`,
-    schema: obj({ shot: SHOT_REF, note: { type: 'string' }, reference: { type: 'string' }, confirm: CONFIRM }, ['shot']),
+    description: `Draw the keyframe of ONE shot again (konsisten projects). ${SHOT_DESCRIPTION_RULE} note: a short one-off English instruction for this take (no camera gear, no TOKENs); reference: an uploaded image id or media pointer, sent with OpenRouter image engines. Free on Flow, but it queues a job. The first call only returns the cost; the app then asks the user to confirm, and only a confirmed call queues anything (you cannot confirm it yourself).`,
+    schema: obj({ shot: SHOT_REF, note: { type: 'string' }, reference: { type: 'string' } }, ['shot']),
     plan: async (ctx, storyId, input, record, board) => {
       if (record.mode !== 'konsisten') return fail('Keyframe hanya untuk mode konsisten.');
       const { id, n } = shotOf(board, ref(input, 'shot', true)!);
@@ -914,21 +1004,28 @@ export const ACTIONS: Record<ActionName, Action> = {
       }
       const notReady = shotCast(board, board.shots.find(s => s.id === id)!).filter(c => (record.cast ?? []).find(x => x.token === c.token)?.status !== 'done');
       if (notReady.length) return fail(`Sheet ${notReady.map(c => c.name).join(', ')} belum siap — buat sheet dulu.`);
-      const reference = await referenceOf(ctx, storyId, board, input, 'reference');
+      // Planned only: a media pointer is copied in execute, after the user confirmed.
+      const reference = await referencePlan(ctx, storyId, board, input, 'reference');
       const { estimate, cost } = await imageEstimate(ctx, board, 1);
       const refNote = reference && !imageEngine(board) ? ` ${FLOW_REFERENCE_NOTE}` : '';
       return { label: `Gambar ulang keyframe shot ${n} (1 gambar, ${cost})${refNote}`, estimate, payload: { id, n, note, reference: reference && imageEngine(board) ? reference : undefined } };
     },
     execute: async (ctx, storyId, _input, plan) => {
-      const { id, n, note, reference } = plan.payload as { id: string; n: number; note?: string; reference?: string };
-      await ctx.stories.redrawFrame(storyId, id, undefined, { ...(note ? { note } : {}), ...(reference ? { reference } : {}) });
+      const { id, n, note, reference } = plan.payload as { id: string; n: number; note?: string; reference?: RefPlan };
+      await keepReference(ctx, storyId, reference);
+      try {
+        await ctx.stories.redrawFrame(storyId, id, undefined, { ...(note ? { note } : {}), ...(reference ? { reference: reference.rel } : {}) });
+      } catch (error) {
+        await dropReference(ctx, storyId, reference).catch(() => undefined);
+        throw error;
+      }
       return { ok: true, label: `Keyframe shot ${n} sedang digambar ulang` };
     }
   }),
 
   prepare: spending({
-    description: 'Make the character sheets and keyframes that are still missing (konsisten projects), for one scene or the whole project. Free on Flow, paid on OpenRouter image engines; it queues jobs: set confirm=true only after the user agreed to the shown cost.',
-    schema: obj({ scene: SCENE_REF, confirm: CONFIRM }),
+    description: 'Make the character sheets and keyframes that are still missing (konsisten projects), for one scene or the whole project. Free on Flow, paid on OpenRouter image engines; it queues jobs. The first call only returns the cost; the app then asks the user to confirm, and only a confirmed call queues anything (you cannot confirm it yourself).',
+    schema: obj({ scene: SCENE_REF }),
     plan: async (ctx, _storyId, input, record, board) => {
       if (record.mode !== 'konsisten') return fail('Keyframe hanya untuk mode konsisten.');
       const target = ref(input, 'scene');
@@ -950,8 +1047,8 @@ export const ACTIONS: Record<ActionName, Action> = {
   }),
 
   render: spending({
-    description: `Render video clips of one shot, one scene or every shot not done yet. ${SHOT_DESCRIPTION_RULE} Spends Flow credits (10 per clip) or OpenRouter money: set confirm=true only after the user agreed to the shown cost.`,
-    schema: obj({ shot: SHOT_REF, scene: SCENE_REF, confirm: CONFIRM }),
+    description: `Render video clips of one shot, one scene or every shot not done yet. ${SHOT_DESCRIPTION_RULE} Spends Flow credits (10 per clip) or OpenRouter money. The first call only returns the cost; the app then asks the user to confirm, and only a confirmed call queues anything (you cannot confirm it yourself).`,
+    schema: obj({ shot: SHOT_REF, scene: SCENE_REF }),
     plan: async (ctx, _storyId, input, record, board) => {
       const shotTarget = ref(input, 'shot');
       const sceneTarget = ref(input, 'scene');
@@ -960,12 +1057,13 @@ export const ACTIONS: Record<ActionName, Action> = {
       const scene = shot || sceneTarget === undefined ? undefined : sceneRef(b, sceneTarget);
       const ids = new Set(shot ? [shot.id] : scene ? b.scenes!.find(s => s.id === scene.id)!.shots : b.shots.map(s => s.id));
       const reuse = new Set(b.shots.filter(s => s.reuse).map(s => s.id));
-      const run = record.shots.filter(s => ids.has(s.id));
+      // Only the clips that will actually be rendered: done and reused shots are not touched.
+      const run = record.shots.filter(s => ids.has(s.id) && !reuse.has(s.id) && (s.status === 'pending' || s.status === 'failed'));
       if (record.mode === 'konsisten') {
         const missing = run.filter(s => s.frame && s.frame.status !== 'done').map(s => shotNumber(b, s.id));
         if (missing.length) return fail(`Keyframe shot ${missing.join(', ')} belum siap — jalankan prepare dulu.`);
       }
-      const todo = run.filter(s => !reuse.has(s.id) && (s.status === 'pending' || s.status === 'failed')).length;
+      const todo = run.length;
       const what = shot ? `shot ${shot.n}` : scene ? `scene ${scene.n}` : 'semua shot';
       if (!todo) return { ok: true, label: `Tidak ada klip yang perlu dirender untuk ${what}.`, changed: false };
       const video = videoEngine(b);
@@ -989,8 +1087,8 @@ export const ACTIONS: Record<ActionName, Action> = {
   }),
 
   assemble: spending({
-    description: 'Assemble the final video from the finished clips (every shot must be done). Costs nothing but rebuilds the video: set confirm=true only after the user agreed.',
-    schema: obj({ confirm: CONFIRM }),
+    description: 'Assemble the final video from the finished clips (every shot must be done). Costs nothing but rebuilds the video. The first call only returns the cost; the app then asks the user to confirm, and only a confirmed call queues anything (you cannot confirm it yourself).',
+    schema: obj({}),
     plan: async () => ({ label: 'Rakit video final (gratis)', estimate: { credits: 0 } }),
     execute: async (ctx, storyId) => {
       const record = await ctx.stories.assemble(storyId);
@@ -1026,12 +1124,18 @@ export const ACTIONS: Record<ActionName, Action> = {
   }
 };
 
-/** Run an action by name with an untrusted input (chat tool call / MCP): unknown names and non-object inputs are plain errors. */
+/**
+ * Run an action by name with an untrusted input (chat tool call / MCP): unknown names and
+ * non-object inputs are plain errors, and a `confirm` key is stripped — spending is confirmed only
+ * through `ctx.confirmed`.
+ */
 export async function runAction(ctx: ActionContext, storyId: string, name: string, input: unknown): Promise<ActionResult> {
   if (!(ACTION_NAMES as readonly string[]).includes(name)) return fail(`Aksi "${clip(name, 40)}" tidak ada.`);
   const args = input === undefined || input === null ? {} : input;
   if (typeof args !== 'object' || Array.isArray(args)) return fail('Input aksi harus objek JSON.');
-  return ACTIONS[name as ActionName].run(ctx, storyId, args as ActionInput);
+  // Confirmation belongs to the caller (ctx.confirmed): a `confirm` the model wrote is dropped.
+  const { confirm: _confirm, ...rest } = args as ActionInput;
+  return ACTIONS[name as ActionName].run(ctx, storyId, rest);
 }
 
 /** OpenAI function specs of every action (chat tool loop, MCP tool list). */

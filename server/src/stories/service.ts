@@ -950,10 +950,15 @@ export class StoryService {
         Object.assign(state, { status: 'pending', attempts: 0, error: undefined });
       }
       state.frame = { status: 'pending', attempts: 0 };
+      // The note rides on this one frame take; a repair pending for the shot (its clip) is kept.
       const note = opts.note?.trim();
-      if (note) state.auditRepair = [state.auditRepair, note].filter(Boolean).join(' ');
-      await this.queueFrame(record, board, shotId, reference);
-      if (note) state.auditRepair = undefined;
+      const previousRepair = state.auditRepair;
+      if (note) state.auditRepair = [previousRepair, note].filter(Boolean).join(' ');
+      try {
+        await this.queueFrame(record, board, shotId, reference);
+      } finally {
+        if (note) state.auditRepair = previousRepair;
+      }
       record.run = { shots: [shotId] };
       record.status = 'framing';
       record.error = undefined;
