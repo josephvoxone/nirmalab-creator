@@ -14,9 +14,18 @@ import { validateBible, type SceneCard, type StoryBible } from '../bible/story.j
 import { LEGACY_STYLE_MAP, compileStyleSentence, lookById, type StyleBible } from '../bible/styles.js';
 import { CATALOG } from './looks.js';
 import { AXCEL_MODELS, isAxcelModel, type AxcelModel } from '../providers/axcel.js';
+import { MUSIC_FILE } from './music.js';
+
+/** Timeline In/Out inside the rendered clip, seconds (absent out = the clip's end). */
+export type ShotTrim = { in?: number; out?: number };
+/** The music track: the stored file, where it starts on the timeline (`at`) and inside the song (`from`). */
+export type EditMusic = { file: string; name: string; seconds: number; volume: number; at: number; from?: number };
+/** Timeline edits applied at assembly only: never part of a clip prompt, so they never re-render. */
+export type TimelineEdit = { clipVolume?: number; subtitles?: boolean; music?: EditMusic };
 
 export type Shot = {
   id: string;
+  trim?: ShotTrim;
   prompt: string;
   narration?: string;
   /** No voice-over: uses `audioSilent` (intro/outro beats). */
@@ -71,6 +80,7 @@ export type Storyboard = {
   narrator?: string;
   audio?: string;
   audioSilent?: string;
+  edit?: TimelineEdit;
   /** 'ambient': no voice in any clip, only the sound of the place (music is added later in the edit). */
   audioMode?: 'narration' | 'ambient';
   negative?: string;
@@ -404,6 +414,7 @@ export function validateStoryboard(board: Storyboard): string[] {
   errors.push(...validateBreakdown(board));
   errors.push(...validateEngine(board.engine));
   if (board.audioMode !== undefined && board.audioMode !== 'narration' && board.audioMode !== 'ambient') errors.push('audioMode must be narration or ambient');
+  errors.push(...validateEdit(board));
   return errors;
 }
 
@@ -461,4 +472,52 @@ function validateBreakdown(board: Storyboard): string[] {
     }
   }
   return errors;
+}
+
+const isNum = (v: unknown, min: number, max: number) => typeof v === 'number' && Number.isFinite(v) && v >= min && v <= max;
+
+/** Trims and the timeline edit (music, clip volume, subtitles). */
+export function validateEdit(board: Storyboard): string[] {
+  const errors: string[] = [];
+  for (const shot of board.shots) {
+    const t = shot.trim as unknown;
+    if (t === undefined) continue;
+    const trim = t as ShotTrim;
+    if (!t || typeof t !== 'object' || (trim.in !== undefined && !isNum(trim.in, 0, 60)) || (trim.out !== undefined && !isNum(trim.out, 0.5, 60))
+      || (trim.out !== undefined && trim.out <= (trim.in ?? 0))) {
+      errors.push(`${shot.id}: trim must be { in, out } seconds with 0 ≤ in < out ≤ 60`);
+    }
+  }
+  const e = board.edit as unknown;
+  if (e === undefined) return errors;
+  if (!e || typeof e !== 'object' || Array.isArray(e)) return [...errors, 'edit must be an object'];
+  const edit = e as TimelineEdit;
+  if (edit.clipVolume !== undefined && !isNum(edit.clipVolume, 0, 2)) errors.push('edit.clipVolume must be 0..2');
+  if (edit.subtitles !== undefined && typeof edit.subtitles !== 'boolean') errors.push('edit.subtitles must be true or false');
+  const m = edit.music as unknown as Record<string, unknown> | undefined;
+  if (m !== undefined) {
+    if (!m || typeof m !== 'object') errors.push('edit.music must be an object');
+    else {
+      if (typeof m.file !== 'string' || !MUSIC_FILE.test(m.file)) errors.push('edit.music.file must be the uploaded music file');
+      if (typeof m.name !== 'string' || m.name.length > 120) errors.push('edit.music.name must be text (≤ 120)');
+      if (!isNum(m.seconds, 0, 3600)) errors.push('edit.music.seconds must be the song length');
+      if (!isNum(m.volume, 0, 2)) errors.push('edit.music.volume must be 0..2');
+      if (!isNum(m.at, 0, 3600)) errors.push('edit.music.at must be ≥ 0 seconds');
+      if (m.from !== undefined && !isNum(m.from, 0, 3600)) errors.push('edit.music.from must be ≥ 0 seconds');
+    }
+  }
+  return errors;
+}
+
+/** What the assembled video depends on besides the clips: a change means "assemble again". */
+export function editPrint(board: Storyboard): string {
+  return JSON.stringify({
+    e: board.edit ?? null,
+    s: board.shots.map(s => [s.id, s.trim ?? null, board.edit?.subtitles ? narrationOf(s) : null])
+  });
+}
+
+/** The spoken/subtitled line of a shot (bible shots may keep it on the intent). */
+export function narrationOf(shot: Shot): string {
+  return ((shot.intent as { narration?: string } | undefined)?.narration ?? shot.narration ?? '').trim();
 }

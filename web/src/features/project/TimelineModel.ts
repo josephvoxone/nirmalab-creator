@@ -13,7 +13,49 @@ export type ClipStatus = 'pending' | 'queued' | 'done' | 'failed';
 export type TimelineClip = {
   shotId: string; sceneId: string; index: number; start: number; seconds: number;
   status: ClipStatus; narration: string; frame?: string; frameDone: boolean; clipVersion?: string;
+  /** Trim: where the clip starts inside its file, its full length, and the raw subtitle line. */
+  trimIn: number; trimOut?: number; full: number; line: string;
 };
+
+export type Trim = { in?: number; out?: number };
+export type MusicEdit = { file: string; name: string; seconds: number; volume: number; at: number; from?: number };
+export type TimelineEdit = { clipVolume?: number; subtitles?: boolean; music?: MusicEdit };
+export const MIN_CLIP = 1;
+const r3 = (n: number) => Math.round(n * 1000) / 1000;
+
+/** The In..Out window a clip plays: never shorter than 1 s, the Out point stays (bridge/py/assemble.py clip_window). */
+export function clipWindow(trim: Trim | undefined, full: number): { start: number; seconds: number } {
+  let end = Math.min(trim?.out ?? full, full);
+  let start = Math.max(0, trim?.in ?? 0);
+  if (end - start < MIN_CLIP) {
+    start = Math.max(0, end - MIN_CLIP);
+    if (end - start < MIN_CLIP) end = start + MIN_CLIP;
+  }
+  return { start: r3(start), seconds: r3(Math.min(end, full) - start) };
+}
+
+export const editOf = (b: Board): TimelineEdit => (b.edit && typeof b.edit === 'object' ? b.edit as TimelineEdit : {});
+const shotLine = (s: Board['shots'][number]) => (((s as { intent?: { narration?: string } }).intent?.narration ?? s.narration) ?? '').trim();
+
+/** The board with one shot's trim set (undefined or a no-op window = no trim). */
+export function withTrim(b: Board, shotId: string, trim: Trim | undefined): Board {
+  const clean = trim && (trim.in || trim.out !== undefined)
+    ? { ...(trim.in ? { in: r3(trim.in) } : {}), ...(trim.out !== undefined ? { out: r3(trim.out) } : {}) }
+    : undefined;
+  return { ...b, shots: b.shots.map(s => {
+    if (s.id !== shotId) return s;
+    const { trim: _old, ...rest } = s as typeof s & { trim?: Trim };
+    return clean ? { ...rest, trim: clean } : rest;
+  }) };
+}
+
+/** The board with the timeline edit patched; an empty edit is dropped. */
+export function withEdit(b: Board, patch: Partial<TimelineEdit>): Board {
+  const next: Record<string, unknown> = { ...editOf(b), ...patch };
+  for (const k of Object.keys(next)) if (next[k] === undefined) delete next[k];
+  const { edit: _old, ...rest } = b;
+  return Object.keys(next).length ? { ...rest, edit: next } : rest as Board;
+}
 export type TimelineScene = { id: string; title: string; index: number; start: number; seconds: number; shots: number };
 export type TimelineLayout = { total: number; scenes: TimelineScene[]; clips: TimelineClip[] };
 
@@ -40,18 +82,23 @@ export function timelineLayout(input: Board, story?: Story): TimelineLayout {
     for (const id of scene.shots) {
       const shot = byId.get(id)!;
       const st = state.get(id);
-      const seconds = st?.durationSec && st.durationSec > 0 ? st.durationSec : SECONDS_PER_SHOT;
+      const full = st?.durationSec && st.durationSec > 0 ? st.durationSec : SECONDS_PER_SHOT;
+      const trim = (shot as { trim?: Trim }).trim;
+      const window = clipWindow(trim, full);
+      const seconds = window.seconds;
+      const line = shot.silent ? '' : shotLine(shot);
       clips.push({
         shotId: id, sceneId: scene.id, index: clips.length, start: t, seconds,
         status: st?.status ?? 'pending',
-        narration: shot.silent || !shot.narration?.trim() ? '—' : shot.narration.trim(),
-        frame: st?.frame?.mediaId, frameDone: st?.frame?.status === 'done', clipVersion: st?.jobId ?? (st ? String(st.attempts) : undefined)
+        narration: line || '—',
+        frame: st?.frame?.mediaId, frameDone: st?.frame?.status === 'done', clipVersion: st?.jobId ?? (st ? String(st.attempts) : undefined),
+        trimIn: window.start, ...(trim?.out !== undefined ? { trimOut: trim.out } : {}), full, line
       });
       t += seconds;
     }
     scenes.push({ id: scene.id, title: scene.title, index: si, start, seconds: t - start, shots: scene.shots.length });
   });
-  return { total: t || SECONDS_PER_SHOT, scenes, clips };
+  return { total: r3(t) || SECONDS_PER_SHOT, scenes, clips };
 }
 
 const mmss = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
@@ -136,10 +183,13 @@ export function sequenceClips(id: string, board: Board, story: Story, shotIds?: 
   const pw = playerPosterWidth(300, board.aspect);
   const titles = new Map(l.scenes.map(s => [s.id, s.title]));
   const want = shotIds ? new Set(shotIds) : undefined;
+  const subtitles = editOf(board).subtitles === true;
   return l.clips.filter(c => !want || want.has(c.shotId)).map(c => ({
     id: c.shotId,
     label: `Shot ${c.index + 1} · ${titles.get(c.sceneId) ?? ''}`,
     seconds: c.seconds,
+    ...(c.status === 'done' && (c.trimIn > 0 || c.seconds < c.full) ? { from: c.trimIn, to: r3(c.trimIn + c.seconds) } : {}),
+    ...(subtitles && c.line ? { caption: c.line } : {}),
     src: c.status === 'done' ? media.clip(id, c.shotId, c.clipVersion) : undefined,
     // rendered: the clip's own poster (never a black box); else its keyframe still
     poster: c.status === 'done' ? poster.shot(id, c.shotId, pw, c.clipVersion) : c.frameDone ? sized(media.frame(id, c.shotId, c.frame), pw) : undefined

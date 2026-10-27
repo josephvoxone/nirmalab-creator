@@ -104,6 +104,10 @@ export function storiesApi(fetchImpl: FetchLike) {
     makeSheet: (id: string, token: string, confirm: boolean, rev?: number) => requestJson<SheetAnswer>(fetchImpl, `/api/stories/${id}/cast/${token}/sheet`, post(confirm ? { confirm: true, ...(typeof rev === 'number' ? { rev } : {}) } : {})),
     /** Raw image body (no multipart): the Content-Type names the format. */
     upload: (id: string, file: Blob, signal?: AbortSignal) => requestJson<Upload>(fetchImpl, `/api/stories/${id}/uploads`, { method: 'POST', body: file, headers: { 'Content-Type': file.type }, ...(signal ? { signal } : {}) }),
+    /** Timeline music (one per project): raw audio body, the name in a header. */
+    uploadMusic: (id: string, file: File) => requestJson<{ file: string; name: string; seconds: number }>(fetchImpl, `/api/stories/${id}/music`, {
+      method: 'POST', body: file, headers: { 'Content-Type': file.type || 'audio/mpeg', 'X-File-Name': encodeURIComponent(file.name) }
+    }),
     /** `uploads/up_….png` on a card → the URL that serves it. */
     uploadUrl: (id: string, rel: string) => `/api/stories/${id}/uploads/${rel.replace(/^uploads\//, '')}`,
     render: (id: string, force: boolean, scope: { scene?: string; shot?: string } = {}) => requestJson<{ story: Story }>(fetchImpl, `/api/stories/${id}/render`, post({ force, ...scope })),

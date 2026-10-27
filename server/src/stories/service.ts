@@ -14,7 +14,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type { FlowStore } from '../flow/store.js';
 import { linkOrCopy } from '../media/link.js';
-import { AXCEL_PROJECT_RESOLUTION, CREDITS_PER_SHOT, axcelClipSec, bibleSceneFor, isSilent, castOf, frameHashFor, framePromptFor, hashFor, normalizeScenes, sceneOf, sheetHashFor, sheetPromptFor, shotCast, shotPromptFor, validateStoryboard, type Shot, type Storyboard } from './storyboard.js';
+import { AXCEL_PROJECT_RESOLUTION, CREDITS_PER_SHOT, axcelClipSec, bibleSceneFor, editPrint, isSilent, narrationOf, castOf, frameHashFor, framePromptFor, hashFor, normalizeScenes, sceneOf, sheetHashFor, sheetPromptFor, shotCast, shotPromptFor, validateStoryboard, type Shot, type Storyboard } from './storyboard.js';
 import { ShotCompileError } from '../bible/compiler.js';
 import { bibleSceneErrors, syncBible } from '../bible/sync.js';
 import { SnapshotStore, type RestoreAttention, type RestoreOutcome } from './snapshots.js';
@@ -23,6 +23,7 @@ import { AUDIT_GATE, AuditParseError, MAX_AUDIT_IMAGES, type AuditDimensions, ty
 import { composeStyle, resolveLook } from './looks.js';
 import { usdLabel } from '../providers/catalog.js';
 import { uploadPath } from '../assistant/uploads.js';
+import { MUSIC_FILE, NOT_AUDIO_MESSAGE, NO_SOUND_MESSAGE, musicExt } from './music.js';
 
 const MIN_IMAGE_BYTES = 10_000;
 
@@ -272,6 +273,39 @@ export class StoryService {
     await this.writeJson(join(this.storyDir(record.id), 'story.json'), record);
   }
 
+  /** The project's music file (`music.<ext>`), when one was uploaded. */
+  async musicPath(id: string): Promise<string | undefined> {
+    const dir = this.storyDir(id);
+    const name = (await readdir(dir).catch(() => [] as string[])).find(f => MUSIC_FILE.test(f));
+    return name ? join(dir, name) : undefined;
+  }
+
+  /**
+   * Store the timeline music (one per project; a new upload replaces the old). Audio is recognised by
+   * its bytes and must hold a sound stream; the board points at it only when the user saves the edit.
+   */
+  async saveMusic(id: string, bytes: Buffer, name: string): Promise<{ file: string; name: string; seconds: number }> {
+    await this.require(id);
+    const ext = musicExt(bytes);
+    if (!ext) throw new StoryError('INVALID', NOT_AUDIO_MESSAGE);
+    const dir = this.storyDir(id);
+    const tmp = join(dir, `.music-${randomBytes(6).toString('hex')}.${ext}`);
+    await writeFile(tmp, bytes);
+    let seconds: number;
+    try {
+      const probe = await this.deps.probe(tmp);
+      if (!probe.hasAudio || !(probe.durationSec > 0)) throw new StoryError('INVALID', NO_SOUND_MESSAGE);
+      seconds = Math.round(probe.durationSec * 100) / 100;
+    } catch (error) {
+      await rm(tmp, { force: true });
+      throw error instanceof StoryError ? error : new StoryError('INVALID', NOT_AUDIO_MESSAGE);
+    }
+    for (const old of (await readdir(dir)).filter(f => MUSIC_FILE.test(f))) await rm(join(dir, old), { force: true });
+    const file = `music.${ext}`;
+    await rename(tmp, join(dir, file));
+    return { file, name: name.trim().slice(0, 120) || 'Musik', seconds };
+  }
+
   async readStoryboard(id: string): Promise<Storyboard> {
     return normalizeScenes(JSON.parse(await readFile(join(this.storyDir(id), 'storyboard.json'), 'utf8')) as Storyboard);
   }
@@ -427,7 +461,7 @@ export class StoryService {
       record.gate = undefined;
       // The cut is stale only when what plays changes (order or a take), not scene titles/splits.
       const cut = (shots: ShotState[]) => shots.map(s => `${s.id}:${s.status}:${s.jobId ?? ''}`).join('|');
-      if (record.video && changed && cut(record.shots) !== cut([...previous.values()])) record.videoStale = true;
+      if (record.video && changed && (cut(record.shots) !== cut([...previous.values()]) || !before || editPrint(board) !== editPrint(before))) record.videoStale = true;
       record.status = idleStatus(record);
       if (changed) record.rev += 1;
       for (const [source, target] of links) await linkOrCopy(source, target);
@@ -796,10 +830,17 @@ export class StoryService {
 
   private async writeAssemblyPlan(record: StoryRecord, board: Storyboard): Promise<void> {
     const dir = this.storyDir(record.id);
+    const music = board.edit?.music;
     const plan = {
       ...board,
       slug: 'final',
-      shots: board.shots.map(s => (s.reuse ? { ...s, reuse: { file: join(dir, `${s.id}.mp4`), start: s.reuse.start ?? 0 } } : s))
+      // The subtitle line of each shot travels with it (bible shots keep it on the intent).
+      shots: board.shots.map(s => ({ ...(s.reuse ? { ...s, reuse: { file: join(dir, `${s.id}.mp4`), start: s.reuse.start ?? 0 } } : s), narration: narrationOf(s) })),
+      edit: board.edit ? {
+        ...(board.edit.clipVolume !== undefined ? { clipVolume: board.edit.clipVolume } : {}),
+        ...(board.edit.subtitles ? { subtitles: true } : {}),
+        ...(music ? { music: { path: join(dir, music.file), volume: music.volume, at: music.at, ...(music.from ? { from: music.from } : {}) } } : {})
+      } : undefined
     };
     await this.writeJson(join(dir, 'assemble.json'), plan);
   }

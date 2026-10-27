@@ -14,6 +14,7 @@ import { ACTIONS, type ActionContext, type ActionResult } from '../assistant/act
 import { sceneNumber } from '../assistant/resolve.js';
 import { MAX_UPLOAD_BYTES, NOT_IMAGE_MESSAGE, TOO_LARGE_MESSAGE, UPLOAD_FILE, UPLOAD_TYPES, UploadError, mimeOfFile, saveUpload, uploadsDir } from '../assistant/uploads.js';
 import type { TextModel } from '../llm/opencode.js';
+import { MAX_MUSIC_BYTES, MUSIC_MIME, MUSIC_TOO_LARGE_MESSAGE, MUSIC_TYPES, NOT_AUDIO_MESSAGE, type MusicExt } from './music.js';
 
 const STATUS: Record<StoryError['code'], number> = { INVALID: 400, NOT_FOUND: 404, BUSY: 409, BUDGET: 409, STALE: 409 };
 
@@ -29,10 +30,10 @@ function failDraft(reply: FastifyReply, error: DraftError, log: FastifyBaseLogge
   return reply.code(503).send({ error: { code: 'STORY_FAILED', message: error.plain } });
 }
 
-function sendVideo(reply: FastifyReply, file: string, range: string | undefined) {
+function sendVideo(reply: FastifyReply, file: string, range: string | undefined, type = 'video/mp4') {
   if (!existsSync(file)) return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Video belum ada' } });
   const size = statSync(file).size;
-  reply.header('content-type', 'video/mp4').header('accept-ranges', 'bytes').header('cache-control', 'private, no-cache');
+  reply.header('content-type', type).header('accept-ranges', 'bytes').header('cache-control', 'private, no-cache');
   const m = range?.match(/^bytes=(\d*)-(\d*)$/);
   if (m && (m[1] || m[2])) {
     const start = m[1] ? Number(m[1]) : Math.max(0, size - Number(m[2]));
@@ -362,6 +363,39 @@ export async function registerStoryRoutes(
         return fail(reply, error);
       }
     });
+  });
+
+  // Timeline music: raw audio body, the type proven by its bytes, 25 MB, one file per project.
+  await server.register(async scope => {
+    scope.addContentTypeParser([...MUSIC_TYPES], { parseAs: 'buffer', bodyLimit: MAX_MUSIC_BYTES }, (_request, body, done) => done(null, body));
+    scope.setErrorHandler((error: { statusCode?: number; message?: string }, _request, reply) => {
+      if (error.statusCode === 413) return reply.code(413).send({ error: { code: 'TOO_LARGE', message: MUSIC_TOO_LARGE_MESSAGE } });
+      if (error.statusCode === 415 || error.statusCode === 400) return reply.code(400).send({ error: { code: 'INVALID', message: NOT_AUDIO_MESSAGE } });
+      return fail(reply, error);
+    });
+    scope.post<{ Params: { id: string } }>('/api/stories/:id/music', {
+      bodyLimit: MAX_MUSIC_BYTES,
+      onRequest: async (request, reply) => { if (!requireAdmin(auth, request, reply)) return reply; return undefined; }
+    }, async (request, reply) => {
+      try {
+        if (!(await stories.get(request.params.id))) return notFound(reply, 'Story');
+        if (!Buffer.isBuffer(request.body)) return badRequest(reply, NOT_AUDIO_MESSAGE);
+        const raw = String(request.headers['x-file-name'] ?? '');
+        let name = '';
+        try { name = decodeURIComponent(raw); } catch { name = ''; }
+        return reply.code(201).send(await stories.saveMusic(request.params.id, request.body, name.replace(/[\u0000-\u001f]/g, '')));
+      } catch (error) { return fail(reply, error); }
+    });
+  });
+
+  server.get<{ Params: { id: string } }>('/api/stories/:id/music', async (request, reply) => {
+    if (!member(request, reply)) return undefined;
+    try {
+      if (!(await stories.get(request.params.id))) return notFound(reply, 'Story');
+      const file = await stories.musicPath(request.params.id);
+      if (!file) return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Musik belum diunggah' } });
+      return sendVideo(reply, file, request.headers.range, MUSIC_MIME[file.split('.').pop() as MusicExt]);
+    } catch (error) { return fail(reply, error); }
   });
 
   server.get<{ Params: { id: string; file: string } }>('/api/stories/:id/uploads/:file', async (request, reply) => {

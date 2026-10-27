@@ -5,6 +5,10 @@
 
 Keeps Veo's native audio (voice-over + ambience), crossfades between shots,
 animated title card (title_card.py) over the opening shot, fade to black at the end, -14 LUFS / -1 dBTP.
+
+Timeline edits (plan `edit` + per-shot `trim`): each clip plays its In..Out window, the clip audio
+is scaled by `clipVolume`, a music file is delayed to its start and mixed under the clips, and the
+narration lines can be burned in as subtitles (libass), timed to their clips on the output clock.
 """
 import json
 import os
@@ -26,7 +30,56 @@ def xfade_offsets(durations, xf):
     return offsets
 
 
-def filter_graph(durations, xf, transitions=None, title_input=None, total=None):
+MIN_CLIP = 1.0
+
+
+def clip_window(shot, full):
+    """(start, length) a clip plays: its trim In..Out inside the file, never shorter than MIN_CLIP."""
+    trim = shot.get('trim') or {}
+    end = min(float(trim.get('out', full) or full), full)
+    start = max(0.0, float(trim.get('in', 0) or 0))
+    if end - start < MIN_CLIP:
+        start = max(0.0, end - MIN_CLIP)
+        end = start + MIN_CLIP if end - start < MIN_CLIP else end
+    return round(start, 3), round(min(end, full) - start, 3)
+
+
+def subtitle_events(durations, xf, texts):
+    """(start, end, text) per clip with text, on the output clock (clips overlap by the crossfade)."""
+    events, t = [], 0.0
+    for i, (d, text) in enumerate(zip(durations, texts)):
+        end = t + d - (xf if i < len(durations) - 1 else 0)
+        if text and text.strip():
+            events.append((round(t, 3), round(end, 3), text.strip()))
+        t = round(t + d - xf, 3)
+    return events
+
+
+def _ass_time(t):
+    cs = int(round(t * 100))
+    return f'{cs // 360000}:{cs // 6000 % 60:02d}:{cs // 100 % 60:02d}.{cs % 100:02d}'
+
+
+def ass_document(events, w, h):
+    """Bottom-centred white captions with a dark outline, sized for the frame."""
+    size = round(h * 0.034)
+    lines = [
+        '[Script Info]', 'ScriptType: v4.00+', f'PlayResX: {w}', f'PlayResY: {h}', 'WrapStyle: 0', '',
+        '[V4+ Styles]',
+        'Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, '
+        'ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding',
+        f'Style: Default,DejaVu Sans,{size},&H00FFFFFF,&H00FFFFFF,&H00101010,&H64000000,1,0,0,0,100,100,0,0,1,{max(2, size // 14)},1,2,'
+        f'{round(w * 0.08)},{round(w * 0.08)},{round(h * 0.14)},1',
+        '', '[Events]', 'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text'
+    ]
+    for start, end, text in events:
+        safe = text.replace('{', '(').replace('}', ')').replace('\r', '').replace('\n', '\\N')
+        lines.append(f'Dialogue: 0,{_ass_time(start)},{_ass_time(end)},Default,,0,0,0,,{safe}')
+    return '\n'.join(lines) + '\n'
+
+
+def filter_graph(durations, xf, transitions=None, title_input=None, total=None,
+                 clip_volume=None, music_input=None, music=None, subtitles=None):
     parts = []
     n = len(durations)
     for i in range(n):
@@ -47,10 +100,24 @@ def filter_graph(durations, xf, transitions=None, title_input=None, total=None):
         parts.append(f'[{title_input}:v]format=rgba,setpts=PTS-STARTPTS[ttl]')
         parts.append(f'[{vprev}][ttl]overlay=0:0:eof_action=pass[vt]')
         video = '[vt]'
+    if subtitles:
+        video += f"subtitles=filename={subtitles}:fontsdir=/usr/share/fonts/truetype/dejavu,"
     if total:
         video += f'fade=t=in:st=0:d=0.8,fade=t=out:st={round(total - 1.2, 3)}:d=1.2,'
     parts.append(video.rstrip(',') + '[vout]' if video not in (f'[{vprev}]', '[vt]') else video + 'null[vout]')
     audio = f'[{aprev}]'
+    if clip_volume is not None and abs(float(clip_volume) - 1.0) > 1e-6:
+        audio += f'volume={round(float(clip_volume), 3)},'
+    if music_input is not None and music:
+        at_ms = int(round(float(music.get('at', 0)) * 1000))
+        tail = f'atrim=0:{round(total - float(music.get("at", 0)), 3)},' if total else ''
+        parts.append(
+            f'[{music_input}:a]aformat=sample_rates=48000:channel_layouts=stereo,asetpts=PTS-STARTPTS,{tail}'
+            f'volume={round(float(music.get("volume", 0.35)), 3)},adelay={at_ms}|{at_ms}[mus]'
+        )
+        parts.append(audio.rstrip(',') + ('[clipa]' if audio != f'[{aprev}]' else 'anull[clipa]'))
+        parts.append('[clipa][mus]amix=inputs=2:duration=first:normalize=0[mixa]')
+        audio = '[mixa]'
     if total:
         audio += f'afade=t=in:st=0:d=0.6,afade=t=out:st={round(total - 1.2, 3)}:d=1.2,'
     audio += 'loudnorm=I=-14:TP=-1.5:LRA=11:linear=true,alimiter=limit=0.794:level=disabled,aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo'
@@ -88,6 +155,7 @@ def main(arg):
     story_path, out_dir = resolve(arg)
     story = json.load(open(story_path))
     inputs, durations, transitions = [], [], []
+    edit = story.get('edit') or {}
     for shot in story['shots']:
         if shot.get('reuse'):
             src = expand(shot['reuse']['file'])
@@ -98,8 +166,8 @@ def main(arg):
             src = os.path.join(out_dir, f"{shot['id']}.mp4")
             if not os.path.exists(src):
                 sys.exit(f'missing shot {shot["id"]}: {src}')
-            dur = probe_duration(src)
-            inputs += ['-i', src]
+            start, dur = clip_window(shot, probe_duration(src))
+            inputs += (['-ss', str(start)] if start else []) + ['-t', f'{dur:.3f}', '-i', src]
         durations.append(round(dur, 3))
         transitions.append(shot.get('transition', 'fade'))
     # keep crossfades shorter than the silence after each shot's narration (Veo lines end ~5.3-5.7 s of 6 s)
@@ -114,7 +182,22 @@ def main(arg):
         card.write_sequence(seq, FPS)
         title_input = len(durations)
         inputs += ['-framerate', str(FPS), '-i', os.path.join(seq, '%04d.png')]
-    graph = filter_graph(durations, xf, transitions[1:], title_input=title_input, total=total)
+    music_input, music = None, edit.get('music')
+    if music and music.get('path') and os.path.exists(music['path']):
+        music_input = sum(1 for a in inputs if a == '-i')
+        inputs += (['-ss', str(float(music.get('from', 0)))] if music.get('from') else []) + ['-i', music['path']]
+    else:
+        music = None
+    subs_dir, subs = None, None
+    if edit.get('subtitles'):
+        texts = [s.get('narration', '') or '' for s in story['shots']]
+        events = subtitle_events(durations, xf, texts)
+        if events:
+            subs_dir = tempfile.mkdtemp(prefix='subs-')
+            subs = os.path.join(subs_dir, 'subs.ass')
+            open(subs, 'w', encoding='utf-8').write(ass_document(events, W, H))
+    graph = filter_graph(durations, xf, transitions[1:], title_input=title_input, total=total,
+                         clip_volume=edit.get('clipVolume'), music_input=music_input, music=music, subtitles=subs)
     final = os.path.join(out_dir, f"{story['slug']}.mp4")
     cmd = ['ffmpeg', '-y', '-v', 'error', *inputs, '-filter_complex', graph, '-map', '[vout]', '-map', '[aout]',
            '-c:v', 'libx264', '-preset', 'slow', '-crf', '18', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '192k',
@@ -127,6 +210,8 @@ def main(arg):
     finally:
         if card_cfg:
             shutil.rmtree(seq, ignore_errors=True)
+        if subs_dir:
+            shutil.rmtree(subs_dir, ignore_errors=True)
     print(json.dumps({'file': final, 'shots': len(durations), 'durations': durations, 'total': total}))
 
 

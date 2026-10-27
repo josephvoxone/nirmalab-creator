@@ -240,5 +240,6 @@ export const media = {
   frame: (id: string, shotId: string, v = '') => `/api/stories/${id}/shots/${shotId}/frame${v ? `?v=${v}` : ''}`,
   clip: (id: string, shotId: string, v = '') => `/api/stories/${id}/shots/${shotId}/video${v ? `?v=${v}` : ''}`,
   cast: (id: string, token: string, v = '') => `/api/stories/${id}/cast/${token}/image${v ? `?v=${v}` : ''}`,
-  final: (id: string, v = '') => `/api/stories/${id}/video${v ? `?v=${v}` : ''}`
+  final: (id: string, v = '') => `/api/stories/${id}/video${v ? `?v=${v}` : ''}`,
+  music: (id: string, v = '') => `/api/stories/${id}/music${v ? `?v=${encodeURIComponent(v)}` : ''}`
 };

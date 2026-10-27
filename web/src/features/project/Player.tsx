@@ -8,7 +8,10 @@ import { Maximize2, Pause, Play, SkipBack, SkipForward } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 
-export type Clip = { id: string; label: string; src?: string; poster?: string; seconds: number };
+/** `from`/`to`: the trimmed window inside the clip file; `caption`: a subtitle shown over it. */
+export type Clip = { id: string; label: string; src?: string; poster?: string; seconds: number; from?: number; to?: number; caption?: string };
+/** A music track under the sequence: starts at `at` seconds of the sequence, `from` seconds into the song. */
+export type SequenceMusic = { src: string; volume: number; at: number; from?: number };
 
 async function fullscreen(el: HTMLElement | null) {
   if (!el) return;
@@ -39,6 +42,7 @@ export function SequencePlayer(props: {
   index?: number;
   /** Seconds into the current clip, for a playhead. */
   onTime?: (seconds: number) => void;
+  music?: SequenceMusic;
 }) {
   const box = useRef<HTMLDivElement>(null);
   const video = useRef<HTMLVideoElement>(null);
@@ -46,9 +50,26 @@ export function SequencePlayer(props: {
   const [playing, setPlaying] = useState(false);
   const clip = props.clips[i];
   const maxH = props.maxH ?? 320;
+  const audio = useRef<HTMLAudioElement>(null);
+  const [local, setLocal] = useState(0);
+  const report = (t: number) => { setLocal(t); props.onTime?.(t); };
+  const startOf = (n: number) => props.clips.slice(0, n).reduce((sum, c) => sum + c.seconds, 0);
+
+  // Music follows the sequence clock: silent before its start, re-seeked when it drifts.
+  useEffect(() => {
+    const a = audio.current;
+    const m = props.music;
+    if (!a || !m) return;
+    a.volume = Math.max(0, Math.min(1, m.volume));
+    const global = startOf(i) + local;
+    const want = (m.from ?? 0) + global - m.at;
+    if (!playing || want < 0 || (Number.isFinite(a.duration) && want >= a.duration)) { if (!a.paused) a.pause(); return; }
+    if (Math.abs(a.currentTime - want) > 0.35) a.currentTime = want;
+    if (a.paused) Promise.resolve().then(() => a.play()).catch(() => undefined);
+  }, [playing, i, local, props.music]); // eslint-disable-line react-hooks/exhaustive-deps
   const ratio = props.aspect === '16:9' ? 16 / 9 : 9 / 16;
 
-  useEffect(() => { props.onIndex?.(i); props.onTime?.(0); }, [i]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { props.onIndex?.(i); report(0); }, [i]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (props.index !== undefined && props.index >= 0 && props.index < props.clips.length) setI(props.index);
   }, [props.index]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -59,8 +80,8 @@ export function SequencePlayer(props: {
     if (!playing || !clip || clip.src) return;
     const t = setTimeout(() => (i + 1 < props.clips.length ? setI(i + 1) : setPlaying(false)), clip.seconds * 1000);
     const began = Date.now();
-    const tick = props.onTime ? setInterval(() => props.onTime?.(Math.min(clip.seconds, (Date.now() - began) / 1000)), 250) : undefined;
-    return () => { clearTimeout(t); if (tick) clearInterval(tick); };
+    const tick = setInterval(() => report(Math.min(clip.seconds, (Date.now() - began) / 1000)), 250);
+    return () => { clearTimeout(t); clearInterval(tick); };
   }, [playing, clip, i, props.clips.length]);
 
   useEffect(() => {
@@ -74,19 +95,30 @@ export function SequencePlayer(props: {
     return <div className="flex items-center justify-center rounded-md border border-dashed text-[12px] text-muted-foreground" style={{ height: Math.min(maxH, 160) }}>Belum ada shot untuk diputar.</div>;
   }
   const go = (n: number) => setI(Math.max(0, Math.min(props.clips.length - 1, n)));
+  const next = () => (i + 1 < props.clips.length ? setI(i + 1) : setPlaying(false));
   return (
     <div className={cn('flex flex-col gap-1.5', props.className)} role="group" aria-label={props.label}>
       <div ref={box} className="relative mx-auto overflow-hidden rounded-md bg-black" style={{ height: maxH, width: Math.round(maxH * ratio), maxWidth: '100%' }}>
         {clip?.src ? (
           <video key={clip.src} ref={video} src={clip.src} poster={clip.poster} playsInline preload="metadata" aria-label={clip.label}
-            onTimeUpdate={e => props.onTime?.(e.currentTarget.currentTime)}
-            onEnded={() => (i + 1 < props.clips.length ? setI(i + 1) : setPlaying(false))} className="size-full object-contain" />
+            onLoadedMetadata={e => { if (clip.from) e.currentTarget.currentTime = clip.from; }}
+            onTimeUpdate={e => {
+              const t = e.currentTarget.currentTime;
+              // The trimmed Out point ends the clip like its real end does.
+              if (clip.to !== undefined && t >= clip.to - 0.04) { next(); return; }
+              report(Math.max(0, t - (clip.from ?? 0)));
+            }}
+            onEnded={next} className="size-full object-contain" />
         ) : clip?.poster ? (
           <img src={clip.poster} alt={clip.label} decoding="async" className="size-full object-contain opacity-80" />
         ) : (
           <div className="flex size-full items-center justify-center text-[12px] text-white/60">{clip?.label} · belum dirender</div>
         )}
         {clip && !clip.src && <span className="absolute bottom-1.5 left-1.5 rounded bg-black/60 px-1.5 py-0.5 text-[10.5px] text-white/80">Keyframe · belum dirender</span>}
+        {clip?.caption && (
+          <p data-testid="caption" className="pointer-events-none absolute inset-x-[8%] bottom-[14%] text-center text-[13px] leading-snug font-semibold text-white [text-shadow:0_0_3px_#000,0_1px_2px_#000]">{clip.caption}</p>
+        )}
+        {props.music && <audio ref={audio} src={props.music.src} preload="auto" aria-hidden="true" />}
         <Button type="button" size="icon-sm" variant="glass" aria-label={`Layar penuh ${props.label}`} onClick={() => void fullscreen(box.current)} className="absolute top-1.5 right-1.5"><Maximize2 /></Button>
       </div>
       <div className="flex items-center justify-center gap-1 text-[12px] text-muted-foreground">

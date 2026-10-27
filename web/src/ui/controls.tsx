@@ -3,7 +3,7 @@
  * date input or ad-hoc radio row. One look, one keyboard model, everywhere.
  */
 import { useMemo, useState, type ReactNode } from 'react';
-import { CalendarDays, Check } from 'lucide-react';
+import { CalendarDays, Check, Minus, Plus } from 'lucide-react';
 import { id as idLocale } from 'date-fns/locale';
 import { cn } from '@/lib/utils';
 import { Calendar } from '@/components/ui/calendar';
@@ -138,3 +138,44 @@ export function Field(props: { label: string; hint?: string; children: ReactNode
 
 export const inputClass = 'h-8 w-full rounded-md border border-input bg-(--field) px-2.5 text-[13px] text-foreground outline-none placeholder:text-muted-foreground focus-visible:border-ring';
 export const textareaClass = 'min-h-24 w-full resize-y rounded-md border border-input bg-(--field) px-2.5 py-2 text-[13px] leading-relaxed text-foreground outline-none placeholder:text-muted-foreground focus-visible:border-ring';
+
+/** "1,5" (Indonesian decimal) or "1.5" → 1.5; anything else → undefined. */
+export function parseSeconds(text: string): number | undefined {
+  const n = Number(text.trim().replace(',', '.'));
+  return text.trim() && Number.isFinite(n) ? n : undefined;
+}
+export const fmtSeconds = (n: number) => (Math.round(n * 10) / 10).toLocaleString('id-ID', { maximumFractionDigits: 1 });
+
+/**
+ * Seconds with −/+ (0.1 s), ↑/↓ on the field, Enter or leaving the field commits. Not a native
+ * number spinner: one look, Indonesian decimals ("1,5"), clamped to [min, max].
+ */
+export function SecondsField(props: { label: string; value: number; min: number; max: number; onCommit: (v: number) => void; disabled?: boolean; className?: string }) {
+  const [draft, setDraft] = useState<string>();
+  const clamp = (v: number) => Math.round(Math.min(props.max, Math.max(props.min, v)) * 10) / 10;
+  const commit = (v: number | undefined) => {
+    setDraft(undefined);
+    if (v === undefined) return;
+    const next = clamp(v);
+    if (next !== props.value) props.onCommit(next);
+  };
+  const step = (d: number) => commit(props.value + d);
+  return (
+    <div className={cn('flex items-center gap-0.5', props.className)}>
+      <button type="button" aria-label={`Kurangi 0,1 detik ${props.label}`} disabled={props.disabled || props.value <= props.min}
+        onClick={() => step(-0.1)} className="flex size-6 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-40"><Minus className="size-3" /></button>
+      <input type="text" inputMode="decimal" aria-label={props.label} placeholder="0" disabled={props.disabled}
+        value={draft ?? fmtSeconds(props.value)}
+        onChange={e => setDraft(e.target.value)}
+        onBlur={() => draft !== undefined && commit(parseSeconds(draft))}
+        onKeyDown={e => {
+          if (e.key === 'Enter') { e.preventDefault(); commit(parseSeconds(draft ?? String(props.value))); }
+          else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') { e.preventDefault(); step(e.key === 'ArrowUp' ? 0.1 : -0.1); }
+          else if (e.key === 'Escape') setDraft(undefined);
+        }}
+        className={cn(inputClass, 'h-6 w-14 px-1.5 text-center text-[12px] tabular-nums')} />
+      <button type="button" aria-label={`Tambah 0,1 detik ${props.label}`} disabled={props.disabled || props.value >= props.max}
+        onClick={() => step(0.1)} className="flex size-6 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-40"><Plus className="size-3" /></button>
+    </div>
+  );
+}
