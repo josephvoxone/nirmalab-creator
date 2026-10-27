@@ -202,6 +202,9 @@ export async function registerFlowRoutes(server: FastifyInstance, options: FlowR
       }
       const job = await store.createJob({
         ...(provider === 'flow' ? {} : { provider, model: request.body!.model as string }),
+        // Axcel's renderer sometimes parks a job at `progress 40` for over an hour, so one attempt
+        // and fail over — three attempts would keep the user waiting ~70 min for nothing.
+        ...(provider === 'axcel' ? { maxAttempts: 1 } : {}),
         prompt,
         // Studio queues stills or clips; character/keyframe jobs belong to stories only.
         kind: request.body?.kind === 'image' ? 'image' : 'video',
