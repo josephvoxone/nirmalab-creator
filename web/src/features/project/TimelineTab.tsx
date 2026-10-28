@@ -30,7 +30,7 @@ import { sized } from '../../lib/media.js';
 import { SequencePlayer } from './Player.js';
 import {
   boardOrder, editOf, formatSeconds, MIN_CLIP, nudgeScene, nudgeShot, rulerTicks, sceneKey, sequenceClips, shotKey, timelineDrop, timelineLayout,
-  withEdit, withTrim, type ClipStatus, type MusicEdit, type TimelineClip, type TimelineScene, type Trim
+  withEdit, withTrim, withZoom, type ClipStatus, type MusicEdit, type TimelineClip, type TimelineScene, type Trim
 } from './TimelineModel.js';
 
 type Zoom = '50' | '100' | '200';
@@ -277,6 +277,12 @@ function Inspector(props: {
           </Button>
         </div>
       ) : <span className="text-[11px] text-muted-foreground">Trim bisa diatur setelah klip dirender.</span>}
+      {clip.status === 'done' && (
+        <Segmented name="Zoom" value={String(clip.zoom)} disabled={busy}
+          onChange={v => save(withZoom(board, clip.shotId, Number(v) > 1 ? Number(v) : undefined))}
+          options={[{ value: '1', label: 'Asli', hint: 'Klip apa adanya' }, { value: '1.06', label: '106%', hint: 'Potong tipis tepi' },
+            { value: '1.12', label: '112%', hint: 'Sembunyikan tepi kertas' }, { value: '1.2', label: '120%', hint: 'Potong tepi lebar' }]} />
+      )}
       <div className="flex gap-1">
         {nudge(nudgeShot(board, clip.shotId, -1), nudgeShot(board, clip.shotId, 1))}
         <DropdownMenu>

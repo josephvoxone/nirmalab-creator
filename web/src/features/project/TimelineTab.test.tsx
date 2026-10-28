@@ -148,7 +148,7 @@ describe('Timeline tab', () => {
 });
 
 type Edit = { clipVolume?: number; subtitles?: boolean; subtitleStyle?: string; music?: { file: string; name: string; seconds: number; volume: number; at: number; from?: number } };
-const lastBoard = (calls: Call[]) => calls.filter(c => c.method === 'PUT').at(-1)?.body?.storyboard as { edit?: Edit; shots: Array<{ id: string; trim?: { in?: number; out?: number } }> } | undefined;
+const lastBoard = (calls: Call[]) => calls.filter(c => c.method === 'PUT').at(-1)?.body?.storyboard as { edit?: Edit; shots: Array<{ id: string; zoom?: number; trim?: { in?: number; out?: number } }> } | undefined;
 const allDone = () => storyFor(BOARD, ['done', 'done', 'done', 'done'], ['done', 'done', 'done', 'done']);
 
 describe('Timeline model: trim', () => {
@@ -191,6 +191,21 @@ describe('Timeline edit (Premiere-style)', () => {
     await waitFor(() => expect(lastBoard(api.calls)?.shots[0]!.trim).toEqual({ in: 1.5, out: 5.9 }));
     await userEvent.click(within(screen.getByRole('region', { name: /inspector/i })).getByRole('button', { name: /reset trim/i }));
     await waitFor(() => expect(lastBoard(api.calls)?.shots[0]!.trim).toBeUndefined());
+  });
+
+  it('zoom: the inspector crops into a rendered clip (hides a drawn page edge); Asli removes it', async () => {
+    const api = fakeProjectApi({ story: allDone() });
+    open(api);
+    const monitor = await screen.findByRole('group', { name: /program monitor/i });
+    await userEvent.click(within(track(/track video v1/i)).getByRole('button', { name: /^shot 1:/i }));
+    const zoom = () => within(screen.getByRole('region', { name: /inspector/i })).getByRole('radiogroup', { name: 'Zoom' });
+    expect(within(zoom()).getByRole('radio', { name: /^Asli/ })).toBeChecked();
+    await userEvent.click(within(zoom()).getByRole('radio', { name: /^112%/ }));
+    await waitFor(() => expect(lastBoard(api.calls)?.shots[0]!.zoom).toBe(1.12));
+    // The monitor previews the same crop the assembler burns in.
+    await waitFor(() => expect(within(monitor).getByTestId('program-video').style.transform).toBe('scale(1.12)'));
+    await userEvent.click(within(zoom()).getByRole('radio', { name: /^Asli/ }));
+    await waitFor(() => expect(lastBoard(api.calls)?.shots[0]!.zoom).toBeUndefined());
   });
 
   it('trim handles on the clip edges move with the keyboard and save once you stop', async () => {

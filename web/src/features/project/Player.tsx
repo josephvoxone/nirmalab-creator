@@ -9,7 +9,7 @@ import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 
 /** `from`/`to`: the trimmed window inside the clip file; `caption`: a subtitle shown over it. */
-export type Clip = { id: string; label: string; src?: string; poster?: string; seconds: number; from?: number; to?: number; caption?: string };
+export type Clip = { id: string; label: string; src?: string; poster?: string; seconds: number; from?: number; to?: number; caption?: string; zoom?: number };
 /** A music track under the sequence: starts at `at` seconds of the sequence, `from` seconds into the song. */
 export type SequenceMusic = { src: string; volume: number; at: number; from?: number };
 
@@ -103,6 +103,7 @@ export function SequencePlayer(props: {
       <div ref={box} className="relative mx-auto overflow-hidden rounded-md bg-black" style={{ height: maxH, width: Math.round(maxH * ratio), maxWidth: '100%' }}>
         {clip?.src ? (
           <video key={clip.src} ref={video} src={clip.src} poster={clip.poster} playsInline preload="metadata" aria-label={clip.label}
+            data-testid="program-video" style={clip.zoom ? { transform: `scale(${clip.zoom})` } : undefined}
             onLoadedMetadata={e => { if (clip.from) e.currentTarget.currentTime = clip.from; }}
             onTimeUpdate={e => {
               const t = e.currentTarget.currentTime;

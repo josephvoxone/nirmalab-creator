@@ -15,6 +15,8 @@ export type TimelineClip = {
   status: ClipStatus; narration: string; frame?: string; frameDone: boolean; clipVersion?: string;
   /** Trim: where the clip starts inside its file, its full length, and the raw subtitle line. */
   trimIn: number; trimOut?: number; full: number; line: string;
+  /** Assembly crop into the clip centre (1 = none). */
+  zoom: number;
 };
 
 export type Trim = { in?: number; out?: number };
@@ -48,6 +50,15 @@ export function withTrim(b: Board, shotId: string, trim: Trim | undefined): Boar
     if (s.id !== shotId) return s;
     const { trim: _old, ...rest } = s as typeof s & { trim?: Trim };
     return clean ? { ...rest, trim: clean } : rest;
+  }) };
+}
+
+/** The board with one shot's assembly zoom set; 1 (or none) removes it. */
+export function withZoom(b: Board, shotId: string, zoom: number | undefined): Board {
+  return { ...b, shots: b.shots.map(s => {
+    if (s.id !== shotId) return s;
+    const { zoom: _old, ...rest } = s as typeof s & { zoom?: number };
+    return zoom && zoom > 1 ? { ...rest, zoom } : rest;
   }) };
 }
 
@@ -94,7 +105,8 @@ export function timelineLayout(input: Board, story?: Story): TimelineLayout {
         status: st?.status ?? 'pending',
         narration: line || '—',
         frame: st?.frame?.mediaId, frameDone: st?.frame?.status === 'done', clipVersion: st?.jobId ?? (st ? String(st.attempts) : undefined),
-        trimIn: window.start, ...(trim?.out !== undefined ? { trimOut: trim.out } : {}), full, line
+        trimIn: window.start, ...(trim?.out !== undefined ? { trimOut: trim.out } : {}), full, line,
+        zoom: (shot as { zoom?: number }).zoom ?? 1
       });
       t += seconds;
     }
@@ -192,6 +204,7 @@ export function sequenceClips(id: string, board: Board, story: Story, shotIds?: 
     seconds: c.seconds,
     ...(c.status === 'done' && (c.trimIn > 0 || c.seconds < c.full) ? { from: c.trimIn, to: r3(c.trimIn + c.seconds) } : {}),
     ...(subtitles && c.line ? { caption: c.line } : {}),
+    ...(c.zoom > 1 ? { zoom: c.zoom } : {}),
     src: c.status === 'done' ? media.clip(id, c.shotId, c.clipVersion) : undefined,
     // rendered: the clip's own poster (never a black box); else its keyframe still
     poster: c.status === 'done' ? poster.shot(id, c.shotId, pw, c.clipVersion) : c.frameDone ? sized(media.frame(id, c.shotId, c.frame), pw) : undefined

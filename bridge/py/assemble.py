@@ -93,13 +93,24 @@ def ass_document(events, w, h, style=None):
     return '\n'.join(lines) + '\n'
 
 
+def shot_zoom(shot):
+    """Assembly crop into the clip centre: 1.0 (none) .. 1.3."""
+    try:
+        z = float(shot.get('zoom') or 1.0)
+    except (TypeError, ValueError):
+        return 1.0
+    return min(1.3, max(1.0, z))
+
+
 def filter_graph(durations, xf, transitions=None, title_input=None, total=None,
-                 clip_volume=None, music_input=None, music=None, subtitles=None, fonts_dir=None):
+                 clip_volume=None, music_input=None, music=None, subtitles=None, fonts_dir=None, zooms=None):
     parts = []
     n = len(durations)
     for i in range(n):
+        z = (zooms or [])[i] if zooms and i < len(zooms) else 1.0
+        zoom = f'scale=trunc(iw*{z}/2)*2:trunc(ih*{z}/2)*2,crop={W}:{H},' if z and z > 1.0 else ''
         parts.append(
-            f'[{i}:v]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},'
+            f'[{i}:v]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},{zoom}'
             f'fps={FPS},setsar=1,format=yuv420p,settb=AVTB[v{i}]'
         )
         parts.append(f'[{i}:a]aformat=sample_rates=48000:channel_layouts=stereo,asetpts=PTS-STARTPTS[a{i}]')
@@ -170,6 +181,7 @@ def main(arg):
     story_path, out_dir = resolve(arg)
     story = json.load(open(story_path))
     inputs, durations, transitions = [], [], []
+    zooms = [shot_zoom(s) for s in story['shots']]
     edit = story.get('edit') or {}
     for shot in story['shots']:
         if shot.get('reuse'):
@@ -213,7 +225,7 @@ def main(arg):
             open(subs, 'w', encoding='utf-8').write(ass_document(events, W, H, style=edit.get('subtitleStyle')))
     graph = filter_graph(durations, xf, transitions[1:], title_input=title_input, total=total,
                          clip_volume=edit.get('clipVolume'), music_input=music_input, music=music, subtitles=subs,
-                         fonts_dir=FONTS_DIR if edit.get('subtitleStyle') == HANDWRITTEN else None)
+                         fonts_dir=FONTS_DIR if edit.get('subtitleStyle') == HANDWRITTEN else None, zooms=zooms)
     final = os.path.join(out_dir, f"{story['slug']}.mp4")
     cmd = ['ffmpeg', '-y', '-v', 'error', *inputs, '-filter_complex', graph, '-map', '[vout]', '-map', '[aout]',
            '-c:v', 'libx264', '-preset', 'slow', '-crf', '18', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '192k',

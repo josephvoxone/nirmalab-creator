@@ -125,3 +125,20 @@ class EndToEnd(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class ShotZoom(unittest.TestCase):
+    def test_zoom_crops_into_the_clip_centre_and_default_is_untouched(self):
+        g = filter_graph([5.0, 5.0], 0.3, total=9.7, zooms=[1.0, 1.12])
+        v0 = [p for p in g.split(';') if p.startswith('[0:v]')][0]
+        v1 = [p for p in g.split(';') if p.startswith('[1:v]')][0]
+        self.assertNotIn('*1.12', v0)
+        self.assertIn('scale=trunc(iw*1.12/2)*2:trunc(ih*1.12/2)*2,crop=720:1280', v1)
+        self.assertEqual(filter_graph([5.0], 0.3, total=5.0), filter_graph([5.0], 0.3, total=5.0, zooms=None))
+
+    def test_zoom_of_a_shot_is_read_and_clamped(self):
+        from assemble import shot_zoom
+        self.assertEqual(shot_zoom({}), 1.0)
+        self.assertEqual(shot_zoom({'zoom': 1.12}), 1.12)
+        self.assertEqual(shot_zoom({'zoom': 5}), 1.3)
+        self.assertEqual(shot_zoom({'zoom': 0.5}), 1.0)
