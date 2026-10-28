@@ -97,6 +97,32 @@ describe('flow bridge routes', () => {
     expect(file.rawPayload.byteLength).toBe(4096);
   });
 
+  it('start-image: the bridge downloads the keyframe of the clip it is running (round-robin upload), nothing else', async () => {
+    const { FlowStore } = await import('../src/flow/store.js');
+    const dataDir = mkdtempSync(join(tmpdir(), 'flow-routes-'));
+    const store = new FlowStore(dataDir);
+    await setup(store, dataDir);
+    await store.addAccount({ label: 'A', email: 'a@x' });
+    mkdirSync(join(dataDir, 'stories', 'story_g'), { recursive: true });
+    const frame = join(dataDir, 'stories', 'story_g', 'frame-01-a.png');
+    const jpeg = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(2000, 3)]);
+    writeFileSync(frame, jpeg);
+    const job = await store.createJob({ prompt: 'clip', kind: 'video', group: 'story_g', startFrame: { mediaId: 'm', caption: 'c' }, startImage: frame });
+    const get = (id: string, token = BRIDGE_TOKEN) => server!.inject({ url: `/api/flow/bridge/jobs/${id}/start-image`, headers: { 'x-flow-bridge-token': token } });
+    expect((await get(job.id)).statusCode).toBe(409);                 // not running yet
+    await store.claimJob('mac');
+    expect((await get(job.id, 'wrong')).statusCode).toBe(401);
+    const res = await get(job.id);
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-type']).toBe('image/jpeg');            // sniffed: Flow keyframes named .png are JPEGs
+    expect(res.rawPayload.equals(jpeg)).toBe(true);
+    // A path outside the data dir is never served, whatever the job says.
+    const evil = await store.createJob({ prompt: 'clip2', kind: 'video', startFrame: { mediaId: 'm', caption: 'c' }, startImage: '/etc/passwd' });
+    await store.completeJob(job.id, { filePath: '/x.mp4' });
+    await store.claimJob('mac');
+    expect((await get(evil.id)).statusCode).toBe(404);
+  });
+
   it('upload kosong/kecil ditolak dan job tidak selesai', async () => {
     const { adminCookie } = await setup();
     await server!.inject({ method: 'POST', url: '/api/flow/accounts', headers: { cookie: adminCookie }, payload: { label: 'Akun 1', email: 'a@b.c' } });

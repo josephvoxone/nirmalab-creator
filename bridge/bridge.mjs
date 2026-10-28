@@ -14,7 +14,7 @@
 import { flowHome } from './src/paths.mjs';
 import { execFileSync, spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { homedir, hostname } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -139,6 +139,13 @@ async function handle(claim) {
     outDir: OUT_DIR,
     resolution: RESOLUTION,
     readFile: path => readFile(path),
+    writeFile: (path, bytes) => writeFile(path, bytes, { mode: 0o600 }),
+    // Round-robin: the approved keyframe of the running clip, to upload into another account's project.
+    fetchStartImage: async id => {
+      const response = await api(`/api/flow/bridge/jobs/${id}/start-image`);
+      if (!response.ok) throw new Error(`start-image HTTP ${response.status}: ${(await response.text()).slice(0, 200)}`);
+      return Buffer.from(await response.arrayBuffer());
+    },
     complete: async (id, bytes, meta = {}) => {
       const response = await api(`/api/flow/bridge/jobs/${id}/complete`, {
         method: 'POST',

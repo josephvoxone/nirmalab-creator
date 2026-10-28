@@ -159,6 +159,8 @@ describe('StoryService consistent pipeline', () => {
       expect(v.group).toBe(story.id);
       const shot = frames.find(s => v.technique?.endsWith(s.id))!;
       expect(v.startFrame).toEqual({ mediaId: shot.frame!.mediaId, caption: shot.frame!.caption });
+      // The keyframe file travels with the clip: another Flow account can upload it when this one runs dry.
+      expect(v.startImage).toBe(t.service.framePath(story.id, shot.id));
     }
     expect(videos.find(v => v.technique!.endsWith('01-hadiah'))!.characters!.map(c => c.name).sort()).toEqual(['Kapas', 'Laras']);
     await finish(t, 'video'); await t.service.reconcile(story.id);

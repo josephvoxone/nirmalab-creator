@@ -12,7 +12,12 @@ import { useSession } from '../lib/session.js';
 import { LoadingState, describeError } from '../ui/states.js';
 
 export type Quota = {
-  flow: { credits: number | null; usedToday: number; capToday: number | null; accounts: number; online: boolean };
+  flow: {
+    credits: number | null; usedToday: number; capToday: number | null; accounts: number; online: boolean;
+    /** Clips rendering now / parked until an account refills, and when the first refill is due. */
+    running: number; waiting: number; resumeAtMs: number | null;
+    pool: Array<{ label: string; credits: number | null; refillAtMs: number | null }>;
+  };
   openrouter: { configured: boolean; remainingUsd: number | null; usedUsd: number | null };
   storage: { usedBytes: number; diskFreeBytes: number | null };
 };
@@ -23,7 +28,12 @@ const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : n
 export function readQuota(r: unknown): Quota {
   const q = (r ?? {}) as Partial<Record<keyof Quota, Record<string, unknown>>>;
   return {
-    flow: { credits: num(q.flow?.credits), usedToday: num(q.flow?.usedToday) ?? 0, capToday: num(q.flow?.capToday), accounts: num(q.flow?.accounts) ?? 0, online: !!q.flow?.online },
+    flow: {
+      credits: num(q.flow?.credits), usedToday: num(q.flow?.usedToday) ?? 0, capToday: num(q.flow?.capToday), accounts: num(q.flow?.accounts) ?? 0, online: !!q.flow?.online,
+      running: num(q.flow?.running) ?? 0, waiting: num(q.flow?.waiting) ?? 0, resumeAtMs: num(q.flow?.resumeAtMs),
+      pool: (Array.isArray(q.flow?.pool) ? q.flow.pool as Array<Record<string, unknown>> : [])
+        .map(p => ({ label: typeof p?.label === 'string' ? p.label : 'Akun', credits: num(p?.credits), refillAtMs: num(p?.refillAtMs) }))
+    },
     openrouter: { configured: !!q.openrouter?.configured, remainingUsd: num(q.openrouter?.remainingUsd), usedUsd: num(q.openrouter?.usedUsd) },
     storage: { usedBytes: num(q.storage?.usedBytes) ?? 0, diskFreeBytes: num(q.storage?.diskFreeBytes) }
   };
@@ -56,6 +66,36 @@ function FlowRow(props: { q: Quota['flow']; onOpen?: () => void }) {
   return props.onOpen
     ? <button type="button" title={`${hint} · buka Akun Flow`} onClick={props.onOpen} className={cn(row, 'rounded-sm outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring/60')}>{body}</button>
     : <div title={hint} className={row}>{body}</div>;
+}
+
+/** WITA clock time, e.g. "17.00". */
+const clock = (ms: number) => new Intl.DateTimeFormat('id-ID', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Makassar' }).format(ms);
+/** "±8 j 20 m" until a moment; "sebentar lagi" once it is due. */
+function waitText(ms: number, now: number): string {
+  const left = Math.round((ms - now) / 60_000);
+  if (left <= 1) return 'sebentar lagi';
+  const h = Math.floor(left / 60), m = left % 60;
+  return `±${h ? `${h} j ` : ''}${m} m`;
+}
+
+/** Rendering now, or clips parked until an account refills (they resume by themselves). Hidden when idle. */
+function RenderStatus(props: { q: Quota['flow'] }) {
+  const { running, waiting, resumeAtMs, pool } = props.q;
+  if (!running && !waiting) return null;
+  const now = Date.now();
+  const accounts = pool.map(p => `${p.label}: ${p.credits ?? '?'} kredit${p.refillAtMs ? ` · isi ulang ±${clock(p.refillAtMs)}` : ''}`).join('\n');
+  const title = [
+    waiting ? `${waiting} klip menunggu kredit Flow; lanjut otomatis${resumeAtMs ? ` ±${clock(resumeAtMs)} WITA` : ' saat kredit terisi'} (kredit gratis 50/hari, isi ulang 24 jam setelah generate pertama).` : `${running} klip sedang dirender di Flow.`,
+    accounts
+  ].filter(Boolean).join('\n');
+  return (
+    <div role="status" aria-label="Status render" title={title} className={row}>
+      <i aria-hidden="true" className={cn('size-1.5 shrink-0 rounded-full', running ? 'animate-pulse bg-(--brand)' : 'bg-amber-400')} />
+      <span className="truncate">{running ? `Merender ${running} klip` : `${waiting} klip menunggu kredit`}</span>
+      {!running && resumeAtMs !== null && <span className="ml-auto shrink-0 tabular-nums text-foreground/85">{waitText(resumeAtMs, now)}</span>}
+      {running > 0 && waiting > 0 && <span className="ml-auto shrink-0 tabular-nums">+{waiting} antre</span>}
+    </div>
+  );
 }
 
 function TodayBar(props: { q: Quota['flow'] }) {
@@ -103,6 +143,7 @@ export function SidebarQuota(props: { pollMs?: number }) {
       {data ? (
         <>
           <FlowRow q={data.flow} onOpen={openFlow} />
+          <RenderStatus q={data.flow} />
           <TodayBar q={data.flow} />
           {data.openrouter.configured && (
             <div title="Saldo OpenRouter untuk naskah & suara" className={row}>

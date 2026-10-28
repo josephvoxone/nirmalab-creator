@@ -28,6 +28,38 @@ export type FlowAccount = {
   priority: number;
   /** Flow credits this account may spend per day (UTC+8); undefined = unlimited. */
   dailyCreditCap?: number;
+  /** First paid claim of the current credit cycle: Google refills a free account 24 h after it. */
+  cycleStartMs?: number;
+  /** Flow refused a clip on this account while its credits were low: no paid work until it refills. */
+  exhaustedAtMs?: number;
+};
+
+/** Google Flow (free accounts): 50 credits a day, refreshed 24 h after the cycle's first generation. */
+export const REFILL_MS = 24 * 3_600_000;
+/** A credit jump this big is the daily refill (a re-credited failed clip adds only one clip's cost). */
+const REFILL_JUMP = 30;
+/** Flow's answer when it will not render a clip on an account that is out of credits. */
+const REFUSED_FOR_CREDITS = /did not create the video|not enough credits|insufficient credits|out of credits/i;
+
+/** When this account's credits come back (estimate), or undefined when no cycle is running. */
+export function refillAtMs(account: Pick<FlowAccount, 'cycleStartMs'>): number | undefined {
+  return account.cycleStartMs ? account.cycleStartMs + REFILL_MS : undefined;
+}
+
+/** Whether the account can pay for a job of this cost now (unknown credits never block). */
+function canPay(account: FlowAccount, cost: number): boolean {
+  if (cost <= 0) return true;
+  if (account.exhaustedAtMs) return false;
+  return account.credits === undefined || account.credits >= cost;
+}
+
+export type FlowQueueStatus = {
+  running: number;
+  queued: number;
+  /** Paid clips that no account can pay for right now: they start on their own after a refill. */
+  waitingForCredits: number;
+  resumeAtMs: number | null;
+  accounts: Array<{ id: string; label: string; credits: number | null; exhausted: boolean; refillAtMs: number | null }>;
 };
 
 export type FlowRotation = 'round-robin' | 'least-used' | 'priority';
@@ -82,7 +114,8 @@ export type FlowJob = {
   model?: string;
   /** OpenRouter: absolute paths of reference images (cast sheets) sent as input_references. */
   references?: string[];
-  /** OpenRouter video: absolute path of the keyframe sent as first_frame. */
+  /** Keyframe file on the server: OpenRouter/Axcel send it as first frame; a Flow clip carries it so
+   *  another account can upload it into its own project (round-robin) when the pinned one is out of credits. */
   startImage?: string;
   /** Axcel video: output height (480/720/1080); absent = the worker's default. */
   resolution?: number;
@@ -327,7 +360,14 @@ export class FlowStore {
       state.bridge = { bridgeId: bridgeId.slice(0, 80), lastSeenMs: Date.now() };
       for (const entry of credits) {
         const account = state.accounts.find(a => a.id === entry.id);
-        if (account && Number.isFinite(entry.credits)) account.credits = Math.max(0, Math.round(entry.credits));
+        if (!account || !Number.isFinite(entry.credits)) continue;
+        const next = Math.max(0, Math.round(entry.credits));
+        if (account.credits !== undefined && next - account.credits >= REFILL_JUMP) {
+          // The daily refill: a new cycle starts with the next paid clip.
+          delete account.exhaustedAtMs;
+          delete account.cycleStartMs;
+        }
+        account.credits = next;
       }
       await this.write(state);
     });
@@ -394,6 +434,7 @@ export class FlowStore {
         ...(input.group ? { group: input.group } : {}),
         ...(input.characters?.length ? { characters: input.characters.slice(0, 6).map(c => ({ name: c.name.slice(0, 40), look: c.look.slice(0, 600) })) } : {}),
         ...(input.startFrame ? { startFrame: input.startFrame } : {}),
+        ...(!openrouter && !axcel && input.startImage ? { startImage: input.startImage } : {}),
         prompt: prompt.slice(0, 4000),
         aspect: input.aspect ?? '9:16',
         durationSec: Math.min(Math.max(Math.round(input.durationSec ?? 8), 4), 10),
@@ -474,7 +515,8 @@ export class FlowStore {
       }
       const ordered = orderAccounts(state.accounts.map(a => this.normaliseAccount(a)), loadPool(state.pool).rotation);
       const eligible = (a: FlowAccount, cost: number) =>
-        a.status === 'ready' && a.enabled && (a.dailyCreditCap === undefined || a.creditsUsedToday + cost <= a.dailyCreditCap);
+        a.status === 'ready' && a.enabled && (a.dailyCreditCap === undefined || a.creditsUsedToday + cost <= a.dailyCreditCap)
+        && canPay(a, cost);
       const pins = state.groupAccounts ?? {};
       let account: FlowAccount | undefined;
       let job: FlowJob | undefined;
@@ -484,8 +526,11 @@ export class FlowStore {
         const pinned = pinnedId ? ordered.find(a => a.id === pinnedId) : undefined;
         // A group waits for its own account (its Flow characters live there) unless that account was
         // disabled or deleted: then it moves, and the bridge recreates the characters on the new one.
+        // A paid clip that carries its keyframe file can run on any account (the bridge uploads the
+        // keyframe there): round-robin to an account that can still pay, without moving the group.
+        const portable = cost > 0 && candidate.kind === 'video' && Boolean(candidate.startImage);
         const pick = pinned?.enabled
-          ? (eligible(pinned, cost) ? pinned : undefined)
+          ? (eligible(pinned, cost) ? pinned : portable ? ordered.find(a => eligible(a, cost)) : undefined)
           : ordered.find(a => eligible(a, cost));
         if (pick) { account = pick; job = candidate; break; }
       }
@@ -496,7 +541,9 @@ export class FlowStore {
       job.status = 'running';
       job.bridgeId = bridgeId;
       job.accountId = account.id;
-      if (job.group && (state.groupAccounts ?? {})[job.group] !== account.id) {
+      const travelling = job.group !== undefined && (state.groupAccounts ?? {})[job.group] !== undefined
+        && job.kind === 'video' && Boolean(job.startImage) && (state.groupAccounts ?? {})[job.group] !== account.id;
+      if (job.group && !travelling && (state.groupAccounts ?? {})[job.group] !== account.id) {
         state.groupAccounts = { ...(state.groupAccounts ?? {}), [job.group]: account.id };
       }
       job.startedAtMs = now;
@@ -505,10 +552,41 @@ export class FlowStore {
         stored.creditsUsedToday = (stored.dayStamp === day ? stored.creditsUsedToday : 0) + jobCredits(job.kind);
         stored.dayStamp = day;
         stored.lastUsedAtMs = now;
+        if (jobCredits(job.kind) > 0 && (!stored.cycleStartMs || now - stored.cycleStartMs >= REFILL_MS)) stored.cycleStartMs = now;
       }
       await this.write(state);
       return job;
     });
+  }
+
+  async groupAccount(group: string): Promise<string | undefined> {
+    return (await this.read()).groupAccounts?.[group];
+  }
+
+  /** What the Flow queue is doing: running clips, clips that wait for credits, and when they resume. */
+  async queueStatus(): Promise<FlowQueueStatus> {
+    const state = await this.read();
+    const accounts = state.accounts.map(a => this.normaliseAccount(a)).filter(a => a.enabled);
+    const flowJobs = state.jobs.filter(j => (j.provider ?? 'flow') === 'flow');
+    const pins = state.groupAccounts ?? {};
+    const payable = (a: FlowAccount, cost: number) => a.status !== 'error' && (a.dailyCreditCap === undefined || a.creditsUsedToday + cost <= a.dailyCreditCap) && canPay(a, cost);
+    const waiting = flowJobs.filter(j => {
+      const cost = jobCredits(j.kind);
+      if (j.status !== 'queued' || cost === 0) return false;
+      const pinned = j.group ? accounts.find(a => a.id === pins[j.group!]) : undefined;
+      const portable = j.kind === 'video' && Boolean(j.startImage);
+      const pool = pinned && !portable ? [pinned] : accounts;
+      return !pool.some(a => payable(a, cost));
+    });
+    // They resume at the earliest refill of an account that could take them.
+    const refills = accounts.filter(a => !canPay(a, CREDITS_PER_SHOT)).map(a => refillAtMs(a)).filter((t): t is number => t !== undefined);
+    return {
+      running: flowJobs.filter(j => j.status === 'running').length,
+      queued: flowJobs.filter(j => j.status === 'queued').length,
+      waitingForCredits: waiting.length,
+      resumeAtMs: waiting.length && refills.length ? Math.min(...refills) : null,
+      accounts: accounts.map(a => ({ id: a.id, label: a.label, credits: a.credits ?? null, exhausted: Boolean(a.exhaustedAtMs), refillAtMs: refillAtMs(a) ?? null }))
+    };
   }
 
   async usage(input: { days?: number; nowMs?: number } = {}): Promise<FlowUsageReport> {
@@ -619,6 +697,26 @@ export class FlowStore {
       const state = await this.read();
       const job = state.jobs.find(j => j.id === id);
       if (!job) return undefined;
+      const account = job.accountId ? state.accounts.find(a => a.id === job.accountId) : undefined;
+      if (!options.final && account && jobCredits(job.kind) > 0 && REFUSED_FOR_CREDITS.test(error)
+        && account.credits !== undefined && account.credits < 2 * jobCredits(job.kind)) {
+        // Flow will not render on an account that is (nearly) out of credits, and charges nothing for it:
+        // park the account until it refills and put the clip back without burning a take.
+        account.exhaustedAtMs = Date.now();
+        account.lastError = error.slice(0, 300);
+        if (account.dayStamp === today()) account.creditsUsedToday = Math.max(0, account.creditsUsedToday - jobCredits(job.kind));
+        job.error = `Menunggu kredit: ${account.label} habis`;
+        job.status = 'queued';
+        job.bridgeId = undefined;
+        job.accountId = undefined;
+        job.startedAtMs = undefined;
+        await this.write(state);
+        return job;
+      }
+      // Flow re-credits a failed generation: take it back off today's count.
+      if (account && jobCredits(job.kind) > 0 && account.dayStamp === today()) {
+        account.creditsUsedToday = Math.max(0, account.creditsUsedToday - jobCredits(job.kind));
+      }
       job.attempts += 1;
       job.error = error.slice(0, 500);
       job.finishedAtMs = Date.now();

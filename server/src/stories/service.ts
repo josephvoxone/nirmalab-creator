@@ -658,7 +658,8 @@ export class StoryService {
         // OpenRouter/Axcel animate the approved keyframe file (start frame); Flow animates its own media.
         ...(this.takesFiles(engine)
           ? (state.frame?.status === 'done' ? { startImage: this.framePath(record.id, shot.id) } : this.startUpload(record, shot))
-          : state.frame?.mediaId ? { startFrame: { mediaId: state.frame.mediaId, caption: state.frame.caption ?? '' } } : {})
+          // Flow animates its own media; the file rides along so another account can upload it (round-robin).
+          : state.frame?.mediaId ? { startFrame: { mediaId: state.frame.mediaId, caption: state.frame.caption ?? '' }, startImage: this.framePath(record.id, shot.id) } : {})
       } : this.takesFiles(engine) ? this.startUpload(record, shot) : {})
     });
     state.jobId = job.id;

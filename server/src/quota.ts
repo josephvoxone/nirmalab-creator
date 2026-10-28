@@ -24,6 +24,7 @@ export async function registerQuotaRoutes(server: FastifyInstance, options: Quot
     const capped = accounts.filter(a => typeof a.dailyCreditCap === 'number');
     const configured = (await config.view()).configured;
     const balance = configured ? await options.balance().catch(() => null) : null;
+    const queue = await options.flow.queueStatus();
     const storage = await measureStorage(options.dataDir).catch(() => ({ usedBytes: 0, diskFreeBytes: null }));
     return {
       flow: {
@@ -31,7 +32,12 @@ export async function registerQuotaRoutes(server: FastifyInstance, options: Quot
         usedToday: accounts.reduce((sum, a) => sum + (a.creditsUsedToday ?? 0), 0),
         capToday: capped.length ? capped.reduce((sum, a) => sum + (a.dailyCreditCap ?? 0), 0) : null,
         accounts: accounts.length,
-        online: (await options.flow.bridgeStatus()).online
+        online: (await options.flow.bridgeStatus()).online,
+        // Render status for the sidebar: clips in progress, clips parked until a refill, and when.
+        running: queue.running,
+        waiting: queue.waitingForCredits,
+        resumeAtMs: queue.resumeAtMs,
+        pool: queue.accounts.map(a => ({ label: a.label, credits: a.credits, refillAtMs: a.refillAtMs }))
       },
       openrouter: { configured, remainingUsd: balance?.remainingUsd ?? null, usedUsd: balance?.usedUsd ?? null },
       // Vision audit spend of today (spec §9.5) — money only, no prompts.

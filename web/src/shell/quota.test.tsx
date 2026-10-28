@@ -76,6 +76,31 @@ describe('sidebar quota', () => {
     expect(box).not.toHaveTextContent(/kosong/i);
   });
 
+  it('render status: clips rendering now', async () => {
+    mountQuota(() => ok({ ...QUOTA, flow: { ...QUOTA.flow, running: 1, waiting: 0, resumeAtMs: null, pool: [] } }));
+    const status = await screen.findByRole('status', { name: /status render/i });
+    expect(status).toHaveTextContent('Merender 1 klip');
+  });
+
+  it('render status: clips waiting for credits, how long, and that they resume on their own; credits per account in the hint', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true, now: Date.parse('2026-10-29T00:40:00Z') });
+    const resume = Date.parse('2026-10-29T09:00:00Z');   // 17.00 WITA
+    mountQuota(() => ok({ ...QUOTA, flow: { ...QUOTA.flow, running: 0, waiting: 5, resumeAtMs: resume,
+      pool: [{ label: 'Flow VPS 01', credits: 0, refillAtMs: resume }, { label: 'Flow Utama (VPS 02)', credits: 3, refillAtMs: null }] } }));
+    const status = await screen.findByRole('status', { name: /status render/i });
+    expect(status).toHaveTextContent('5 klip menunggu kredit');
+    expect(status).toHaveTextContent('±8 j 20 m');
+    expect(status.getAttribute('title')).toMatch(/lanjut otomatis.*17\.00/i);
+    expect(status.getAttribute('title')).toMatch(/Flow VPS 01: 0 kredit · isi ulang ±17\.00/);
+    expect(status.getAttribute('title')).toMatch(/Flow Utama \(VPS 02\): 3 kredit/);
+  });
+
+  it('render status: nothing when the queue is idle', async () => {
+    mountQuota(() => ok({ ...QUOTA, flow: { ...QUOTA.flow, running: 0, waiting: 0, resumeAtMs: null, pool: [] } }));
+    await screen.findByText(/online/i);
+    expect(screen.queryByRole('status', { name: /status render/i })).toBeNull();
+  });
+
   it('says the bridge is offline', async () => {
     mountQuota(() => ok({ ...QUOTA, flow: { ...QUOTA.flow, online: false } }));
     expect(await screen.findByText(/offline/i)).toBeInTheDocument();

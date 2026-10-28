@@ -2,7 +2,7 @@ import { sniffMediaType } from '../lib/media-type.js';
 import { timingSafeEqual } from 'node:crypto';
 import { createReadStream, readFileSync } from 'node:fs';
 import { mkdir, stat, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, resolve, sep } from 'node:path';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { requireAdmin } from '../auth/routes.js';
 import { MediaCache, sendImage } from '../media/images.js';
@@ -264,6 +264,27 @@ export async function registerFlowRoutes(server: FastifyInstance, options: FlowR
           ...(account.proxy === undefined ? {} : { proxy: account.proxy })
         }
       };
+    });
+
+    // Round-robin: an account that did not draw the keyframe uploads it into its own Flow project.
+    // Only the running clip's own keyframe, and only a file inside the data dir.
+    scope.get<{ Params: { id: string } }>('/api/flow/bridge/jobs/:id/start-image', async (request, reply) => {
+      if (!requireBridge(request, reply)) return undefined;
+      if (!JOB_ID.test(request.params.id)) return bad(reply, 404, 'NOT_FOUND', 'Job not found');
+      const job = await store.getJob(request.params.id);
+      if (!job) return bad(reply, 404, 'NOT_FOUND', 'Job not found');
+      if (job.status !== 'running') return bad(reply, 409, 'INVALID_STATE', 'Job is not running');
+      const root = resolve(options.dataDir) + sep;
+      const file = job.startImage ? resolve(job.startImage) : '';
+      if (!file || !file.startsWith(root)) return bad(reply, 404, 'NOT_FOUND', 'No keyframe for this job');
+      try {
+        const info = await stat(file);
+        reply.header('Content-Type', sniffMediaType(file));
+        reply.header('Content-Length', String(info.size));
+        return reply.send(createReadStream(file));
+      } catch {
+        return bad(reply, 404, 'NOT_FOUND', 'Keyframe file missing');
+      }
     });
 
     scope.post<{ Params: { id: string }; Body: Buffer }>('/api/flow/bridge/jobs/:id/complete', async (request, reply) => {

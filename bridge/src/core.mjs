@@ -5,6 +5,8 @@
  * the mp4, and upload it to OpenCreator. Failures are reported back with an
  * optional account cooldown so the server rotates to the next account.
  */
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 
 export function parseToolResult(result) {
   const text = (result?.content ?? [])
@@ -238,6 +240,35 @@ export function storyMessage(job, duration) {
   ].filter(Boolean).join('\n');
 }
 
+/** Image type from magic bytes (Flow keyframes saved as .png are often JPEGs). */
+function imageExt(bytes) {
+  if (bytes[0] === 0xff && bytes[1] === 0xd8) return 'jpg';
+  if (bytes[0] === 0x89 && bytes[1] === 0x50) return 'png';
+  if (bytes.subarray(8, 12).toString('latin1') === 'WEBP') return 'webp';
+  return 'png';
+}
+
+/**
+ * The keyframe's media id in THIS account's project. Round-robin: a clip can run on another account than
+ * the one that drew its keyframe (that one ran out of credits). Then the bridge fetches the approved
+ * keyframe file from the app and uploads it here, named after the original media, so a retry reuses it.
+ */
+async function startFrameHere(job, account, projectId, deps) {
+  const original = job.startFrame.mediaId;
+  const { media } = await projectState(account, projectId, deps);
+  if (media.some(m => m?.mediaId === original)) return original;
+  const stem = `kf-${String(original).replace(/[^\w.-]/g, '_')}`;
+  const earlier = media.find(m => typeof m?.caption === 'string' && m.caption.startsWith(stem + '.'));
+  if (earlier?.mediaId) return earlier.mediaId;
+  if (!job.startImage || !deps.fetchStartImage) throw new Error('keyframe is not in this account\'s Flow project and there is no file to upload');
+  const bytes = await deps.fetchStartImage(job.id);
+  const path = join(deps.outDir ?? tmpdir(), `${stem}.${imageExt(bytes)}`);
+  await deps.writeFile(path, bytes);
+  const up = parseToolResult(await deps.callTool(account, 'flow_upload_image', { project_id: projectId, path }));
+  if (!up?.mediaId) throw new Error('Flow upload of the keyframe returned no media id');
+  return up.mediaId;
+}
+
 async function storyJob(job, account, deps) {
   const projectId = await ensureProject(account, deps.callTool, projectTitleFor(job, deps.projectTitle ?? 'Nirmalab studio'));
   if (job.kind === 'character') {
@@ -270,6 +301,7 @@ async function storyJob(job, account, deps) {
   // ("cannot incorporate additional character entities"); the approved keyframe already carries every character.
   const i2v = isVideo && Boolean(job.startFrame?.mediaId);
   const characterIds = i2v ? [] : await ensureCharacters(account, projectId, job.characters, deps);
+  const startMediaId = i2v ? await startFrameHere(job, account, projectId, deps) : undefined;
   const before = new Set((await projectState(account, projectId, deps)).media.map(m => m?.mediaId));
   const startedAt = Date.now();
   const duration = [4, 6, 8, 10].includes(job.durationSec) ? job.durationSec : 6;
@@ -278,7 +310,7 @@ async function storyJob(job, account, deps) {
     message: storyMessage(job, duration),
     new_session: true,
     ...(characterIds.length ? { character_ids: characterIds } : {}),
-    ...(i2v ? { image_ids: [job.startFrame.mediaId] } : {}),
+    ...(i2v ? { image_ids: [startMediaId] } : {}),
     max_credits: isVideo ? deps.maxCredits : 0
   }));
   if (chat?.approval === 'awaiting') {

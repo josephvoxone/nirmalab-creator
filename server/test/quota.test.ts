@@ -42,10 +42,31 @@ describe('GET /api/quota', () => {
     mkdirSync(join(t.dataDir, 'stories', 'story_0000000000000001'), { recursive: true });
     writeFileSync(join(t.dataDir, 'stories', 'story_0000000000000001', 'final.mp4'), Buffer.alloc(5000));
     const body = (await t.get()).json();
-    expect(body.flow).toEqual({ credits: 43, usedToday: 0, capToday: 150, accounts: 2, online: true });
+    expect(body.flow).toMatchObject({ credits: 43, usedToday: 0, capToday: 150, accounts: 2, online: true, running: 0, waiting: 0, resumeAtMs: null });
     expect(body.openrouter).toEqual({ configured: false, remainingUsd: null, usedUsd: null });
     expect(body.storage.usedBytes).toBeGreaterThanOrEqual(5000);
     expect(body.storage).toHaveProperty('diskFreeBytes');
+  });
+
+  it('render status: clips running, clips waiting for credits and when they resume, credits per account', async () => {
+    const t = await setup();
+    const a = await t.flow.addAccount({ label: 'VPS 01', email: 'a@x.io' });
+    const b = await t.flow.addAccount({ label: 'VPS 02', email: 'b@x.io' });
+    await t.flow.heartbeat('bridge-1', [{ id: a.id, credits: 50 }, { id: b.id, credits: 50 }]);
+    const first = await t.flow.createJob({ prompt: 'c0', kind: 'video' });
+    await t.flow.claimJob('bridge-1');                       // A starts its cycle and renders c0
+    await t.flow.heartbeat('bridge-1', [{ id: a.id, credits: 0 }, { id: b.id, credits: 0 }]);
+    await t.flow.createJob({ prompt: 'c1', kind: 'video', startImage: '/1.png' });
+    await t.flow.createJob({ prompt: 'c2', kind: 'video', startImage: '/2.png' });
+    const body = (await t.get()).json();
+    expect(body.flow).toMatchObject({ running: 1, waiting: 2 });
+    const cycle = (await t.flow.listAccounts()).find(x => x.id === a.id)!.cycleStartMs!;
+    expect(body.flow.resumeAtMs).toBe(cycle + 24 * 3_600_000);
+    expect(body.flow.pool).toEqual([
+      { label: 'VPS 01', credits: 0, refillAtMs: cycle + 24 * 3_600_000 },
+      { label: 'VPS 02', credits: 0, refillAtMs: null }
+    ]);
+    expect(first.id).toBeTruthy();
   });
 
   it('no accounts: credits and cap are null; OpenRouter balance when a key is configured', async () => {

@@ -29,12 +29,20 @@ function fakeFlow({ imageCost = 0, videoCost = 10, streamLost = false } = {}) {
       case 'flow_agent_respond': return ok({});
       case 'flow_video_status': return ok({ items: args.media_ids.map(id => ({ mediaId: id, state: 'succeeded' })) });
       case 'flow_download_media': return ok({ path: '/tmp/' + args.media_id });
+      case 'flow_upload_image': {
+        const caption = args.path.split('/').pop();
+        const m = { mediaId: 'up-' + caption, kind: 'image', caption };
+        state.media.push(m);
+        return ok({ mediaId: m.mediaId, caption, reused: false });
+      }
       default: throw new Error('unexpected tool ' + name);
     }
   };
   const deps = {
     callTool, mode: 'agent', maxCredits: 20, outDir: '/tmp', resolution: '720p',
     readFile: async p => Buffer.from('bytes:' + p),
+    fetchStartImage: async id => { state.fetched = [...(state.fetched ?? []), id]; return Buffer.concat([Buffer.from([0xff, 0xd8, 0xff]), Buffer.alloc(64)]); },
+    writeFile: async (path, bytes) => { state.written = [...(state.written ?? []), [path, bytes.byteLength]]; },
     complete: async (id, bytes, meta) => state.completed.push({ id, bytes: String(bytes), meta }),
     fail: async (id, error) => state.failed.push({ id, error }),
     resolveProject: async () => { throw new Error('group jobs must not use the shared project'); },
@@ -114,6 +122,41 @@ test('video job with startFrame attaches ONLY the keyframe (Flow I2V refuses ext
   assert.match(chat.message, /no border/i);
   assert.match(chat.message, /native audio/i);
   assert.equal(chat.max_credits, 20);
+});
+
+test('round-robin: the keyframe is not in this account\'s project, so the bridge fetches it from the app and uploads it, then animates the upload', async () => {
+  const { state, deps } = fakeFlow();
+  state.projects.push({ id: 'proj-x', title: 'Nirmalab · story_1' });
+  // This account's project has none of the story's media (the keyframe was drawn on another account).
+  const job = { id: 'job_rr', kind: 'video', group: 'story_1', aspect: '9:16', durationSec: 6, prompt: 'Medium shot. Laras smiles.',
+    startFrame: { mediaId: 'frame-on-A', caption: 'Girl on porch' }, startImage: '/data/stories/story_1/frame-01.png', characters: [{ name: 'Laras', look: 'girl' }] };
+  const r = await processJob({ job, account }, deps);
+  assert.equal(r.status, 'done');
+  assert.deepEqual(state.fetched, ['job_rr']);
+  // Named after the original media (a retry finds and reuses it), with the sniffed extension.
+  assert.equal(state.written[0][0], '/tmp/kf-frame-on-A.jpg');
+  const up = state.calls.find(c => c[0] === 'flow_upload_image')[1];
+  assert.deepEqual(up, { project_id: 'proj-x', path: '/tmp/kf-frame-on-A.jpg' });
+  const chat = state.calls.find(c => c[0] === 'flow_agent_chat')[1];
+  assert.deepEqual(chat.image_ids, ['up-kf-frame-on-A.jpg']);
+});
+
+test('round-robin: the keyframe is already in this project (its own account or an earlier upload): nothing is fetched or uploaded', async () => {
+  const { state, deps } = fakeFlow();
+  state.projects.push({ id: 'proj-x', title: 'Nirmalab · story_1' });
+  state.media.push({ mediaId: 'frame-1', kind: 'image', caption: 'Girl on porch' });
+  const job = { id: 'job_own', kind: 'video', group: 'story_1', aspect: '9:16', durationSec: 6, prompt: 'Medium shot.', startFrame: { mediaId: 'frame-1', caption: 'Girl on porch' }, startImage: '/f.png' };
+  assert.equal((await processJob({ job, account }, deps)).status, 'done');
+  assert.equal(state.fetched, undefined);
+  assert.equal(state.calls.some(c => c[0] === 'flow_upload_image'), false);
+  // An earlier upload of the same keyframe (a retry) is reused by its file name.
+  const { state: s2, deps: d2 } = fakeFlow();
+  s2.projects.push({ id: 'proj-x', title: 'Nirmalab · story_1' });
+  s2.media.push({ mediaId: 'up-old', kind: 'image', caption: 'kf-frame-on-A.jpg' });
+  const job2 = { ...job, id: 'job_retry', startFrame: { mediaId: 'frame-on-A', caption: 'c' } };
+  assert.equal((await processJob({ job: job2, account }, d2)).status, 'done');
+  assert.equal(s2.fetched, undefined);
+  assert.deepEqual(s2.calls.find(c => c[0] === 'flow_agent_chat')[1].image_ids, ['up-old']);
 });
 
 test('video job without a startFrame still attaches its characters', async () => {
