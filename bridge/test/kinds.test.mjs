@@ -94,7 +94,7 @@ test('image job that Flow wants to charge for is rejected and failed, nothing sp
   assert.match(state.failed[0].error, /credits/);
 });
 
-test('video job with startFrame attaches the keyframe image and asks to animate it', async () => {
+test('video job with startFrame attaches ONLY the keyframe (Flow I2V refuses extra character refs) and keeps its framing', async () => {
   const { state, deps } = fakeFlow();
   state.projects.push({ id: 'proj-x', title: 'Nirmalab · story_1' });
   state.characters.push({ id: 'ch-Laras', name: 'Laras', portraitMediaId: 'p' });
@@ -104,10 +104,28 @@ test('video job with startFrame attaches the keyframe image and asks to animate 
   assert.equal(r.status, 'done');
   const chat = state.calls.find(c => c[0] === 'flow_agent_chat')[1];
   assert.deepEqual(chat.image_ids, ['frame-1']);
-  assert.deepEqual(chat.character_ids, ['ch-Laras']);
+  // "First-frame video animation (I2V) only accepts a single start image and cannot incorporate additional
+  // character entities": the keyframe already carries every character, so no character_ids go with it.
+  assert.equal(chat.character_ids, undefined);
+  assert.equal(state.calls.some(c => c[0] === 'flow_create_character'), false);
   assert.match(chat.message, /first frame/i);
+  // Animating a painted keyframe must not zoom out into an invented page border or frame.
+  assert.match(chat.message, /keep the framing of the image/i);
+  assert.match(chat.message, /no border/i);
   assert.match(chat.message, /native audio/i);
   assert.equal(chat.max_credits, 20);
+});
+
+test('video job without a startFrame still attaches its characters', async () => {
+  const { state, deps } = fakeFlow();
+  state.projects.push({ id: 'proj-x', title: 'Nirmalab · story_1' });
+  state.characters.push({ id: 'ch-Laras', name: 'Laras', portraitMediaId: 'p' });
+  const job = { id: 'job_v2', kind: 'video', group: 'story_1', aspect: '9:16', durationSec: 6, prompt: 'Medium shot. Laras smiles.', characters: [{ name: 'Laras', look: 'girl' }] };
+  const r = await processJob({ job, account }, deps);
+  assert.equal(r.status, 'done');
+  const chat = state.calls.find(c => c[0] === 'flow_agent_chat')[1];
+  assert.deepEqual(chat.character_ids, ['ch-Laras']);
+  assert.equal(chat.image_ids, undefined);
 });
 
 test('when the agent stream is lost, the new media is found by diffing the project', async () => {

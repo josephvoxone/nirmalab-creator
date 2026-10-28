@@ -232,6 +232,8 @@ export function storyMessage(job, duration) {
   return [
     `Generate exactly one video (no images, no extra shots, no variations) in ${aspect} aspect ratio, ${duration} seconds long, with the Omni 1.1 Flash model and its native audio.`,
     job.startFrame ? 'Use the attached image as the first frame and animate it; keep the characters, outfits, colours and style identical to it.' : '',
+    // A painted keyframe has nothing outside it: a zoom-out makes the model invent a page border or a floral frame.
+    job.startFrame ? 'Keep the framing of the image: do not zoom out or reveal anything beyond its edges; no border, no page edges, no decorative frame.' : '',
     'Use this prompt verbatim, do not rewrite it:', '', job.prompt
   ].filter(Boolean).join('\n');
 }
@@ -263,17 +265,20 @@ async function storyJob(job, account, deps) {
     return { status: 'done', mediaId: portrait, bytes: bytes.byteLength };
   }
 
-  const characterIds = await ensureCharacters(account, projectId, job.characters, deps);
+  const isVideo = job.kind === 'video';
+  // Flow's first-frame animation (I2V) takes a single start image and refuses extra character references
+  // ("cannot incorporate additional character entities"); the approved keyframe already carries every character.
+  const i2v = isVideo && Boolean(job.startFrame?.mediaId);
+  const characterIds = i2v ? [] : await ensureCharacters(account, projectId, job.characters, deps);
   const before = new Set((await projectState(account, projectId, deps)).media.map(m => m?.mediaId));
   const startedAt = Date.now();
-  const isVideo = job.kind === 'video';
   const duration = [4, 6, 8, 10].includes(job.durationSec) ? job.durationSec : 6;
   const chat = parseToolResult(await deps.callTool(account, 'flow_agent_chat', {
     project_id: projectId,
     message: storyMessage(job, duration),
     new_session: true,
     ...(characterIds.length ? { character_ids: characterIds } : {}),
-    ...(isVideo && job.startFrame?.mediaId ? { image_ids: [job.startFrame.mediaId] } : {}),
+    ...(i2v ? { image_ids: [job.startFrame.mediaId] } : {}),
     max_credits: isVideo ? deps.maxCredits : 0
   }));
   if (chat?.approval === 'awaiting') {
