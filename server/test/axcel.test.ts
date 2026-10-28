@@ -133,6 +133,12 @@ describe('AxcelClient', () => {
     const client = new AxcelClient(fetchImpl, { url: 'http://127.0.0.1:8899', token: 'x'.repeat(20) });
     await expect(client.health()).rejects.toMatchObject({ message: 'Sesi Axcel berakhir', final: true });
   });
+
+  it('MODEL_GANGGUAN is final even when the bridge does not say so: the model is down, retrying the job at once cannot help', async () => {
+    const fetchImpl = (async () => json({ error: 'MODEL_GANGGUAN: Model ini sedang gangguan di penyedia' }, 502)) as unknown as typeof fetch;
+    const client = new AxcelClient(fetchImpl, { url: 'http://127.0.0.1:8899', token: 'x'.repeat(20) });
+    await expect(client.health()).rejects.toMatchObject({ final: true });
+  });
 });
 
 describe('AxcelWorker', () => {

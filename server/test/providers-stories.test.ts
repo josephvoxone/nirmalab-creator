@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { FlowStore } from '../src/flow/store.js';
-import { StoryService, type StoryDeps } from '../src/stories/service.js';
+import { OUTAGE_STOP, StoryService, type StoryDeps } from '../src/stories/service.js';
 import { validateStoryboard, type Storyboard } from '../src/stories/storyboard.js';
 
 const board: Storyboard = {
@@ -146,6 +146,59 @@ describe('audio: narration or ambient only', () => {
     };
     expect(await run('ambient')).toEqual(['done', 'done']);
     expect(await run()).not.toContain('done');
+  });
+});
+
+describe('provider outage (Axcel MODEL_GANGGUAN)', () => {
+  const three: Storyboard = { ...board, shots: [...board.shots, { id: '03-c', prompt: 'Close-up, RABBIT smiles.', narration: 'Ia tersenyum.' }] };
+
+  it('one clip refused because the model is down fails the run at once: no more takes, the other queued clips stop too', async () => {
+    const t = setup();
+    const story = await t.service.create({ ...three, mode: 'cepat', engine: { video: AX_VIDEO } });
+    await t.service.render(story.id);
+    const [first] = await t.flow.listJobs(100).then(js => js.filter(j => j.technique?.endsWith('/01-a')));
+    await t.flow.failJob(first!.id, 'Axcel: MODEL_GANGGUAN: Model ini sedang gangguan di penyedia', { final: true });
+    const after = (await t.service.reconcile(story.id))!;
+    expect(after.status).toBe('failed');
+    expect(after.shots.map(s => s.status)).toEqual(['failed', 'failed', 'failed']);
+    expect(after.shots[0]!.attempts).toBe(1);                       // one take, not three
+    expect(after.shots[1]!.error).toMatch(/dihentikan.*gangguan/i);
+    const jobs = await t.flow.listJobs(100);
+    expect(jobs).toHaveLength(3);                                   // nothing re-queued
+    expect(jobs.every(j => j.status === 'failed')).toBe(true);      // the sibling jobs never reach the engine
+    expect(after.events.filter(e => e.message.startsWith('Gagal'))).toHaveLength(1);
+    // One line per reason, not one per shot.
+    expect(after.error).toBe('01-a: Axcel: MODEL_GANGGUAN: Model ini sedang gangguan di penyedia; 2 shot (02-b, 03-c): ' + OUTAGE_STOP);
+  });
+
+  it('an ordinary refusal still gets its takes (only an outage stops the run)', async () => {
+    const t = setup();
+    const story = await t.service.create({ ...three, mode: 'cepat', engine: { video: AX_VIDEO } });
+    await t.service.render(story.id);
+    const [first] = (await t.flow.listJobs(100)).filter(j => j.technique?.endsWith('/01-a'));
+    await t.flow.failJob(first!.id, 'Axcel: moderasi menolak prompt', { final: true });
+    const after = (await t.service.reconcile(story.id))!;
+    expect(after.status).toBe('rendering');
+    expect(after.shots.map(s => s.status)).toEqual(['queued', 'queued', 'queued']);
+    expect((await t.flow.listJobs(100))).toHaveLength(4);
+  });
+});
+
+describe('activity log', () => {
+  it('a progress line equal to the last one updates its time instead of adding a row (failed takes re-queued: "0/2 shot siap" ×N)', async () => {
+    const t = setup();
+    const story = await t.service.create({ ...board, mode: 'cepat', engine: { video: AX_VIDEO } });
+    await t.service.render(story.id);
+    const before = (await t.service.get(story.id))!.events.length;
+    for (let round = 0; round < 2; round++) {
+      for (const j of (await t.flow.listJobs(100)).filter(j => j.status === 'queued')) {
+        await t.flow.failJob(j.id, 'Axcel: moderasi menolak prompt', { final: true });
+        await t.service.reconcile(story.id);
+      }
+    }
+    const lines = (await t.service.get(story.id))!.events.map(e => e.message);
+    for (let i = 1; i < lines.length; i++) expect(lines[i], `row ${i}`).not.toBe(lines[i - 1]);
+    expect(lines.length - before).toBe(1);
   });
 });
 

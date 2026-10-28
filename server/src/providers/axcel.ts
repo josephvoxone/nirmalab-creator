@@ -118,6 +118,9 @@ export class AxcelError extends Error {
 
 type BridgeReply<T> = { status: number; data: T };
 
+/** A provider outage (the model is down), as opposed to a refusal of this one job. */
+export const OUTAGE = /\bMODEL_GANGGUAN\b/;
+
 async function bridgeRequest<T>(fetchImpl: FetchLike, base: { url: string; token: string }, path: string, init: { method?: string; body?: unknown; headers?: Record<string, string>; timeoutMs?: number } = {}): Promise<T> {
   const controller = new AbortController();
   const timer = init.timeoutMs ? setTimeout(() => controller.abort(), init.timeoutMs) : undefined;
@@ -144,7 +147,9 @@ async function bridgeRequest<T>(fetchImpl: FetchLike, base: { url: string; token
   if (!response.ok) {
     const data = payload as { error?: unknown; final?: unknown } | undefined;
     const message = typeof data?.error === 'string' ? data.error : `Axcel bridge membalas ${response.status}`;
-    throw new AxcelError(message, response.status, data?.final === true);
+    // MODEL_GANGGUAN = the model is down at Axcel's provider: retrying the same job at once only
+    // repeats the refusal (and the Turnstile solve behind every attempt).
+    throw new AxcelError(message, response.status, data?.final === true || OUTAGE.test(message));
   }
   return payload as T;
 }

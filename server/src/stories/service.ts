@@ -9,6 +9,7 @@
  * - Assembly runs once per story at a time; a failure is recorded and retryable without re-rendering.
  */
 import { createHash, randomBytes } from 'node:crypto';
+import { OUTAGE } from '../providers/axcel.js';
 import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
@@ -28,6 +29,14 @@ import { MUSIC_FILE, NOT_AUDIO_MESSAGE, NO_SOUND_MESSAGE, musicExt } from './mus
 const MIN_IMAGE_BYTES = 10_000;
 
 export const MAX_TAKES = 3;
+/** Error of the clips stopped because the engine reported an outage (MODEL_GANGGUAN) on another clip. */
+/** "01-a: <why>; 2 shot (02-b, 03-c): <why>" — one entry per reason, so 20 identical refusals read as one. */
+function failureSummary(failed: Array<{ id: string; error?: string }>): string {
+  const groups = new Map<string, string[]>();
+  for (const s of failed) groups.set(s.error ?? 'gagal', [...(groups.get(s.error ?? 'gagal') ?? []), s.id]);
+  return [...groups].map(([why, ids]) => ids.length === 1 ? `${ids[0]}: ${why}` : `${ids.length} shot (${ids.length > 4 ? `${ids.slice(0, 3).join(', ')}, …` : ids.join(', ')}): ${why}`).join('; ');
+}
+export const OUTAGE_STOP = 'Dihentikan: Axcel sedang gangguan (MODEL_GANGGUAN) — tidak dicoba, render lagi nanti';
 export const MIN_CLIP_SEC = 3;
 /** Audits that may re-queue a take: the first take plus one repaired take, never a third (spec §4.4). */
 export const AUDIT_REPAIR_LIMIT = 2;
@@ -269,7 +278,14 @@ export class StoryService {
 
   private async save(record: StoryRecord, message?: string): Promise<void> {
     record.updatedAtMs = Date.now();
-    if (message) record.events = [...record.events, { atMs: record.updatedAtMs, message }].slice(-60);
+    if (message) {
+      // A repeated progress line ("0/20 shot siap" after every re-queued take) refreshes its time
+      // instead of filling the activity log with copies.
+      const last = record.events.at(-1);
+      record.events = last?.message === message
+        ? [...record.events.slice(0, -1), { atMs: record.updatedAtMs, message }]
+        : [...record.events, { atMs: record.updatedAtMs, message }].slice(-60);
+    }
     await this.writeJson(join(this.storyDir(record.id), 'story.json'), record);
   }
 
@@ -761,6 +777,7 @@ export class StoryService {
 
   private async collect(record: StoryRecord, board: Storyboard): Promise<boolean> {
     let changed = false;
+    let outage: string | undefined;
     const run = this.runIds(record);
     for (const state of record.shots) {
       const shot = board.shots.find(s => s.id === state.id);
@@ -791,7 +808,14 @@ export class StoryService {
         state.jobStartedAtMs = job.startedAtMs ?? job.createdAtMs;
       }
       if (job.status === 'failed') {
-        if ((await this.rejectTake(state, job.error ?? 'Flow gagal')) === 'requeue') await this.queueShot(record, board, state.id);
+        if (OUTAGE.test(job.error ?? '')) {
+          // The model is down: more takes, or the other clips of this run, would only hit the same wall.
+          state.attempts += 1;
+          state.status = 'failed';
+          state.lastError = job.error;
+          state.error = job.error;
+          outage = job.error;
+        } else if ((await this.rejectTake(state, job.error ?? 'Flow gagal')) === 'requeue') await this.queueShot(record, board, state.id);
         changed = true;
         continue;
       }
@@ -810,6 +834,16 @@ export class StoryService {
         if (record.mode !== 'konsisten') changed = (await this.auditClip(record, board, state, shot, target)) || changed;
       }
       changed = true;
+    }
+    if (outage) {
+      // Stop the rest of the run: its queued jobs never reach the engine, nothing is re-queued.
+      for (const state of record.shots) {
+        if (state.status !== 'queued') continue;
+        if (state.jobId) await this.deps.flow.failJob(state.jobId, OUTAGE_STOP, { final: true }).catch(() => undefined);
+        state.status = 'failed';
+        state.error = OUTAGE_STOP;
+        state.lastError = outage;
+      }
     }
     return changed;
   }
@@ -863,7 +897,7 @@ export class StoryService {
         const failed = record.shots.filter(s => run.has(s.id) && s.status === 'failed');
         if (failed.length) {
           record.status = 'failed';
-          record.error = failed.map(s => `${s.id}: ${s.error ?? 'gagal'}`).join('; ');
+          record.error = failureSummary(failed);
           await this.save(record, 'Gagal: ' + record.error);
           return record;
         }
