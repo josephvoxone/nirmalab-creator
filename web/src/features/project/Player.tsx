@@ -45,6 +45,11 @@ export function SequencePlayer(props: {
   music?: SequenceMusic;
   /** 'tulisan-tangan' letters the caption by hand at the top, like the assembled video. */
   captionStyle?: 'tulisan-tangan';
+  /** Font scale and the top of the text (share of the height): drawn exactly as the assembler burns it. */
+  captionSize?: number;
+  captionY?: number;
+  /** Dragging the caption saves a new position (once, when you let go). */
+  onCaptionY?: (y: number) => void;
 }) {
   const box = useRef<HTMLDivElement>(null);
   const video = useRef<HTMLVideoElement>(null);
@@ -70,6 +75,26 @@ export function SequencePlayer(props: {
     if (a.paused) Promise.resolve().then(() => a.play()).catch(() => undefined);
   }, [playing, i, local, props.music]); // eslint-disable-line react-hooks/exhaustive-deps
   const ratio = props.aspect === '16:9' ? 16 / 9 : 9 / 16;
+  // Caption drag: a live position while the pointer moves, saved on release.
+  const [dragY, setDragY] = useState<number>();
+  const hand = props.captionStyle === 'tulisan-tangan';
+  const captionY = dragY ?? props.captionY;
+  const grabCaption = (e: { clientY: number; preventDefault: () => void }) => {
+    if (!props.onCaptionY) return;
+    e.preventDefault();
+    const startY = e.clientY;
+    const from = props.captionY ?? (hand ? 0.11 : 0.78);
+    const at = (clientY: number) => Math.round(Math.min(0.9, Math.max(0.02, from + (clientY - startY) / maxH)) * 100) / 100;
+    const move = (ev: MouseEvent) => setDragY(at(ev.clientY));
+    const up = (ev: MouseEvent) => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      setDragY(undefined);
+      props.onCaptionY?.(at(ev.clientY));
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+  };
 
   useEffect(() => { props.onIndex?.(i); report(0); }, [i]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
@@ -77,14 +102,24 @@ export function SequencePlayer(props: {
   }, [props.index]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (i >= props.clips.length) setI(0); }, [props.clips.length, i]);
 
-  // Stills (no rendered clip) advance on a timer while playing.
+  // Stills (no rendered clip) advance on a timer while playing. The parent rebuilds its clip list on
+  // every poll and playhead tick, so the timer keys on the shot (id + length), not on the object, and
+  // keeps the time already shown: a re-render never restarts the same still.
+  const stillElapsed = useRef({ key: '', ms: 0 });
+  const stillKey = clip && !clip.src ? `${i}:${clip.id}:${clip.seconds}` : '';
   useEffect(() => {
-    if (!playing || !clip || clip.src) return;
-    const t = setTimeout(() => (i + 1 < props.clips.length ? setI(i + 1) : setPlaying(false)), clip.seconds * 1000);
-    const began = Date.now();
-    const tick = setInterval(() => report(Math.min(clip.seconds, (Date.now() - began) / 1000)), 250);
-    return () => { clearTimeout(t); clearInterval(tick); };
-  }, [playing, clip, i, props.clips.length]);
+    if (!playing || !stillKey || !clip) return;
+    if (stillElapsed.current.key !== stillKey) stillElapsed.current = { key: stillKey, ms: 0 };
+    const total = clip.seconds * 1000;
+    const began = Date.now() - stillElapsed.current.ms;
+    const tick = setInterval(() => {
+      const ms = Date.now() - began;
+      stillElapsed.current.ms = ms;
+      if (ms >= total) { clearInterval(tick); stillElapsed.current = { key: '', ms: 0 }; next(); return; }
+      report(ms / 1000);
+    }, 100);
+    return () => clearInterval(tick);
+  }, [playing, stillKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     const v = video.current;
@@ -113,17 +148,23 @@ export function SequencePlayer(props: {
             }}
             onEnded={next} className="size-full object-contain" />
         ) : clip?.poster ? (
-          <img src={clip.poster} alt={clip.label} decoding="async" className="size-full object-contain opacity-80" />
+          // A slow push-in while it plays (Ken Burns), so a shot without its clip still moves on the timeline.
+          <img key={`${i}:${clip.id}`} src={clip.poster} alt={clip.label} decoding="async" className="size-full object-contain opacity-90"
+            style={{ animationName: 'nc-ken-burns', animationDuration: `${clip.seconds}s`, animationTimingFunction: 'linear', animationFillMode: 'forwards', animationPlayState: playing ? 'running' : 'paused' }} />
         ) : (
           <div className="flex size-full items-center justify-center text-[12px] text-white/60">{clip?.label} · belum dirender</div>
         )}
         {clip && !clip.src && <span className="absolute bottom-1.5 left-1.5 rounded bg-black/60 px-1.5 py-0.5 text-[10.5px] text-white/80">Keyframe · belum dirender</span>}
         {clip?.caption && (
-          <p data-testid="caption" data-style={props.captionStyle ?? 'biasa'}
-            className={cn('pointer-events-none absolute inset-x-[8%] text-center text-white',
-              props.captionStyle === 'tulisan-tangan'
-                ? 'top-[11%] font-hand text-[17px] leading-tight text-[#faf4ea] [text-shadow:0_0_2px_rgba(51,38,26,.75),0_1px_3px_rgba(51,38,26,.5)]'
-                : 'bottom-[14%] text-[13px] leading-snug font-semibold [text-shadow:0_0_3px_#000,0_1px_2px_#000]')}>{clip.caption}</p>
+          // Same share of the frame as the assembler: 4.4 % (hand) / 3.4 % (plain) of the height × size.
+          <p data-testid="caption" data-style={props.captionStyle ?? 'biasa'} onPointerDown={grabCaption}
+            title={props.onCaptionY ? 'Seret untuk memindah subtitle' : undefined}
+            style={{ fontSize: `${Math.round((hand ? 0.044 : 0.034) * maxH * (props.captionSize ?? 1) * 10) / 10}px`, ...(captionY !== undefined ? { top: `${Math.round(captionY * 1000) / 10}%` } : {}) }}
+            className={cn('absolute text-center text-white select-none',
+              props.onCaptionY ? 'cursor-ns-resize touch-none' : 'pointer-events-none',
+              hand ? 'inset-x-[10%] font-hand leading-tight text-[#faf4ea] [text-shadow:0_0_2px_rgba(51,38,26,.75),0_1px_3px_rgba(51,38,26,.5)]'
+                : 'inset-x-[8%] leading-snug font-semibold [text-shadow:0_0_3px_#000,0_1px_2px_#000]',
+              captionY === undefined && (hand ? 'top-[11%]' : 'bottom-[14%]'))}>{clip.caption}</p>
         )}
         {props.music && <audio ref={audio} src={props.music.src} preload="auto" aria-hidden="true" />}
         <Button type="button" size="icon-sm" variant="glass" aria-label={`Layar penuh ${props.label}`} onClick={() => void fullscreen(box.current)} className="absolute top-1.5 right-1.5"><Maximize2 /></Button>

@@ -15,6 +15,8 @@ export type TimelineClip = {
   status: ClipStatus; narration: string; frame?: string; frameDone: boolean; clipVersion?: string;
   /** Trim: where the clip starts inside its file, its full length, and the raw subtitle line. */
   trimIn: number; trimOut?: number; full: number; line: string;
+  /** The subtitle text is the shot's own caption, not its narration. */
+  captioned: boolean;
   /** Assembly crop into the clip centre (1 = none). */
   zoom: number;
 };
@@ -23,7 +25,8 @@ export type Trim = { in?: number; out?: number };
 export type MusicEdit = { file: string; name: string; seconds: number; volume: number; at: number; from?: number };
 /** Subtitle look: absent = plain captions; 'tulisan-tangan' = hand-lettering (Gochi Hand) in the sky band. */
 export type SubtitleStyle = 'tulisan-tangan';
-export type TimelineEdit = { clipVolume?: number; subtitles?: boolean; subtitleStyle?: SubtitleStyle; music?: MusicEdit };
+/** subtitleSize: font scale (1 = style default); subtitleY: top of the text as a share of the frame height. */
+export type TimelineEdit = { clipVolume?: number; subtitles?: boolean; subtitleStyle?: SubtitleStyle; subtitleSize?: number; subtitleY?: number; music?: MusicEdit };
 export const MIN_CLIP = 1;
 const r3 = (n: number) => Math.round(n * 1000) / 1000;
 
@@ -50,6 +53,16 @@ export function withTrim(b: Board, shotId: string, trim: Trim | undefined): Boar
     if (s.id !== shotId) return s;
     const { trim: _old, ...rest } = s as typeof s & { trim?: Trim };
     return clean ? { ...rest, trim: clean } : rest;
+  }) };
+}
+
+/** The board with one shot's subtitle text set; undefined (or empty) goes back to the narration. */
+export function withCaption(b: Board, shotId: string, caption: string | undefined): Board {
+  const text = caption?.trim();
+  return { ...b, shots: b.shots.map(s => {
+    if (s.id !== shotId) return s;
+    const { caption: _old, ...rest } = s as typeof s & { caption?: string };
+    return text ? { ...rest, caption: text.slice(0, 200) } : rest;
   }) };
 }
 
@@ -99,11 +112,13 @@ export function timelineLayout(input: Board, story?: Story): TimelineLayout {
       const trim = (shot as { trim?: Trim }).trim;
       const window = clipWindow(trim, full);
       const seconds = window.seconds;
-      const line = shot.silent ? '' : shotLine(shot);
+      // The subtitle: the shot's own caption when set (assembly only), else its narration.
+      const own = (shot as { caption?: string }).caption?.trim();
+      const line = own || (shot.silent ? '' : shotLine(shot));
       clips.push({
         shotId: id, sceneId: scene.id, index: clips.length, start: t, seconds,
         status: st?.status ?? 'pending',
-        narration: line || '—',
+        narration: line || '—', captioned: Boolean(own),
         frame: st?.frame?.mediaId, frameDone: st?.frame?.status === 'done', clipVersion: st?.jobId ?? (st ? String(st.attempts) : undefined),
         trimIn: window.start, ...(trim?.out !== undefined ? { trimOut: trim.out } : {}), full, line,
         zoom: (shot as { zoom?: number }).zoom ?? 1

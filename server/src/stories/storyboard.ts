@@ -24,13 +24,16 @@ export type EditMusic = { file: string; name: string; seconds: number; volume: n
 /** Subtitle looks: absent = plain captions at the bottom; 'tulisan-tangan' = hand-lettering in the sky band. */
 export const SUBTITLE_STYLES = ['tulisan-tangan'] as const;
 export type SubtitleStyle = typeof SUBTITLE_STYLES[number];
-export type TimelineEdit = { clipVolume?: number; subtitles?: boolean; subtitleStyle?: SubtitleStyle; music?: EditMusic };
+/** subtitleSize: font scale (1 = the style's default); subtitleY: top of the text as a share of the frame height. */
+export type TimelineEdit = { clipVolume?: number; subtitles?: boolean; subtitleStyle?: SubtitleStyle; subtitleSize?: number; subtitleY?: number; music?: EditMusic };
 
 export type Shot = {
   id: string;
   trim?: ShotTrim;
   /** Assembly-only crop into the clip centre (1 = none, max 1.3): hides a page edge the model drew. Never in a prompt. */
   zoom?: number;
+  /** Subtitle text of this shot when it should differ from the narration (assembly only, never in a prompt). */
+  caption?: string;
   prompt: string;
   narration?: string;
   /** No voice-over: uses `audioSilent` (intro/outro beats). */
@@ -503,6 +506,7 @@ export function validateEdit(board: Storyboard): string[] {
   const errors: string[] = [];
   for (const shot of board.shots) {
     if (shot.zoom !== undefined && !isNum(shot.zoom, 1, 1.3)) errors.push(`${shot.id}: zoom must be a number from 1 to 1.3`);
+    if (shot.caption !== undefined && (typeof shot.caption !== 'string' || shot.caption.length > 200)) errors.push(`${shot.id}: caption must be text of at most 200 characters`);
     const t = shot.trim as unknown;
     if (t === undefined) continue;
     const trim = t as ShotTrim;
@@ -517,6 +521,8 @@ export function validateEdit(board: Storyboard): string[] {
   const edit = e as TimelineEdit;
   if (edit.clipVolume !== undefined && !isNum(edit.clipVolume, 0, 2)) errors.push('edit.clipVolume must be 0..2');
   if (edit.subtitles !== undefined && typeof edit.subtitles !== 'boolean') errors.push('edit.subtitles must be true or false');
+  if (edit.subtitleSize !== undefined && !isNum(edit.subtitleSize, 0.6, 2)) errors.push('edit.subtitleSize must be a number from 0.6 to 2');
+  if (edit.subtitleY !== undefined && !isNum(edit.subtitleY, 0.02, 0.9)) errors.push('edit.subtitleY must be a number from 0.02 to 0.9');
   if (edit.subtitleStyle !== undefined && !(SUBTITLE_STYLES as readonly string[]).includes(edit.subtitleStyle)) errors.push(`edit.subtitleStyle must be one of: ${SUBTITLE_STYLES.join(', ')}`);
   const m = edit.music as unknown as Record<string, unknown> | undefined;
   if (m !== undefined) {
@@ -537,11 +543,16 @@ export function validateEdit(board: Storyboard): string[] {
 export function editPrint(board: Storyboard): string {
   return JSON.stringify({
     e: board.edit ?? null,
-    s: board.shots.map(s => [s.id, s.trim ?? null, board.edit?.subtitles ? narrationOf(s) : null, ...(s.zoom && s.zoom !== 1 ? [s.zoom] : [])])
+    s: board.shots.map(s => [s.id, s.trim ?? null, board.edit?.subtitles ? subtitleOf(s) : null, ...(s.zoom && s.zoom !== 1 ? [s.zoom] : [])])
   });
 }
 
 /** The spoken/subtitled line of a shot (bible shots may keep it on the intent). */
+/** The subtitle line of a shot: its own caption when set, else its narration. */
+export function subtitleOf(shot: Shot): string {
+  return typeof shot.caption === 'string' && shot.caption.trim() ? shot.caption.trim() : narrationOf(shot);
+}
+
 export function narrationOf(shot: Shot): string {
   return ((shot.intent as { narration?: string } | undefined)?.narration ?? shot.narration ?? '').trim();
 }

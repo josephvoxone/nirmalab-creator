@@ -39,6 +39,10 @@ describe('timeline edit: validation', () => {
     expect(errors(b => { b.edit = { subtitles: 'yes' } as unknown as Storyboard['edit']; })).toMatch(/edit\.subtitles/);
     expect(errors(b => { b.edit = { subtitles: true, subtitleStyle: 'comic-sans' } as unknown as Storyboard['edit']; })).toMatch(/edit\.subtitleStyle/);
     expect(errors(b => { b.shots[0]!.zoom = 1.6; })).toMatch(/zoom/);
+    expect(errors(b => { b.shots[0]!.caption = 'x'.repeat(201); })).toMatch(/caption/);
+    expect(errors(b => { b.edit = { subtitles: true, subtitleSize: 3 }; })).toMatch(/subtitleSize/);
+    expect(errors(b => { b.edit = { subtitles: true, subtitleY: 0.99 }; })).toMatch(/subtitleY/);
+    expect(errors(b => { b.shots[0]!.caption = 'Terang untuk satu langkah'; b.edit = { subtitles: true, subtitleSize: 1.25, subtitleY: 0.42 }; })).toBe('');
     expect(errors(b => { b.shots[0]!.zoom = 1.12; })).toBe('');
   });
 
@@ -103,6 +107,35 @@ describe('timeline edit: the video must be assembled again', () => {
     expect(plan.shots[0].trim).toEqual({ in: 0.5, out: 4 });
     expect(plan.shots.map((s: { narration?: string }) => s.narration)).toEqual(['Setiap malam Raka berdoa.', 'Dia tidak pernah pergi.']);
     expect(plan.edit).toEqual({ clipVolume: 0.7, subtitles: true, music: { path: join(t.service.storyDir(id), 'music.mp3'), volume: 0.3, at: 1.5, from: 2 } });
+  });
+
+  it('subtitle text, size and position: assembly only (clip hashes unchanged), the video goes stale, the plan carries them', async () => {
+    const { t, id } = await assembled();
+    const b = await t.service.readStoryboard(id);
+    b.edit = { subtitles: true };
+    await t.service.updateStoryboard(id, b);
+    await t.service.assemble(id);
+    const before = (await t.service.get(id))!.shots.map(s => [s.id, s.status, s.jobId]);
+    b.shots[0]!.caption = 'Teks yang saya tulis sendiri';
+    b.edit = { subtitles: true, subtitleSize: 1.25, subtitleY: 0.42 };
+    const after = await t.service.updateStoryboard(id, b);
+    expect(after.videoStale).toBe(true);
+    expect(after.shots.map(s => [s.id, s.status, s.jobId])).toEqual(before);
+    await t.service.assemble(id);
+    const plan = JSON.parse(readFileSync(join(t.service.storyDir(id), 'assemble.json'), 'utf8'));
+    expect(plan.shots[0].narration).toBe('Teks yang saya tulis sendiri');
+    expect(plan.edit).toEqual({ subtitles: true, subtitleSize: 1.25, subtitleY: 0.42 });
+  });
+
+  it('editing only a subtitle text marks the video stale', async () => {
+    const { t, id } = await assembled();
+    const b = await t.service.readStoryboard(id);
+    b.edit = { subtitles: true };
+    await t.service.updateStoryboard(id, b);
+    await t.service.assemble(id);
+    expect((await t.service.get(id))!.videoStale).toBeFalsy();
+    b.shots[0]!.caption = 'Hanya teksnya yang berubah';
+    expect((await t.service.updateStoryboard(id, b)).videoStale).toBe(true);
   });
 
   it('shot zoom: crops into a clip at assembly only, marks the video stale, never re-queues the paid clip', async () => {

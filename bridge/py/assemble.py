@@ -66,11 +66,12 @@ DEJAVU_DIR = '/usr/share/fonts/truetype/dejavu'
 # Subtitle looks: 'tulisan-tangan' writes each line by hand into the quiet sky band of an artbook frame.
 HANDWRITTEN = 'tulisan-tangan'
 
-def ass_document(events, w, h, style=None):
+def ass_document(events, w, h, style=None, size=None, y=None):
     """Bottom-centred white captions with a dark outline, sized for the frame; or, with
     style='tulisan-tangan', light hand-lettering (Gochi Hand) top-centre with a soft outline and fades."""
     handwritten = style == HANDWRITTEN
-    size = round(h * (0.044 if handwritten else 0.034))
+    base = round(h * (0.044 if handwritten else 0.034))
+    size = round(base * size) if size else base
     if handwritten:
         # Warm white letters, a soft translucent brown outline (legible on a bright painted sky), no box.
         style_line = (f'Style: Default,Gochi Hand,{size},&H00EAF4FA,&H00EAF4FA,&H6A1A2633,&H00000000,0,0,0,0,100,100,1,0,1,'
@@ -87,6 +88,9 @@ def ass_document(events, w, h, style=None):
         '', '[Events]', 'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text'
     ]
     lead = '{\\fad(500,500)\\blur1.5}' if handwritten else ''
+    # A chosen position pins the top of the text, centred, at y x height.
+    if y is not None:
+        lead = f'{{\\an8\\pos({w // 2},{round(h * y)})}}' + lead
     for start, end, text in events:
         safe = text.replace('{', '(').replace('}', ')').replace('\r', '').replace('\n', '\\N')
         lines.append(f'Dialogue: 0,{_ass_time(start)},{_ass_time(end)},Default,,0,0,0,,{lead}{safe}')
@@ -222,7 +226,8 @@ def main(arg):
         if events:
             subs_dir = tempfile.mkdtemp(prefix='subs-')
             subs = os.path.join(subs_dir, 'subs.ass')
-            open(subs, 'w', encoding='utf-8').write(ass_document(events, W, H, style=edit.get('subtitleStyle')))
+            open(subs, 'w', encoding='utf-8').write(ass_document(events, W, H, style=edit.get('subtitleStyle'),
+                                                                size=edit.get('subtitleSize'), y=edit.get('subtitleY')))
     graph = filter_graph(durations, xf, transitions[1:], title_input=title_input, total=total,
                          clip_volume=edit.get('clipVolume'), music_input=music_input, music=music, subtitles=subs,
                          fonts_dir=FONTS_DIR if edit.get('subtitleStyle') == HANDWRITTEN else None, zooms=zooms)

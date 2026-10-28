@@ -19,7 +19,7 @@ import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty';
-import { SecondsField, Segmented, fmtSeconds } from '../../ui/controls.js';
+import { SecondsField, Segmented, fmtSeconds, textareaClass } from '../../ui/controls.js';
 import { Slider } from '@/components/ui/slider';
 import { Switch } from '@/components/ui/switch';
 import { useSession } from '../../lib/session.js';
@@ -30,7 +30,7 @@ import { sized } from '../../lib/media.js';
 import { SequencePlayer } from './Player.js';
 import {
   boardOrder, editOf, formatSeconds, MIN_CLIP, nudgeScene, nudgeShot, rulerTicks, sceneKey, sequenceClips, shotKey, timelineDrop, timelineLayout,
-  withEdit, withTrim, withZoom, type ClipStatus, type MusicEdit, type TimelineClip, type TimelineScene, type Trim
+  withCaption, withEdit, withTrim, withZoom, type ClipStatus, type MusicEdit, type TimelineClip, type TimelineScene, type Trim
 } from './TimelineModel.js';
 
 type Zoom = '50' | '100' | '200';
@@ -45,7 +45,7 @@ export const sceneColor = (i: number, a = 0.3) => `oklch(0.68 0.11 ${SCENE_HUES[
 export const STATUS_TEXT: Record<ClipStatus, string> = { done: 'Selesai', queued: 'Antre render', failed: 'Gagal', pending: 'Belum dirender' };
 export const STATUS_BAR: Record<ClipStatus, string> = { done: 'bg-(--success)', queued: 'bg-(--warning)', failed: 'bg-destructive', pending: 'bg-muted-foreground/35' };
 
-type Selection = { kind: 'shot' | 'scene'; id: string } | { kind: 'music' | 'audio'; id?: undefined } | undefined;
+type Selection = { kind: 'shot' | 'scene' | 'subtitle'; id: string } | { kind: 'music' | 'audio'; id?: undefined } | undefined;
 /** Keyboard trims and volume slides save once you stop (one revision, not one per key). */
 const COMMIT_MS = 600;
 const r1 = (n: number) => Math.round(n * 10) / 10;
@@ -180,6 +180,27 @@ function Labelled(props: { label: string; children: ReactNode }) {
   return <div className="flex items-center gap-1.5"><span className="text-[11px] text-muted-foreground">{props.label}</span>{props.children}</div>;
 }
 
+/** One shot's subtitle text: an override of the narration used only when the video is assembled. */
+function SubtitleInspector(props: { clip: TimelineClip; busy: boolean; commit: (text: string | undefined) => void; reset: () => void }) {
+  const { clip } = props;
+  const [text, setText] = useState(clip.line);
+  const save = () => { if (text.trim() !== clip.line.trim()) props.commit(text.trim() || undefined); };
+  return (
+    <section aria-label="Inspector" className="glass-panel flex flex-col gap-1.5 rounded-lg px-3 py-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-[12.5px] font-medium tabular-nums">T1 · Subtitle shot {clip.index + 1}</span>
+        <span className="text-[11px] text-muted-foreground">Hanya teks di video. Narasi dan klip tidak berubah, jadi tidak perlu render ulang.</span>
+        <Button size="xs" variant="ghost" className="ml-auto" disabled={props.busy || !clip.captioned} onClick={props.reset}><RotateCcw /> Kembalikan ke narasi</Button>
+      </div>
+      <textarea aria-label="Teks subtitle" value={text} maxLength={200} disabled={props.busy} rows={2}
+        placeholder="Mis. Terangnya cuma cukup untuk satu langkah."
+        onChange={e => setText(e.target.value)} onBlur={save}
+        onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); e.currentTarget.blur(); } }}
+        className={cn(textareaClass, 'min-h-14')} />
+    </section>
+  );
+}
+
 function Inspector(props: {
   board: Board; clips: TimelineClip[]; scenes: TimelineScene[]; selection: NonNullable<Selection>; busy: boolean; total: number;
   apply: (next: Board) => void; save: (next: Board) => void; pickMusic: () => void;
@@ -248,6 +269,13 @@ function Inspector(props: {
         <div className="ml-auto flex gap-1">{nudge(nudgeScene(board, scene.id, -1), nudgeScene(board, scene.id, 1))}</div>
       </section>
     );
+  }
+
+  if (selection.kind === 'subtitle') {
+    const sub = props.clips.find(c => c.shotId === selection.id);
+    if (!sub) return null;
+    return <SubtitleInspector key={`${sub.shotId}:${sub.line}`} clip={sub} busy={busy}
+      commit={text => save(withCaption(board, sub.shotId, text))} reset={() => save(withCaption(board, sub.shotId, undefined))} />;
   }
 
   const clip = props.clips.find(c => c.shotId === selection.id);
@@ -407,7 +435,8 @@ export function TimelineTab() {
     <div className="flex min-w-0 flex-col gap-3">
       <div className="glass-panel flex flex-col gap-1 rounded-lg p-2.5">
         <SequencePlayer clips={clips} label="Program monitor" maxH={280} aspect={board.aspect} index={current} onIndex={setCurrent} onTime={setOffset}
-          captionStyle={edit.subtitleStyle}
+          captionStyle={edit.subtitleStyle} captionSize={edit.subtitleSize} captionY={edit.subtitleY}
+          onCaptionY={busy ? undefined : y => save(withEdit(board, { subtitleY: y }))}
           music={music ? { src: media.music(id, `${music.file}:${music.name}`), volume: music.volume, at: music.at, from: music.from } : undefined} />
         <p className="text-center text-[11px] text-muted-foreground tabular-nums">{formatSeconds(playhead)} / {formatSeconds(layout.total)}</p>
       </div>
@@ -426,6 +455,16 @@ export function TimelineTab() {
             <Segmented name="Gaya subtitle" value={edit.subtitleStyle ?? 'biasa'} disabled={busy}
               onChange={v => save(withEdit(board, { subtitleStyle: v === 'tulisan-tangan' ? 'tulisan-tangan' : undefined }))}
               options={[{ value: 'biasa', label: 'Biasa', hint: 'Teks putih di bawah' }, { value: 'tulisan-tangan', label: 'Tulisan tangan', hint: 'Huruf tangan di langit atas (artbook)' }]} />
+          )}
+          {edit.subtitles === true && (
+            <Segmented name="Ukuran subtitle" value={String(edit.subtitleSize ?? 1)} disabled={busy}
+              onChange={v => save(withEdit(board, { subtitleSize: Number(v) === 1 ? undefined : Number(v) }))}
+              options={[{ value: '0.8', label: 'Kecil', hint: '80%' }, { value: '1', label: 'Sedang', hint: 'Ukuran bawaan gaya' }, { value: '1.25', label: 'Besar', hint: '125%' }, { value: '1.5', label: 'Jumbo', hint: '150%' }]} />
+          )}
+          {edit.subtitles === true && (
+            <Segmented name="Posisi subtitle" value={String(edit.subtitleY ?? '')} disabled={busy}
+              onChange={v => save(withEdit(board, { subtitleY: Number(v) }))}
+              options={[{ value: '0.1', label: 'Atas', hint: 'Di langit atas' }, { value: '0.42', label: 'Tengah', hint: 'Tengah frame' }, { value: '0.78', label: 'Bawah', hint: 'Di bawah, seperti film' }]} />
           )}
           <Segmented name="Zoom" value={zoom} onChange={setZoom}
             options={[{ value: '50', label: '50%' }, { value: '100', label: '100%' }, { value: '200', label: '200%' }]} />
@@ -518,10 +557,14 @@ export function TimelineTab() {
                 <div className={cn(HEADER, 'h-7')}>T1</div>
                 <ul aria-label="Track subtitle T1" className={cn('flex shrink-0', edit.subtitles !== true && 'opacity-55')}>
                   {layout.scenes.map(s => s.shots ? layout.clips.filter(c => c.sceneId === s.id).map(c => (
-                    <li key={c.shotId} title={c.narration} style={{ width: c.seconds * pps }}
-                      className={cn('flex h-7 shrink-0 items-center overflow-hidden border-r border-border/40 px-1 text-[10.5px] leading-tight',
-                        c.narration === '—' ? 'text-muted-foreground' : 'bg-(--brand)/10 text-foreground/85', selection?.id === c.shotId && 'bg-(--brand)/20')}>
-                      <span className="line-clamp-2">{c.narration}</span>
+                    <li key={c.shotId} title={c.narration} style={{ width: c.seconds * pps }} className="h-7 shrink-0 border-r border-border/40">
+                      <button type="button" aria-label={`Subtitle shot ${c.index + 1}`} aria-pressed={selection?.kind === 'subtitle' && selection.id === c.shotId}
+                        onClick={() => { setSelection({ kind: 'subtitle', id: c.shotId }); setCurrent(c.index); }}
+                        className={cn('flex size-full items-center overflow-hidden px-1 text-left text-[10.5px] leading-tight outline-none focus-visible:ring-1 focus-visible:ring-ring/60',
+                          c.narration === '—' ? 'text-muted-foreground' : 'bg-(--brand)/10 text-foreground/85', c.captioned && 'italic',
+                          selection?.id === c.shotId && 'bg-(--brand)/20')}>
+                        <span className="line-clamp-2">{c.narration}</span>
+                      </button>
                     </li>
                   )) : <li key={`gap-${s.id}`} aria-hidden="true" className="h-7 shrink-0" style={{ width: EMPTY_SCENE_PX }} />)}
                 </ul>

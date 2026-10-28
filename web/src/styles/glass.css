@@ -10,6 +10,11 @@
   src: url("/fonts/GochiHand-Regular.ttf") format("truetype");
   font-display: swap;
 }
+/* Timeline monitor: a keyframe without its clip yet pushes in slowly while the sequence plays. */
+@keyframes nc-ken-burns {
+  from { transform: scale(1); }
+  to { transform: scale(1.06); }
+}
 @theme {
   --font-hand: "Gochi Hand", "Comic Sans MS", cursive;
 }

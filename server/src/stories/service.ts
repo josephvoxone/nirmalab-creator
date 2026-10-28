@@ -15,7 +15,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type { FlowStore } from '../flow/store.js';
 import { linkOrCopy } from '../media/link.js';
-import { AXCEL_PROJECT_RESOLUTION, CREDITS_PER_SHOT, axcelClipSec, bibleSceneFor, editPrint, isSilent, narrationOf, castOf, frameHashFor, framePromptFor, hashFor, normalizeScenes, sceneOf, sheetHashFor, sheetPromptFor, shotCast, shotPromptFor, validateStoryboard, type Shot, type Storyboard } from './storyboard.js';
+import { AXCEL_PROJECT_RESOLUTION, CREDITS_PER_SHOT, axcelClipSec, subtitleOf, bibleSceneFor, editPrint, isSilent, narrationOf, castOf, frameHashFor, framePromptFor, hashFor, normalizeScenes, sceneOf, sheetHashFor, sheetPromptFor, shotCast, shotPromptFor, validateStoryboard, type Shot, type Storyboard } from './storyboard.js';
 import { ShotCompileError } from '../bible/compiler.js';
 import { bibleSceneErrors, syncBible } from '../bible/sync.js';
 import { SnapshotStore, type RestoreAttention, type RestoreOutcome } from './snapshots.js';
@@ -870,11 +870,13 @@ export class StoryService {
       ...board,
       slug: 'final',
       // The subtitle line of each shot travels with it (bible shots keep it on the intent).
-      shots: board.shots.map(s => ({ ...(s.reuse ? { ...s, reuse: { file: join(dir, `${s.id}.mp4`), start: s.reuse.start ?? 0 } } : s), narration: narrationOf(s) })),
+      shots: board.shots.map(s => ({ ...(s.reuse ? { ...s, reuse: { file: join(dir, `${s.id}.mp4`), start: s.reuse.start ?? 0 } } : s), narration: subtitleOf(s) })),
       edit: board.edit ? {
         ...(board.edit.clipVolume !== undefined ? { clipVolume: board.edit.clipVolume } : {}),
         ...(board.edit.subtitles ? { subtitles: true } : {}),
         ...(board.edit.subtitles && board.edit.subtitleStyle ? { subtitleStyle: board.edit.subtitleStyle } : {}),
+        ...(board.edit.subtitles && board.edit.subtitleSize !== undefined ? { subtitleSize: board.edit.subtitleSize } : {}),
+        ...(board.edit.subtitles && board.edit.subtitleY !== undefined ? { subtitleY: board.edit.subtitleY } : {}),
         ...(music ? { music: { path: join(dir, music.file), volume: music.volume, at: music.at, ...(music.from ? { from: music.from } : {}) } } : {})
       } : undefined
     };

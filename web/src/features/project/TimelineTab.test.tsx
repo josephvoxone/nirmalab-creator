@@ -1,4 +1,4 @@
-import { screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { userEvent } from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import { ProjectPage } from './ProjectPage.js';
@@ -147,8 +147,8 @@ describe('Timeline tab', () => {
   });
 });
 
-type Edit = { clipVolume?: number; subtitles?: boolean; subtitleStyle?: string; music?: { file: string; name: string; seconds: number; volume: number; at: number; from?: number } };
-const lastBoard = (calls: Call[]) => calls.filter(c => c.method === 'PUT').at(-1)?.body?.storyboard as { edit?: Edit; shots: Array<{ id: string; zoom?: number; trim?: { in?: number; out?: number } }> } | undefined;
+type Edit = { clipVolume?: number; subtitles?: boolean; subtitleStyle?: string; subtitleSize?: number; subtitleY?: number; music?: { file: string; name: string; seconds: number; volume: number; at: number; from?: number } };
+const lastBoard = (calls: Call[]) => calls.filter(c => c.method === 'PUT').at(-1)?.body?.storyboard as { edit?: Edit; shots: Array<{ id: string; zoom?: number; caption?: string; trim?: { in?: number; out?: number } }> } | undefined;
 const allDone = () => storyFor(BOARD, ['done', 'done', 'done', 'done'], ['done', 'done', 'done', 'done']);
 
 describe('Timeline model: trim', () => {
@@ -247,6 +247,65 @@ describe('Timeline edit (Premiere-style)', () => {
     expect(await within(monitor).findByTestId('caption')).toHaveAttribute('data-style', 'tulisan-tangan');
     await userEvent.click(within(screen.getByRole('radiogroup', { name: 'Gaya subtitle' })).getByRole('radio', { name: 'Biasa' }));
     await waitFor(() => expect(lastBoard(api.calls)?.edit).toEqual({ subtitles: true }));
+  });
+
+  it('subtitle size and position: presets save edit.subtitleSize / subtitleY, and the monitor shows the same size and place', async () => {
+    const api = fakeProjectApi({ story: allDone() });
+    open(api);
+    const monitor = await screen.findByRole('group', { name: /program monitor/i });
+    await userEvent.click(screen.getByRole('switch', { name: 'Subtitle di video' }));
+    await userEvent.click(within(track(/track video v1/i)).getByRole('button', { name: /^shot 2:/i }));
+    const caption = await within(monitor).findByTestId('caption');
+    const base = parseFloat(caption.style.fontSize);
+    await userEvent.click(within(screen.getByRole('radiogroup', { name: 'Ukuran subtitle' })).getByRole('radio', { name: /^Besar/ }));
+    await waitFor(() => expect(lastBoard(api.calls)?.edit).toEqual({ subtitles: true, subtitleSize: 1.25 }));
+    await waitFor(() => expect(parseFloat(within(monitor).getByTestId('caption').style.fontSize)).toBeCloseTo(base * 1.25, 1));
+    await userEvent.click(within(screen.getByRole('radiogroup', { name: 'Posisi subtitle' })).getByRole('radio', { name: /^Tengah/ }));
+    await waitFor(() => expect(lastBoard(api.calls)?.edit).toEqual({ subtitles: true, subtitleSize: 1.25, subtitleY: 0.42 }));
+    await waitFor(() => expect(within(monitor).getByTestId('caption').style.top).toBe('42%'));
+  });
+
+  it('subtitle position by dragging the text in the monitor (saved once you let go)', async () => {
+    const api = fakeProjectApi({ story: allDone() });
+    open(api);
+    const monitor = await screen.findByRole('group', { name: /program monitor/i });
+    await userEvent.click(screen.getByRole('switch', { name: 'Subtitle di video' }));
+    await userEvent.click(within(screen.getByRole('radiogroup', { name: 'Posisi subtitle' })).getByRole('radio', { name: /^Atas/ }));
+    await waitFor(() => expect(lastBoard(api.calls)?.edit).toEqual({ subtitles: true, subtitleY: 0.1 }));
+    await userEvent.click(within(track(/track video v1/i)).getByRole('button', { name: /^shot 2:/i }));
+    const caption = await within(monitor).findByTestId('caption');
+    const puts = () => api.calls.filter(c => c.method === 'PUT').length;
+    const before = puts();
+    // Monitor is 280 px tall: dragging the text 70 px down moves it 25 % of the frame.
+    fireEvent(caption, new MouseEvent('pointerdown', { clientY: 0, bubbles: true }));
+    fireEvent(window, new MouseEvent('pointermove', { clientY: 35, bubbles: true }));
+    fireEvent(window, new MouseEvent('pointermove', { clientY: 70, bubbles: true }));
+    expect(puts()).toBe(before);                                     // nothing saved mid-drag
+    fireEvent(window, new MouseEvent('pointerup', { clientY: 70, bubbles: true }));
+    await waitFor(() => expect(lastBoard(api.calls)?.edit?.subtitleY).toBe(0.35));   // 0.10 + 70/280
+    expect(within(monitor).getByTestId('caption').style.top).toBe('35%');
+    expect(within(screen.getByRole('radiogroup', { name: 'Posisi subtitle' })).queryByRole('radio', { checked: true })).toBeNull(); // a free spot
+  });
+
+  it('subtitle text: click a T1 subtitle, edit it in the inspector (assembly only), Kembalikan ke narasi removes the override', async () => {
+    const api = fakeProjectApi({ story: allDone() });
+    open(api);
+    const monitor = await screen.findByRole('group', { name: /program monitor/i });
+    await userEvent.click(screen.getByRole('switch', { name: 'Subtitle di video' }));
+    await userEvent.click(within(track(/track subtitle t1/i)).getByRole('button', { name: /subtitle shot 2/i }));
+    const inspector = screen.getByRole('region', { name: /inspector/i });
+    const field = within(inspector).getByRole('textbox', { name: 'Teks subtitle' });
+    expect(field).toHaveValue('Jingga menunggu setiap sore.');
+    expect(field).toHaveAttribute('placeholder');
+    await userEvent.clear(field);
+    await waitFor(() => expect(field).toHaveValue(''));
+    await userEvent.type(field, 'Setiap sore, dia menunggu.');
+    await userEvent.tab();
+    await waitFor(() => expect(lastBoard(api.calls)?.shots[1]!.caption).toBe('Setiap sore, dia menunggu.'));
+    expect(await within(monitor).findByText('Setiap sore, dia menunggu.')).toBeInTheDocument();
+    expect(within(track(/track subtitle t1/i)).getByRole('button', { name: /subtitle shot 2/i })).toHaveTextContent('Setiap sore, dia menunggu.');
+    await userEvent.click(within(screen.getByRole('region', { name: /inspector/i })).getByRole('button', { name: /kembalikan ke narasi/i }));
+    await waitFor(() => expect(lastBoard(api.calls)?.shots[1]!.caption).toBeUndefined());
   });
 
   it('music: upload → POST /music → saved on the board → A2 bar; start, volume and Hapus edit it', async () => {

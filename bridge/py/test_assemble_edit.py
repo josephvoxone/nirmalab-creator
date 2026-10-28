@@ -142,3 +142,20 @@ class ShotZoom(unittest.TestCase):
         self.assertEqual(shot_zoom({'zoom': 1.12}), 1.12)
         self.assertEqual(shot_zoom({'zoom': 5}), 1.3)
         self.assertEqual(shot_zoom({'zoom': 0.5}), 1.0)
+
+
+class SubtitleSizeAndPosition(unittest.TestCase):
+    def test_size_scales_the_font_and_y_pins_the_top_of_the_text(self):
+        plain = ass_document([(0.0, 2.0, 'Halo')], 720, 1280)
+        big = ass_document([(0.0, 2.0, 'Halo')], 720, 1280, size=1.5, y=0.42)
+        size = lambda doc: int([l for l in doc.split('\n') if l.startswith('Style: Default,')][0].split(',')[2])
+        self.assertEqual(size(big), round(size(plain) * 1.5))
+        line = [l for l in big.split('\n') if l.startswith('Dialogue:')][0]
+        self.assertIn('{\\an8\\pos(360,538)}', line)       # top-centre at 42% of 1280
+        self.assertTrue(line.endswith('Halo'))
+
+    def test_defaults_are_byte_identical(self):
+        self.assertEqual(ass_document([(0.0, 2.0, 'Halo')], 720, 1280), ass_document([(0.0, 2.0, 'Halo')], 720, 1280, size=None, y=None))
+        hand = ass_document([(0.0, 2.0, 'Halo')], 720, 1280, style='tulisan-tangan', y=0.7)
+        line = [l for l in hand.split('\n') if l.startswith('Dialogue:')][0]
+        self.assertIn('{\\an8\\pos(360,896)}{\\fad(500,500)\\blur1.5}Halo', line)
