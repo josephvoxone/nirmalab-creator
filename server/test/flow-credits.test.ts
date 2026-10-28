@@ -152,11 +152,41 @@ describe('Flow credits: when do they come back', () => {
     expect(acc(dir, a.id).cycleStartMs).toBeGreaterThan(Date.now() - 5000);
   });
 
+  it('a cycle that began before it was tracked is read from the job history (earliest paid clip in the last 24 h)', async () => {
+    const { store, dir } = makeStore();
+    const a = await store.addAccount({ label: 'A', email: 'a@x' });
+    await store.heartbeat('br', [{ id: a.id, credits: 50 }]);
+    const old = await store.createJob({ prompt: 'old', kind: 'video' });
+    const early = Date.now() - 2 * 3_600_000;
+    patchState(dir, s => {
+      const j = s.jobs.find((x: any) => x.id === old.id);
+      Object.assign(j, { status: 'done', accountId: a.id, startedAtMs: early, finishedAtMs: early + 60_000 });
+      s.jobs.push({ ...j, id: 'job_stale_000000001', startedAtMs: Date.now() - 30 * 3_600_000 }); // yesterday's cycle: ignored
+    });
+    await store.createJob({ prompt: 'new', kind: 'video' });
+    await store.claimJob('br');
+    expect(acc(dir, a.id).cycleStartMs).toBe(early);
+  });
+
+  it('a stored cycle start later than a paid clip in the same 24 h is corrected from the history', async () => {
+    const { store, dir } = makeStore();
+    const a = await store.addAccount({ label: 'A', email: 'a@x' });
+    await store.heartbeat('br', [{ id: a.id, credits: 0 }]);
+    const early = Date.now() - 2 * 3_600_000;
+    const job = await store.createJob({ prompt: 'old', kind: 'video' });
+    patchState(dir, s => {
+      Object.assign(s.jobs.find((x: any) => x.id === job.id), { status: 'done', accountId: a.id, startedAtMs: early });
+      s.accounts[0].cycleStartMs = Date.now() - 60_000;   // recorded late (before tracking existed)
+    });
+    expect((await store.queueStatus()).accounts[0]!.refillAtMs).toBe(early + REFILL_MS);
+  });
+
   it('queueStatus: running and waiting clips, and when the waiting ones resume', async () => {
     const { store, dir, a, b } = await pinnedToA({ a: 0, b: 0 });
+    const startA = Date.now() - 10 * 3_600_000, startB = Date.now() - 6 * 3_600_000;
     patchState(dir, s => {
-      s.accounts.find((x: any) => x.id === a.id).cycleStartMs = Date.parse('2026-10-28T09:00:00Z');
-      s.accounts.find((x: any) => x.id === b.id).cycleStartMs = Date.parse('2026-10-28T13:00:00Z');
+      s.accounts.find((x: any) => x.id === a.id).cycleStartMs = startA;
+      s.accounts.find((x: any) => x.id === b.id).cycleStartMs = startB;
     });
     await store.createJob({ prompt: 'c1', kind: 'video', group: 'story_g', startImage: '/1.png', startFrame: { mediaId: 'm', caption: 'c' } });
     await store.createJob({ prompt: 'c2', kind: 'video', group: 'story_g', startImage: '/2.png', startFrame: { mediaId: 'm', caption: 'c' } });
@@ -164,9 +194,9 @@ describe('Flow credits: when do they come back', () => {
     const q = await store.queueStatus();
     expect(q).toMatchObject({ running: 0, queued: 3, waitingForCredits: 2 });
     // The earliest refill of an account that could take them.
-    expect(q.resumeAtMs).toBe(Date.parse('2026-10-29T09:00:00Z'));
+    expect(q.resumeAtMs).toBe(startA + REFILL_MS);
     expect(q.accounts.map(x => [x.label, x.credits, x.refillAtMs])).toEqual([
-      ['A', 0, Date.parse('2026-10-29T09:00:00Z')], ['B', 0, Date.parse('2026-10-29T13:00:00Z')]
+      ['A', 0, startA + REFILL_MS], ['B', 0, startB + REFILL_MS]
     ]);
   });
 

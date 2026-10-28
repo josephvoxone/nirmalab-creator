@@ -46,6 +46,15 @@ export function refillAtMs(account: Pick<FlowAccount, 'cycleStartMs'>): number |
   return account.cycleStartMs ? account.cycleStartMs + REFILL_MS : undefined;
 }
 
+/** Start of the account's current credit cycle: the stored start or an earlier paid clip in the last 24 h. */
+function cycleStartOf(account: FlowAccount, jobs: FlowJob[], now: number): number | undefined {
+  const starts = jobs
+    .filter(j => j.accountId === account.id && jobCredits(j.kind) > 0 && j.startedAtMs && now - j.startedAtMs < REFILL_MS)
+    .map(j => j.startedAtMs!);
+  if (account.cycleStartMs && now - account.cycleStartMs < REFILL_MS) starts.push(account.cycleStartMs);
+  return starts.length ? Math.min(...starts) : undefined;
+}
+
 /** Whether the account can pay for a job of this cost now (unknown credits never block). */
 function canPay(account: FlowAccount, cost: number): boolean {
   if (cost <= 0) return true;
@@ -552,7 +561,8 @@ export class FlowStore {
         stored.creditsUsedToday = (stored.dayStamp === day ? stored.creditsUsedToday : 0) + jobCredits(job.kind);
         stored.dayStamp = day;
         stored.lastUsedAtMs = now;
-        if (jobCredits(job.kind) > 0 && (!stored.cycleStartMs || now - stored.cycleStartMs >= REFILL_MS)) stored.cycleStartMs = now;
+        // The cycle began with the earliest paid clip of the last 24 h (this one when there is none).
+        if (jobCredits(job.kind) > 0) stored.cycleStartMs = cycleStartOf(stored, state.jobs, now) ?? now;
       }
       await this.write(state);
       return job;
@@ -579,13 +589,15 @@ export class FlowStore {
       return !pool.some(a => payable(a, cost));
     });
     // They resume at the earliest refill of an account that could take them.
-    const refills = accounts.filter(a => !canPay(a, CREDITS_PER_SHOT)).map(a => refillAtMs(a)).filter((t): t is number => t !== undefined);
+    const now = Date.now();
+    const refillOf = (a: FlowAccount) => { const start = cycleStartOf(a, state.jobs, now); return start === undefined ? undefined : start + REFILL_MS; };
+    const refills = accounts.filter(a => !canPay(a, CREDITS_PER_SHOT)).map(refillOf).filter((t): t is number => t !== undefined);
     return {
       running: flowJobs.filter(j => j.status === 'running').length,
       queued: flowJobs.filter(j => j.status === 'queued').length,
       waitingForCredits: waiting.length,
       resumeAtMs: waiting.length && refills.length ? Math.min(...refills) : null,
-      accounts: accounts.map(a => ({ id: a.id, label: a.label, credits: a.credits ?? null, exhausted: Boolean(a.exhaustedAtMs), refillAtMs: refillAtMs(a) ?? null }))
+      accounts: accounts.map(a => ({ id: a.id, label: a.label, credits: a.credits ?? null, exhausted: Boolean(a.exhaustedAtMs), refillAtMs: refillOf(a) ?? null }))
     };
   }
 
