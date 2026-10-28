@@ -42,6 +42,8 @@ export type BibleLocation = {
   /** Location plate asset id. */
   plate?: string;
   lookdev?: string;
+  /** The light of this place ("only the lantern's glow"); replaces the look's light line in every shot here. */
+  light?: string;
 };
 
 export type SceneCard = {
@@ -188,6 +190,7 @@ export function validateBible(input: unknown): string[] {
   const locations = Array.isArray(b.locations) ? b.locations : [];
   const keys = new Set<string>();
   for (const loc of locations) {
+    if (loc?.light !== undefined && (typeof loc.light !== 'string' || loc.light.length > 240)) errors.push(`lokasi ${loc?.key ?? '?'}: light harus teks (maks 240 karakter)`);
     const key = text(loc?.key) ? loc.key : '(tanpa key)';
     if (!LOCATION_KEY_RE.test(loc?.key ?? '')) errors.push(`lokasi ${key}: key harus HURUF BESAR, angka atau garis bawah (mis. PASAR_IKAN)`);
     else if (keys.has(loc.key)) errors.push(`lokasi ${key}: key ganda`);

@@ -278,6 +278,23 @@ describe('warnings', () => {
     expect(named.warnings.join()).not.toMatch(/subject or action/);
   });
 
+  it('a location may carry its own light (a dark forest lit only by a lantern); without it the look light stays, byte for byte', () => {
+    const lit = bible();
+    lit.locations[0]!.light = 'only the warm gold glow of a small lantern, deep blue-black darkness all around';
+    const out = compileShot({ look: lookById('painterly')!, bible: lit, scene: scene(), shot: intents.action });
+    expect(out.imagePrompt).toContain('Light: only the warm gold glow of a small lantern, deep blue-black darkness all around.');
+    expect(out.imagePrompt).not.toContain('window key');
+    expect(compile('painterly', 'action').imagePrompt).toContain('Light: a warm afternoon window key');
+  });
+
+  it('a silent shot may name its own sounds (footsteps, rustle); without it the ambient line is unchanged', () => {
+    const out = compile('painterly', 'still', { sound: 'small footsteps on dry leaves and a creaking lantern handle' });
+    expect(out.audio).toBe('Audio: small footsteps on dry leaves and a creaking lantern handle, natural ambience, no voice, no music.');
+    expect(compile('painterly', 'still').audio).toBe('Audio: ambient room tone only, no voice.');
+    // A narrated shot keeps its voice-over; sound is for wordless beats only.
+    expect(compile('painterly', 'action', { sound: 'footsteps' }).audio).toMatch(/^Audio: Voice-over/);
+  });
+
   it('warns when emotion is missing but still compiles', () => {
     const out = compile('film-real', 'action', { emotion: undefined });
     expect(out.warnings.join()).toMatch(/emotion/);

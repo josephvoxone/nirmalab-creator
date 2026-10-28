@@ -37,6 +37,8 @@ export type ShotIntent = {
   speaker?: string;
   /** No voice-over at all (intro/outro beats). */
   silent?: boolean;
+  /** Sounds of a wordless shot ("small footsteps on dry leaves"); replaces the room-tone line. */
+  sound?: string;
 };
 
 export type CompiledShot = {
@@ -227,8 +229,10 @@ export function compileShot(input: {
   }
   const speaker = shot.speaker ? characterByToken(bible, shot.speaker)?.name ?? shot.speaker.trim() : '';
   if (shot.speaker && !characterByToken(bible, shot.speaker)) warnings.push(`speaker ${shot.speaker} is not in the bible; kept as written`);
+  const sound = shot.sound?.trim().replace(/[.\s]+$/, '');
+  if (sound && sound.length > 200) issues.push('sound is longer than 200 characters');
   const audio = shot.silent
-    ? 'Audio: ambient room tone only, no voice.'
+    ? (sound ? `Audio: ${sound}, natural ambience, no voice, no music.` : 'Audio: ambient room tone only, no voice.')
     : narration
       ? `Audio: ${speaker ? `Dialogue, ${speaker} speaking` : 'Voice-over in'} Bahasa Indonesia: "${narration}"`
       : '';
@@ -242,7 +246,7 @@ export function compileShot(input: {
     sentence(`${subject} ${action}`),
     `${sentence(`Starts: ${startState}`)} ${sentence(`Ends: ${endState}`)}`,
     sentence(`Setting: ${setting}`),
-    sentence(`Light: ${look.light.key}, ${look.light.fill}, ${look.light.rim}, ${look.light.temp}`),
+    sentence(`Light: ${location?.light?.trim() || `${look.light.key}, ${look.light.fill}, ${look.light.rim}, ${look.light.temp}`}`),
     sentence(`Optics: ${lens}, ${look.aperture}`),
     `Style: ${look.styleSentence}`,
     TEXT_POLICY,
