@@ -693,6 +693,7 @@ export class FlowStore {
       const job = state.jobs.find(j => j.id === id);
       if (!job) return undefined;
       job.status = 'done';
+      delete job.error;
       job.resultPath = result.filePath;
       job.bytes = result.bytes;
       job.provider = result.provider ?? job.provider ?? 'flow';

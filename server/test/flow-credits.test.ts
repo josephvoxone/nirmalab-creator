@@ -110,6 +110,8 @@ describe('Flow credits: an account Flow refuses is exhausted until it refills', 
     await store.heartbeat('br', [{ id: a.id, credits: 50 }]);
     expect(acc(dir, a.id).exhaustedAtMs).toBeUndefined();
     expect((await store.claimJob('br'))?.id).toBe(clip.id);
+    // Once it renders, the old "waiting" note is gone.
+    expect((await store.completeJob(clip.id, { filePath: '/c.mp4' }))?.error).toBeUndefined();
   });
 });
 
