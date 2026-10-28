@@ -176,7 +176,10 @@ const DEFINITIONS: FamilyDef[] = [
       // Epic Bible stories: one fixed full-bleed page, so every frame is framed the same way
       // (the family's "open wash of paper" margin wanders from shot to shot).
       { id: 'alkitab', label: 'Alkitab bergambar', extra: 'rich gouache with oil-glaze depth like a classic illustrated Bible, luminous golden light, detailed painted backgrounds and an epic sense of scale',
-        composition: { rule: 'thirds', headroom: 'the same clear headroom above every head', negativeSpace: 'a full-bleed painting that fills the frame edge to edge with no blank paper border' } }
+        composition: { rule: 'thirds', headroom: 'the same clear headroom above every head', negativeSpace: 'a full-bleed painting that fills the frame edge to edge with no blank paper border' } },
+      // Wordless artbook shorts: tiny chibi figures in big hand-drawn worlds, words written in the sky.
+      { id: 'artbook', label: 'Artbook pastel', extra: 'hand-drawn artbook illustration in chunky oil pastel and gouache with visible crayon strokes, white pastel sparkles and soft brush texture, chibi characters with big round heads, tiny dot eyes and rosy cheeks, small figures in vast dreamy landscapes, tender handmade storybook warmth',
+        composition: { rule: 'thirds', headroom: 'a wide band of quiet painted space above the characters, free for handwritten words', negativeSpace: 'a full-bleed painting that fills the frame edge to edge with no blank paper border' } }
     ]
   },
   {
@@ -358,6 +361,7 @@ export const LEGACY_STYLE_MAP: Record<string, { family: LookId; variant: string 
   papercut: { family: 'painterly', variant: 'papercut' },
   wayang: { family: 'painterly', variant: 'wayang' },
   alkitab: { family: 'painterly', variant: 'alkitab' },
+  artbook: { family: 'painterly', variant: 'artbook' },
   comic: { family: 'cel-anime', variant: 'comic' },
   'anime-2d': { family: 'cel-anime', variant: 'anime-2d' },
   'pixar-3d': { family: 'clay', variant: 'pixar-3d' },

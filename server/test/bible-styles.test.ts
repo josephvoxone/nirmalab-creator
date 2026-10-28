@@ -51,7 +51,7 @@ describe('six look families', () => {
   });
 
   it('keeps the named variants of spec §9.1, every one resolvable to its family', () => {
-    expect(byId('painterly').variants.map(v => v.id)).toEqual(['storybook', 'papercut', 'wayang', 'alkitab']);
+    expect(byId('painterly').variants.map(v => v.id)).toEqual(['storybook', 'papercut', 'wayang', 'alkitab', 'artbook']);
     expect(byId('cel-anime').variants.map(v => v.id)).toEqual(['comic', 'anime-2d']);
     expect(byId('clay').variants.map(v => v.id)).toEqual(['pixar-3d', 'lowpoly']);
     expect(byId('film-real').variants.map(v => v.id)).toEqual(['docu', 'cinematic-drama']);
@@ -84,6 +84,15 @@ describe('six look families', () => {
     // Existing storybook boards: their style sentence (part of every frame/clip hash) is unchanged.
     expect(byId('painterly:storybook').styleSentence).toContain('a centred composition framing, a generous painted sky above the heads, an open wash of plain paper at the edges');
     expect(byId('painterly:storybook').composition).toBe(byId('painterly').composition);
+  });
+
+  it('artbook: oil pastel + gouache chibi artbook, full-bleed, a quiet band of sky kept free for handwritten words', () => {
+    const artbook = byId('painterly:artbook');
+    expect(artbook.label).toBe('Artbook pastel');
+    expect(artbook.styleSentence).toContain('oil pastel and gouache');
+    expect(artbook.styleSentence).toContain('chibi');
+    expect(artbook.styleSentence).toContain('a full-bleed painting that fills the frame edge to edge with no blank paper border');
+    expect(artbook.composition.headroom).toMatch(/quiet painted space above the characters/);
   });
 
   it('resolves an id collision between a family and a variant deterministically: family wins, "family:variant" is explicit', () => {

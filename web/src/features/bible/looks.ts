@@ -22,7 +22,8 @@ export const LOOK_FAMILIES: LookFamily[] = [
       { id: 'storybook', label: 'Storybook cat air', hint: 'Cat air buku cerita', style: 'storybook', prompt: 'hand-painted storybook illustration come alive, soft watercolor textures, gentle paper grain' },
       { id: 'papercut', label: 'Papercut', hint: 'Diorama kertas berlapis', style: 'papercut', prompt: 'layered papercut diorama animation, cut paper textures, soft drop shadows between layers' },
       { id: 'wayang', label: 'Wayang & batik', hint: 'Ilustrasi Nusantara', style: 'wayang', prompt: 'Indonesian wayang and batik inspired painted illustration, ornate patterns, warm earthy textures' },
-      { id: 'alkitab', label: 'Alkitab bergambar', hint: 'Lukisan Alkitab klasik yang megah', style: 'alkitab', prompt: 'classic illustrated Bible painting come alive, rich gouache with oil-glaze depth, luminous golden light, full-bleed frame' }
+      { id: 'alkitab', label: 'Alkitab bergambar', hint: 'Lukisan Alkitab klasik yang megah', style: 'alkitab', prompt: 'classic illustrated Bible painting come alive, rich gouache with oil-glaze depth, luminous golden light, full-bleed frame' },
+      { id: 'artbook', label: 'Artbook pastel', hint: 'Krayon minyak & gouache, karakter chibi', style: 'artbook', prompt: 'hand-drawn artbook illustration come alive, chunky oil pastel and gouache strokes, chibi characters, tiny figures in vast dreamy landscapes' }
     ]
   },
   {

@@ -60,26 +60,41 @@ def _ass_time(t):
     return f'{cs // 360000}:{cs // 6000 % 60:02d}:{cs // 100 % 60:02d}.{cs % 100:02d}'
 
 
-def ass_document(events, w, h):
-    """Bottom-centred white captions with a dark outline, sized for the frame."""
-    size = round(h * 0.034)
+# Fonts shipped next to this file (title card faces, handwritten subtitles).
+FONTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'fonts')
+DEJAVU_DIR = '/usr/share/fonts/truetype/dejavu'
+# Subtitle looks: 'tulisan-tangan' writes each line by hand into the quiet sky band of an artbook frame.
+HANDWRITTEN = 'tulisan-tangan'
+
+def ass_document(events, w, h, style=None):
+    """Bottom-centred white captions with a dark outline, sized for the frame; or, with
+    style='tulisan-tangan', light hand-lettering (Gochi Hand) top-centre with a soft outline and fades."""
+    handwritten = style == HANDWRITTEN
+    size = round(h * (0.044 if handwritten else 0.034))
+    if handwritten:
+        # Warm white letters, a soft translucent brown outline (legible on a bright painted sky), no box.
+        style_line = (f'Style: Default,Gochi Hand,{size},&H00EAF4FA,&H00EAF4FA,&H6A1A2633,&H00000000,0,0,0,0,100,100,1,0,1,'
+                      f'{max(2, size // 12)},0,8,{round(w * 0.1)},{round(w * 0.1)},{round(h * 0.11)},1')
+    else:
+        style_line = (f'Style: Default,DejaVu Sans,{size},&H00FFFFFF,&H00FFFFFF,&H00101010,&H64000000,1,0,0,0,100,100,0,0,1,{max(2, size // 14)},1,2,'
+                      f'{round(w * 0.08)},{round(w * 0.08)},{round(h * 0.14)},1')
     lines = [
         '[Script Info]', 'ScriptType: v4.00+', f'PlayResX: {w}', f'PlayResY: {h}', 'WrapStyle: 0', '',
         '[V4+ Styles]',
         'Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, '
         'ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding',
-        f'Style: Default,DejaVu Sans,{size},&H00FFFFFF,&H00FFFFFF,&H00101010,&H64000000,1,0,0,0,100,100,0,0,1,{max(2, size // 14)},1,2,'
-        f'{round(w * 0.08)},{round(w * 0.08)},{round(h * 0.14)},1',
+        style_line,
         '', '[Events]', 'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text'
     ]
+    lead = '{\\fad(500,500)\\blur1.5}' if handwritten else ''
     for start, end, text in events:
         safe = text.replace('{', '(').replace('}', ')').replace('\r', '').replace('\n', '\\N')
-        lines.append(f'Dialogue: 0,{_ass_time(start)},{_ass_time(end)},Default,,0,0,0,,{safe}')
+        lines.append(f'Dialogue: 0,{_ass_time(start)},{_ass_time(end)},Default,,0,0,0,,{lead}{safe}')
     return '\n'.join(lines) + '\n'
 
 
 def filter_graph(durations, xf, transitions=None, title_input=None, total=None,
-                 clip_volume=None, music_input=None, music=None, subtitles=None):
+                 clip_volume=None, music_input=None, music=None, subtitles=None, fonts_dir=None):
     parts = []
     n = len(durations)
     for i in range(n):
@@ -101,7 +116,7 @@ def filter_graph(durations, xf, transitions=None, title_input=None, total=None,
         parts.append(f'[{vprev}][ttl]overlay=0:0:eof_action=pass[vt]')
         video = '[vt]'
     if subtitles:
-        video += f"subtitles=filename={subtitles}:fontsdir=/usr/share/fonts/truetype/dejavu,"
+        video += f"subtitles=filename={subtitles}:fontsdir={fonts_dir or DEJAVU_DIR},"
     if total:
         video += f'fade=t=in:st=0:d=0.8,fade=t=out:st={round(total - 1.2, 3)}:d=1.2,'
     parts.append(video.rstrip(',') + '[vout]' if video not in (f'[{vprev}]', '[vt]') else video + 'null[vout]')
@@ -195,9 +210,10 @@ def main(arg):
         if events:
             subs_dir = tempfile.mkdtemp(prefix='subs-')
             subs = os.path.join(subs_dir, 'subs.ass')
-            open(subs, 'w', encoding='utf-8').write(ass_document(events, W, H))
+            open(subs, 'w', encoding='utf-8').write(ass_document(events, W, H, style=edit.get('subtitleStyle')))
     graph = filter_graph(durations, xf, transitions[1:], title_input=title_input, total=total,
-                         clip_volume=edit.get('clipVolume'), music_input=music_input, music=music, subtitles=subs)
+                         clip_volume=edit.get('clipVolume'), music_input=music_input, music=music, subtitles=subs,
+                         fonts_dir=FONTS_DIR if edit.get('subtitleStyle') == HANDWRITTEN else None)
     final = os.path.join(out_dir, f"{story['slug']}.mp4")
     cmd = ['ffmpeg', '-y', '-v', 'error', *inputs, '-filter_complex', graph, '-map', '[vout]', '-map', '[aout]',
            '-c:v', 'libx264', '-preset', 'slow', '-crf', '18', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '192k',

@@ -6,7 +6,7 @@ import subprocess
 import tempfile
 import unittest
 
-from assemble import ass_document, clip_window, filter_graph, subtitle_events
+from assemble import FONTS_DIR, ass_document, clip_window, filter_graph, subtitle_events
 
 
 def has_filter(name):
@@ -64,6 +64,30 @@ class Graph(unittest.TestCase):
         video = [p for p in g.split(';') if p.endswith('[vout]')][0]
         self.assertIn("subtitles=filename=/tmp/x/subs.ass", video)
         self.assertLess(video.index('subtitles='), video.index('fade=t=out'))
+        self.assertIn('fontsdir=/usr/share/fonts/truetype/dejavu', video)
+
+    def test_handwritten_subtitles_use_the_bundled_font_dir(self):
+        g = filter_graph([5.0, 5.0], 0.3, total=9.7, subtitles='/tmp/x/subs.ass', fonts_dir=FONTS_DIR)
+        self.assertIn(f'fontsdir={FONTS_DIR}', g)
+        self.assertTrue(os.path.exists(os.path.join(FONTS_DIR, 'GochiHand-Regular.ttf')))
+
+
+class HandwrittenStyle(unittest.TestCase):
+    def test_default_style_is_unchanged(self):
+        doc = ass_document([(0.0, 2.0, 'Halo')], 720, 1280)
+        self.assertIn('Style: Default,DejaVu Sans,', doc)
+        self.assertIn(',2,58,58,179,1', doc)      # bottom-centre, margins as before
+
+    def test_tulisan_tangan_is_gochi_hand_in_the_upper_band_with_soft_fades(self):
+        doc = ass_document([(0.0, 2.5, 'Satu langkah.')], 720, 1280, style='tulisan-tangan')
+        style = [l for l in doc.split('\n') if l.startswith('Style: Default,')][0]
+        self.assertTrue(style.startswith('Style: Default,Gochi Hand,'))
+        fields = style.split(',')
+        self.assertEqual(fields[18], '8')           # Alignment 8 = top centre (the quiet sky band)
+        self.assertEqual(fields[7], '0')            # not bold: the hand-lettering stays light
+        line = [l for l in doc.split('\n') if l.startswith('Dialogue:')][0]
+        self.assertIn('{\\fad(500,500)\\blur', line)
+        self.assertTrue(line.endswith('Satu langkah.'))
 
 
 @unittest.skipUnless(shutil.which('ffmpeg') and has_filter('subtitles'), 'needs ffmpeg with libass')

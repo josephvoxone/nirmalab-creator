@@ -25,7 +25,7 @@ describe('timeline edit: validation', () => {
   it('accepts trims, clip volume, music and subtitles', () => {
     const b = board();
     b.shots[1]!.trim = { in: 0.5, out: 4 };
-    b.edit = { clipVolume: 0.8, subtitles: true, music: { file: 'music.mp3', name: 'Hymn.mp3', seconds: 95.2, volume: 0.35, at: 1, from: 0 } };
+    b.edit = { clipVolume: 0.8, subtitles: true, subtitleStyle: 'tulisan-tangan', music: { file: 'music.mp3', name: 'Hymn.mp3', seconds: 95.2, volume: 0.35, at: 1, from: 0 } };
     expect(validateStoryboard(b)).toEqual([]);
   });
 
@@ -37,6 +37,7 @@ describe('timeline edit: validation', () => {
     expect(errors(b => { b.edit = { music: { file: '../../etc/passwd', name: 'x', seconds: 3, volume: 0.3, at: 0 } }; })).toMatch(/edit\.music\.file/);
     expect(errors(b => { b.edit = { music: { file: 'music.mp3', name: 'x', seconds: 3, volume: 9, at: 0 } }; })).toMatch(/edit\.music\.volume/);
     expect(errors(b => { b.edit = { subtitles: 'yes' } as unknown as Storyboard['edit']; })).toMatch(/edit\.subtitles/);
+    expect(errors(b => { b.edit = { subtitles: true, subtitleStyle: 'comic-sans' } as unknown as Storyboard['edit']; })).toMatch(/edit\.subtitleStyle/);
   });
 
   it('edits never change a clip prompt: no clip is rendered again for a trim, music or subtitles', () => {
@@ -100,6 +101,22 @@ describe('timeline edit: the video must be assembled again', () => {
     expect(plan.shots[0].trim).toEqual({ in: 0.5, out: 4 });
     expect(plan.shots.map((s: { narration?: string }) => s.narration)).toEqual(['Setiap malam Raka berdoa.', 'Dia tidak pernah pergi.']);
     expect(plan.edit).toEqual({ clipVolume: 0.7, subtitles: true, music: { path: join(t.service.storyDir(id), 'music.mp3'), volume: 0.3, at: 1.5, from: 2 } });
+  });
+
+  it('handwritten subtitles: the style reaches the assembly plan, and switching it marks the video stale', async () => {
+    const { t, id } = await assembled();
+    const b = await t.service.readStoryboard(id);
+    b.edit = { subtitles: true };
+    await t.service.updateStoryboard(id, b);
+    await t.service.assemble(id);
+    expect((await t.service.get(id))!.videoStale).toBeFalsy();
+    b.edit = { subtitles: true, subtitleStyle: 'tulisan-tangan' };
+    const after = await t.service.updateStoryboard(id, b);
+    expect(after.videoStale).toBe(true);
+    expect(after.shots.every(s => s.status === 'done')).toBe(true);
+    await t.service.assemble(id);
+    const plan = JSON.parse(readFileSync(join(t.service.storyDir(id), 'assemble.json'), 'utf8'));
+    expect(plan.edit).toEqual({ subtitles: true, subtitleStyle: 'tulisan-tangan' });
   });
 });
 

@@ -3,6 +3,16 @@
    page stylesheets (tokens.css / app.css / studio.css) in the same material. */
 @layer theme, base, legacy, components, utilities;
 @import "tailwindcss";
+
+/* Handwritten subtitles (timeline preview): the face the assembler burns into the video. */
+@font-face {
+  font-family: "Gochi Hand";
+  src: url("/fonts/GochiHand-Regular.ttf") format("truetype");
+  font-display: swap;
+}
+@theme {
+  --font-hand: "Gochi Hand", "Comic Sans MS", cursive;
+}
 @import "tw-animate-css";
 @import "./vendor/shadcn-tailwind.css";
 @import "@fontsource-variable/geist";

@@ -43,6 +43,8 @@ export function SequencePlayer(props: {
   /** Seconds into the current clip, for a playhead. */
   onTime?: (seconds: number) => void;
   music?: SequenceMusic;
+  /** 'tulisan-tangan' letters the caption by hand at the top, like the assembled video. */
+  captionStyle?: 'tulisan-tangan';
 }) {
   const box = useRef<HTMLDivElement>(null);
   const video = useRef<HTMLVideoElement>(null);
@@ -116,7 +118,11 @@ export function SequencePlayer(props: {
         )}
         {clip && !clip.src && <span className="absolute bottom-1.5 left-1.5 rounded bg-black/60 px-1.5 py-0.5 text-[10.5px] text-white/80">Keyframe · belum dirender</span>}
         {clip?.caption && (
-          <p data-testid="caption" className="pointer-events-none absolute inset-x-[8%] bottom-[14%] text-center text-[13px] leading-snug font-semibold text-white [text-shadow:0_0_3px_#000,0_1px_2px_#000]">{clip.caption}</p>
+          <p data-testid="caption" data-style={props.captionStyle ?? 'biasa'}
+            className={cn('pointer-events-none absolute inset-x-[8%] text-center text-white',
+              props.captionStyle === 'tulisan-tangan'
+                ? 'top-[11%] font-hand text-[17px] leading-tight text-[#faf4ea] [text-shadow:0_0_2px_rgba(51,38,26,.75),0_1px_3px_rgba(51,38,26,.5)]'
+                : 'bottom-[14%] text-[13px] leading-snug font-semibold [text-shadow:0_0_3px_#000,0_1px_2px_#000]')}>{clip.caption}</p>
         )}
         {props.music && <audio ref={audio} src={props.music.src} preload="auto" aria-hidden="true" />}
         <Button type="button" size="icon-sm" variant="glass" aria-label={`Layar penuh ${props.label}`} onClick={() => void fullscreen(box.current)} className="absolute top-1.5 right-1.5"><Maximize2 /></Button>

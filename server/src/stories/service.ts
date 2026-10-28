@@ -873,6 +873,7 @@ export class StoryService {
       edit: board.edit ? {
         ...(board.edit.clipVolume !== undefined ? { clipVolume: board.edit.clipVolume } : {}),
         ...(board.edit.subtitles ? { subtitles: true } : {}),
+        ...(board.edit.subtitles && board.edit.subtitleStyle ? { subtitleStyle: board.edit.subtitleStyle } : {}),
         ...(music ? { music: { path: join(dir, music.file), volume: music.volume, at: music.at, ...(music.from ? { from: music.from } : {}) } } : {})
       } : undefined
     };

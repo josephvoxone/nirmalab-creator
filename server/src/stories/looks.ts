@@ -59,6 +59,7 @@ const styles: Option[] = [
   { id: 'documentary', label: 'Dokumenter', hint: 'Footage dokumenter nyata', prompt: 'photorealistic documentary footage, natural light, observational framing' },
   { id: 'wayang', label: 'Wayang & batik', hint: 'Ilustrasi Nusantara', prompt: 'Indonesian wayang and batik inspired painted illustration, ornate patterns, warm earthy textures' },
   { id: 'alkitab', label: 'Alkitab bergambar', hint: 'Lukisan Alkitab klasik yang megah', prompt: 'classic illustrated Bible painting come alive, rich gouache with oil-glaze depth, luminous golden light, full-bleed frame' },
+  { id: 'artbook', label: 'Artbook pastel', hint: 'Krayon minyak & gouache, karakter chibi', prompt: 'hand-drawn artbook illustration come alive, chunky oil pastel and gouache strokes, chibi characters, tiny figures in vast dreamy landscapes' },
   { id: 'comic', label: 'Komik', hint: 'Novel grafis tinta tebal', prompt: 'graphic novel illustration come alive, bold ink lines, halftone shading' },
   { id: 'lowpoly', label: 'Low poly', hint: '3D geometris lembut', prompt: 'soft low-poly 3D diorama, faceted geometry, gentle pastel lighting' },
   { id: 'noir', label: 'Noir', hint: 'Kontras tinggi hitam putih', prompt: 'high-contrast black and white film noir, hard shadows, deep blacks, drifting smoke' }
@@ -80,7 +81,8 @@ export const FAMILIES: LookFamily[] = [
       { id: 'storybook', label: 'Storybook cat air', style: 'storybook' },
       { id: 'papercut', label: 'Papercut', style: 'papercut' },
       { id: 'wayang', label: 'Wayang & batik', style: 'wayang' },
-      { id: 'alkitab', label: 'Alkitab bergambar', style: 'alkitab' }
+      { id: 'alkitab', label: 'Alkitab bergambar', style: 'alkitab' },
+      { id: 'artbook', label: 'Artbook pastel', style: 'artbook' }
     ]
   },
   {

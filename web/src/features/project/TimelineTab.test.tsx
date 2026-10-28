@@ -147,7 +147,7 @@ describe('Timeline tab', () => {
   });
 });
 
-type Edit = { clipVolume?: number; subtitles?: boolean; music?: { file: string; name: string; seconds: number; volume: number; at: number; from?: number } };
+type Edit = { clipVolume?: number; subtitles?: boolean; subtitleStyle?: string; music?: { file: string; name: string; seconds: number; volume: number; at: number; from?: number } };
 const lastBoard = (calls: Call[]) => calls.filter(c => c.method === 'PUT').at(-1)?.body?.storyboard as { edit?: Edit; shots: Array<{ id: string; trim?: { in?: number; out?: number } }> } | undefined;
 const allDone = () => storyFor(BOARD, ['done', 'done', 'done', 'done'], ['done', 'done', 'done', 'done']);
 
@@ -217,6 +217,21 @@ describe('Timeline edit (Premiere-style)', () => {
     await waitFor(() => expect(lastBoard(api.calls)?.edit).toEqual({ subtitles: true }));
     await userEvent.click(within(track(/track video v1/i)).getByRole('button', { name: /^shot 2:/i }));
     expect(await within(monitor).findByTestId('caption')).toHaveTextContent('Jingga menunggu setiap sore.');
+  });
+
+  it('subtitles: "Tulisan tangan" saves edit.subtitleStyle and the monitor letters the line by hand', async () => {
+    const api = fakeProjectApi({ story: allDone() });
+    open(api);
+    const monitor = await screen.findByRole('group', { name: /program monitor/i });
+    expect(screen.queryByRole('radiogroup', { name: 'Gaya subtitle' })).toBeNull();      // only once subtitles are on
+    await userEvent.click(screen.getByRole('switch', { name: 'Subtitle di video' }));
+    await waitFor(() => expect(lastBoard(api.calls)?.edit).toEqual({ subtitles: true }));
+    await userEvent.click(within(screen.getByRole('radiogroup', { name: 'Gaya subtitle' })).getByRole('radio', { name: 'Tulisan tangan' }));
+    await waitFor(() => expect(lastBoard(api.calls)?.edit).toEqual({ subtitles: true, subtitleStyle: 'tulisan-tangan' }));
+    await userEvent.click(within(track(/track video v1/i)).getByRole('button', { name: /^shot 2:/i }));
+    expect(await within(monitor).findByTestId('caption')).toHaveAttribute('data-style', 'tulisan-tangan');
+    await userEvent.click(within(screen.getByRole('radiogroup', { name: 'Gaya subtitle' })).getByRole('radio', { name: 'Biasa' }));
+    await waitFor(() => expect(lastBoard(api.calls)?.edit).toEqual({ subtitles: true }));
   });
 
   it('music: upload → POST /music → saved on the board → A2 bar; start, volume and Hapus edit it', async () => {

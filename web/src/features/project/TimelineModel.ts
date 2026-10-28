@@ -19,7 +19,9 @@ export type TimelineClip = {
 
 export type Trim = { in?: number; out?: number };
 export type MusicEdit = { file: string; name: string; seconds: number; volume: number; at: number; from?: number };
-export type TimelineEdit = { clipVolume?: number; subtitles?: boolean; music?: MusicEdit };
+/** Subtitle look: absent = plain captions; 'tulisan-tangan' = hand-lettering (Gochi Hand) in the sky band. */
+export type SubtitleStyle = 'tulisan-tangan';
+export type TimelineEdit = { clipVolume?: number; subtitles?: boolean; subtitleStyle?: SubtitleStyle; music?: MusicEdit };
 export const MIN_CLIP = 1;
 const r3 = (n: number) => Math.round(n * 1000) / 1000;
 

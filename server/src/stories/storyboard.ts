@@ -21,7 +21,10 @@ export type ShotTrim = { in?: number; out?: number };
 /** The music track: the stored file, where it starts on the timeline (`at`) and inside the song (`from`). */
 export type EditMusic = { file: string; name: string; seconds: number; volume: number; at: number; from?: number };
 /** Timeline edits applied at assembly only: never part of a clip prompt, so they never re-render. */
-export type TimelineEdit = { clipVolume?: number; subtitles?: boolean; music?: EditMusic };
+/** Subtitle looks: absent = plain captions at the bottom; 'tulisan-tangan' = hand-lettering in the sky band. */
+export const SUBTITLE_STYLES = ['tulisan-tangan'] as const;
+export type SubtitleStyle = typeof SUBTITLE_STYLES[number];
+export type TimelineEdit = { clipVolume?: number; subtitles?: boolean; subtitleStyle?: SubtitleStyle; music?: EditMusic };
 
 export type Shot = {
   id: string;
@@ -511,6 +514,7 @@ export function validateEdit(board: Storyboard): string[] {
   const edit = e as TimelineEdit;
   if (edit.clipVolume !== undefined && !isNum(edit.clipVolume, 0, 2)) errors.push('edit.clipVolume must be 0..2');
   if (edit.subtitles !== undefined && typeof edit.subtitles !== 'boolean') errors.push('edit.subtitles must be true or false');
+  if (edit.subtitleStyle !== undefined && !(SUBTITLE_STYLES as readonly string[]).includes(edit.subtitleStyle)) errors.push(`edit.subtitleStyle must be one of: ${SUBTITLE_STYLES.join(', ')}`);
   const m = edit.music as unknown as Record<string, unknown> | undefined;
   if (m !== undefined) {
     if (!m || typeof m !== 'object') errors.push('edit.music must be an object');

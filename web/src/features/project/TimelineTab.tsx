@@ -401,6 +401,7 @@ export function TimelineTab() {
     <div className="flex min-w-0 flex-col gap-3">
       <div className="glass-panel flex flex-col gap-1 rounded-lg p-2.5">
         <SequencePlayer clips={clips} label="Program monitor" maxH={280} aspect={board.aspect} index={current} onIndex={setCurrent} onTime={setOffset}
+          captionStyle={edit.subtitleStyle}
           music={music ? { src: media.music(id, `${music.file}:${music.name}`), volume: music.volume, at: music.at, from: music.from } : undefined} />
         <p className="text-center text-[11px] text-muted-foreground tabular-nums">{formatSeconds(playhead)} / {formatSeconds(layout.total)}</p>
       </div>
@@ -415,6 +416,11 @@ export function TimelineTab() {
               onCheckedChange={v => save(withEdit(board, { subtitles: v ? true : undefined }))} />
             Subtitle
           </label>
+          {edit.subtitles === true && (
+            <Segmented name="Gaya subtitle" value={edit.subtitleStyle ?? 'biasa'} disabled={busy}
+              onChange={v => save(withEdit(board, { subtitleStyle: v === 'tulisan-tangan' ? 'tulisan-tangan' : undefined }))}
+              options={[{ value: 'biasa', label: 'Biasa', hint: 'Teks putih di bawah' }, { value: 'tulisan-tangan', label: 'Tulisan tangan', hint: 'Huruf tangan di langit atas (artbook)' }]} />
+          )}
           <Segmented name="Zoom" value={zoom} onChange={setZoom}
             options={[{ value: '50', label: '50%' }, { value: '100', label: '100%' }, { value: '200', label: '200%' }]} />
           <input ref={musicInput} type="file" accept="audio/*,.mp3,.m4a,.wav,.ogg,.aac" aria-label="Pilih berkas musik" className="sr-only" tabIndex={-1}
