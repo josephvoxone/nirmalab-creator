@@ -108,10 +108,10 @@ async function setup(model: TextModel, board: Storyboard = threeShots(), assista
 // ------------------------------------------------------------------ skills pack
 
 describe('skills pack', () => {
-  it('ships the four .md files verbatim as TS constants (production build has no .md copy step)', () => {
+  it('ships the five .md files verbatim as TS constants (production build has no .md copy step)', () => {
     const dir = join(import.meta.dirname, '../src/assistant/skills');
     const files = readdirSync(dir).filter(f => f.endsWith('.md')).sort();
-    expect(files).toEqual(['cinematic.md', 'continuity.md', 'copy.md', 'hooks.md']);
+    expect(files).toEqual(['cinematic.md', 'continuity.md', 'copy.md', 'hooks.md', 'pacing.md']);
     for (const f of files) expect(SKILL_FILES[f.slice(0, -3) as keyof typeof SKILL_FILES]).toBe(readFileSync(join(dir, f), 'utf8'));
   });
 
@@ -132,9 +132,19 @@ describe('skills pack', () => {
     for (const m of CATALOG.moves) expect(SKILL_FILES.cinematic).toContain(`\`${m.id}\``);
   });
 
+  it('the pacing skill carries the measured bands, and its unstable metrics are marked as such', () => {
+    const pacing = listSkills().find(s => s.name === 'pacing')!;
+    expect(pacing.title).toBe('pacing');
+    expect(pacing.text).toMatch(/words per spoken sentence \| 9–12/);
+    expect(pacing.text).toMatch(/every 15–22 s/);
+    expect(pacing.text).toMatch(/154–172 wpm/);
+    expect(pacing.text).toMatch(/varied 56–131/);          // the question rate is not a rule
+    expect(pacing.text).toMatch(/varied 0–60/);            // nor is the music-cue count
+  });
+
   it('listSkills() returns name/title/text for MCP resources, copy with the live list', () => {
     const skills = listSkills();
-    expect(skills.map(s => s.name)).toEqual(['cinematic', 'continuity', 'copy', 'hooks']);
+    expect(skills.map(s => s.name)).toEqual(['cinematic', 'continuity', 'copy', 'hooks', 'pacing']);
     expect(skills[0]!.title).toBe('cinematic shots');
     expect(skills.find(s => s.name === 'copy')!.text).toContain('fantastis');
     expect(skills.map(s => s.text).join('\n\n')).toBe(skillsPrompt());

@@ -10,7 +10,7 @@ import { SKILL_FILES } from './skills-text.js';
 
 export type Skill = { name: string; title: string; text: string };
 
-const ORDER = ['cinematic', 'continuity', 'copy', 'hooks'] as const;
+const ORDER = ['cinematic', 'continuity', 'copy', 'hooks', 'pacing'] as const;
 
 /** The exact lists `server/src/text/lint.ts` enforces (never a copy that can drift). */
 export function lintListText(): string {
