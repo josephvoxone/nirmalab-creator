@@ -14,6 +14,7 @@ import { SceneTab } from './SceneTab.js';
 import { BibleTab } from './BibleTab.js';
 import { BreakdownTab } from './BreakdownTab.js';
 import { TimelineTab } from './TimelineTab.js';
+import { DubTab } from './DubTab.js';
 import { ResultTab } from './ResultTab.js';
 import { useSession } from '../../lib/session.js';
 import { AssistantColumn, AssistantSheet, AssistantToggle, useAssistantDock, useDockedInShell } from '../assistant/AssistantDock.js';
@@ -23,6 +24,7 @@ const TABS = [
   { id: 'bible', label: 'Bible' },
   { id: 'breakdown', label: 'Breakdown' },
   { id: 'timeline', label: 'Timeline' },
+  { id: 'dubbing', label: 'Dubbing' },
   { id: 'hasil', label: 'Hasil' },
   { id: 'aktivitas', label: 'Aktivitas' }
 ] as const;
@@ -212,6 +214,7 @@ export function ProjectPage(props: { pollMs?: number }) {
             {tab === 'bible' && <BibleTab />}
             {tab === 'breakdown' && <BreakdownTab />}
             {tab === 'timeline' && <TimelineTab />}
+            {tab === 'dubbing' && <DubTab />}
             {tab === 'hasil' && <ResultTab />}
             {tab === 'aktivitas' && <Activity p={p} />}
           </div>

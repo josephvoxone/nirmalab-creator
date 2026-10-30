@@ -233,7 +233,8 @@ export async function registerStoryRoutes(
   server.post<{ Params: { id: string } }>('/api/stories/:id/assemble', async (request, reply) => {
     if (!requireAdmin(auth, request, reply)) return undefined;
     try {
-      return { story: await stories.assemble(request.params.id) };
+      // Returns at once; the assembly waits its turn in the shared queue and finishes in the background (the page polls).
+      return reply.code(202).send({ story: await stories.startAssembly(request.params.id) });
     } catch (error) {
       // Contract: 409 INVALID while some shot is not done yet (a state conflict, not a bad body).
       if (error instanceof StoryError && error.code === 'INVALID') return reply.code(409).send({ error: { code: 'INVALID', message: error.message } });

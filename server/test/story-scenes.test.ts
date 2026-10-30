@@ -453,10 +453,18 @@ describe('scene routes', () => {
     const put = await server.inject({ method: 'PUT', url: `/api/stories/${id}`, headers: { cookie }, payload: { storyboard: { ...b, scenes: [b.scenes[1], b.scenes[0]] } } });
     expect(put.json().story.videoStale).toBe(true);
     expect((await server.inject({ url: `/api/stories/${id}/video`, headers: { cookie } })).statusCode).toBe(200);
+    // The request returns at once (a long assembly must not hold a connection open behind a proxy): 202 + "assembling".
     const assembled = await post(`/api/stories/${id}/assemble`);
-    expect(assembled.statusCode).toBe(200);
-    expect(assembled.json().story.status).toBe('done');
-    expect(assembled.json().story.videoStale).toBeUndefined();
+    expect(assembled.statusCode).toBe(202);
+    expect(assembled.json().story.status).toBe('assembling');
+    let final = assembled.json().story;
+    for (let i = 0; i < 100 && final.status === 'assembling'; i++) {
+      await new Promise(r => setTimeout(r, 20));
+      final = (await server.inject({ url: `/api/stories/${id}`, headers: { cookie } })).json().story;
+    }
+    expect(final.status).toBe('done');
+    expect(final.videoStale).toBeUndefined();
+
     expect((await server.inject({ method: 'POST', url: `/api/stories/${id}/assemble` })).statusCode).toBe(401);
   });
 });

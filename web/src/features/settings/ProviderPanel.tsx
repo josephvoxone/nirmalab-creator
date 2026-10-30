@@ -19,6 +19,7 @@ import {
   type AxcelState, type Balance, type ModelInfo, type Models, type OpenRouterPatch, type OpenRouterState, type Providers
 } from '../providers/providersClient.js';
 import { TextModelPanel } from './TextModelPanel.js';
+import { KeyPoolPanel } from './KeyPoolPanel.js';
 
 type Api = ReturnType<typeof providersApi>;
 
@@ -332,6 +333,8 @@ export function ProviderPanel(props: { onOpenFlow: () => void }) {
             <FlowSummary flow={data.flow} onManage={props.onOpenFlow} />
             <OpenRouterCard api={api} state={data.openrouter ?? { configured: false, defaults: {} }} onState={openrouter => setData(d => (d ? { ...d, openrouter } : d))} />
             <TextModelPanel />
+            <KeyPoolPanel provider="gemini" />
+            <KeyPoolPanel provider="elevenlabs" />
             <AxcelCard api={api} state={data.axcel ?? { configured: false, url: 'http://127.0.0.1:8899' }} onState={axcel => setData(d => (d ? { ...d, axcel } : d))} />
           </>
         )}
