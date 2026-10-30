@@ -14,7 +14,8 @@ async function ready(extra: Parameters<typeof serviceSetup>[0] = {}, createdBy?:
   const story = await t.service.create(board(), createdBy ? { createdBy } : {});
   await t.service.render(story.id, { force: true });
   await finishQueued(t, 'video');
-  await t.service.reconcile(story.id);
+  await t.service.reconcile(story.id); // all clips done: the first cut starts in the background
+  await t.service.settle(story.id);
   return { t, id: story.id };
 }
 const planOf = (t: ReturnType<typeof serviceSetup>, id: string) => JSON.parse(readFileSync(join(t.service.storyDir(id), 'assemble.json'), 'utf8'));
@@ -87,6 +88,53 @@ describe('StoryService + dubbing', () => {
     release();
     await t.service.settle(id);
     expect((await t.service.get(id))!).toMatchObject({ status: 'done' });
+  });
+
+  it('while an assembly runs, reading and reconciling the story answer at once and never start a second assembly', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>(r => { release = r; });
+    let armed = false; let started = 0;
+    const { t, id } = await ready({ assemble: async dir => { if (armed) { started++; await gate; } writeFileSync(join(dir, 'final.mp4'), Buffer.alloc(4096, 1)); } });
+    armed = true;
+    await t.service.startAssembly(id);
+    const quick = <T,>(p: Promise<T>) => Promise.race([p, new Promise<'hung'>(r => setTimeout(() => r('hung'), 400))]);
+    // the page polls GET (which reconciles) every few seconds: none of those may wait for the assembly
+    for (let i = 0; i < 3; i++) expect(await quick(t.service.reconcile(id))).toMatchObject({ status: 'assembling' });
+    expect(await quick(t.service.get(id))).toMatchObject({ status: 'assembling' });
+    await new Promise(r => setTimeout(r, 30));
+    expect(started).toBe(1);
+    release();
+    await t.service.settle(id);
+    expect((await t.service.get(id))!.status).toBe('done');
+    expect(started).toBe(1);
+  });
+
+  it('a dub change made while the assembly runs leaves the finished video marked "assemble again" (it was cut before that change)', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>(r => { release = r; });
+    let armed = false;
+    const { t, id } = await ready({ assemble: async dir => { if (armed) await gate; writeFileSync(join(dir, 'final.mp4'), Buffer.alloc(4096, 1)); } });
+    await t.service.markVideoStale(id);
+    armed = true;
+    await t.service.startAssembly(id);
+    await t.service.markVideoStale(id); // the user re-dubbed a shot meanwhile
+    release();
+    await t.service.settle(id);
+    const after = (await t.service.get(id))!;
+    expect(after.video).toBeTruthy();
+    expect(after).toMatchObject({ videoStale: true, status: 'review' });
+  });
+
+  it('a failed assembly keeps the previous video and still says it is behind', async () => {
+    let fail = false;
+    const { t, id } = await ready({ assemble: async dir => { if (fail) throw new Error('boom'); writeFileSync(join(dir, 'final.mp4'), Buffer.alloc(4096, 1)); } });
+    await t.service.markVideoStale(id);
+    fail = true;
+    await t.service.startAssembly(id);
+    await t.service.settle(id);
+    const after = (await t.service.get(id))!;
+    expect(after).toMatchObject({ status: 'failed', videoStale: true });
+    expect(after.video).toBeTruthy();
   });
 
   it('a background assembly that fails ends as failed with the reason, and the previous video stays', async () => {

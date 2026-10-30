@@ -900,8 +900,11 @@ export class StoryService {
   }
 
   /** Advance one story as far as possible. Safe to call any time, any number of times. */
-  async reconcile(id: string): Promise<StoryRecord | undefined> {
-    return this.withLock(id, async () => {
+  async reconcile(id: string, opts: { wait?: boolean } = {}): Promise<StoryRecord | undefined> {
+    // Being assembled right now by this process: nothing to advance, and nothing may wait for it or start a second one.
+    if (this.assembling.has(id)) return this.get(id);
+    let job: Promise<void> | undefined;
+    const record = await this.withLock(id, async () => {
       const record = await this.get(id);
       if (!record || !BUSY_STATUSES.includes(record.status)) return record;
       const board = await this.readStoryboard(id);
@@ -934,17 +937,24 @@ export class StoryService {
           return record;
         }
         record.status = 'assembling';
+        record.videoStale = undefined; // same as beginAssembly: stale from here on means "changed after this cut started"
         await this.save(record, 'Semua shot siap, merakit video');
       }
-      return this.runAssembly(record, board);
+      // "assembling" with no job in this process = the server restarted mid-assembly: run it again.
+      if (!this.assembling.has(id)) job = this.launchAssembly(record, board);
+      return record;
     });
+    // `wait: false` (the page's polling GET, the timer): hand back at once, the assembly goes on in the background.
+    // Default: wait for it, outside the lock, so callers that want the finished state still get it.
+    if (job && opts.wait !== false) { await job; return (await this.get(id)) ?? record; }
+    return record;
   }
 
   /** Rebuild final.mp4 from the current order. Needs every shot done; free (no Flow). Resolves when the video exists. */
   async assemble(id: string, opts: { rev?: number } = {}): Promise<StoryRecord> {
     return this.withLock(id, async () => {
       const { record, board } = await this.beginAssembly(id, opts);
-      return this.runAssembly(record, board);
+      return this.runAssembly(record, board, true);
     });
   }
 
@@ -956,9 +966,20 @@ export class StoryService {
     // A second click while one is running must be refused at once, not wait for the lock and then assemble again.
     if (this.assembling.has(id)) throw new StoryError('BUSY', 'Story sedang diproses');
     const { record, board } = await this.withLock(id, () => this.beginAssembly(id, opts));
-    const job = this.withLock(id, () => this.runAssembly(record, board)).then(() => undefined, () => undefined).finally(() => { if (this.assembling.get(id) === job) this.assembling.delete(id); });
-    this.assembling.set(id, job);
+    this.launchAssembly(record, board);
     return { ...record };
+  }
+
+  /**
+   * Runs the assembly in the background, one job per story, WITHOUT holding the story lock: an assembly takes minutes and
+   * the page polls the story every few seconds (GET reconciles), so none of that may wait for it. Other changes are kept
+   * out by the "assembling" status, and the job only takes the lock for its own short writes.
+   */
+  private launchAssembly(record: StoryRecord, board: Storyboard): Promise<void> {
+    const id = record.id;
+    const job: Promise<void> = this.runAssembly(record, board, false).then(() => undefined, () => undefined).finally(() => { if (this.assembling.get(id) === job) this.assembling.delete(id); });
+    this.assembling.set(id, job);
+    return job;
   }
 
   async settle(id: string): Promise<void> {
@@ -981,6 +1002,8 @@ export class StoryService {
     const board = await this.readStoryboard(id);
     record.status = 'assembling';
     record.error = undefined;
+    // From here on "stale" means: changed AFTER this cut started (a dub edited meanwhile), so it is set again by that change.
+    record.videoStale = undefined;
     await this.save(record, 'Merakit ulang video');
     return { record, board };
   }
@@ -996,39 +1019,53 @@ export class StoryService {
     });
   }
 
-  private async runAssembly(record: StoryRecord, board: Storyboard): Promise<StoryRecord> {
+  private async runAssembly(record: StoryRecord, board: Storyboard, locked: boolean): Promise<StoryRecord> {
     const id = record.id;
     const backup = `${this.videoPath(id)}.prev`;
+    // The blocking path already holds the lock; the background path takes it only for its own short writes, on the
+    // freshest record (a dub edited meanwhile must not be overwritten by this job's older copy).
+    const exclusive = async <T>(fn: (fresh: StoryRecord) => Promise<T>): Promise<T> => {
+      const run = async () => fn((await this.get(id)) ?? record);
+      return locked ? run() : this.withLock(id, run);
+    };
+    let note: Promise<unknown> = Promise.resolve();
     try {
       await this.writeAssemblyPlan(record, board);
       // Keep the previous cut until the new one exists: a failed re-assembly must not lose it.
       if (existsSync(this.videoPath(id))) await rename(this.videoPath(id), backup);
       // Waiting for a free assembler is written to the activity log, so the page shows "antre" instead of freezing.
-      let note: Promise<unknown> = Promise.resolve();
       await this.deps.assemble(this.storyDir(id), {
         owner: record.createdBy ?? id,
         onPosition: (position, total) => {
           if (position <= 1 && total <= 1) return;
-          note = note.then(() => this.save(record, `Antre perakitan: urutan ${position} dari ${total}`)).catch(() => undefined);
+          note = note.then(() => exclusive(fresh => this.save(fresh, `Antre perakitan: urutan ${position} dari ${total}`))).catch(() => undefined);
         }
       });
       await note;
       const info = await stat(this.videoPath(id));
-      record.status = 'done';
-      record.video = { bytes: info.size, finishedAtMs: Date.now() };
-      record.videoStale = undefined;
-      record.error = undefined;
-      record.gate = undefined;
-      await rm(backup, { force: true });
-      await this.save(record, 'Video selesai');
+      return await exclusive(async fresh => {
+        fresh.status = 'done';
+        fresh.video = { bytes: info.size, finishedAtMs: Date.now() };
+        fresh.error = undefined;
+        fresh.gate = undefined;
+        await rm(backup, { force: true });
+        // videoStale is whatever a change made during the cut left it: then the story is "assemble again", not done
+        if (fresh.videoStale) fresh.status = idleStatus(fresh);
+        await this.save(fresh, 'Video selesai');
+        return fresh;
+      });
     } catch (error) {
-      if (existsSync(backup)) await rename(backup, this.videoPath(id)).catch(() => undefined);
-      else { await rm(this.videoPath(id), { force: true }); record.video = undefined; }
-      record.status = 'failed';
-      record.error = `Perakitan gagal: ${error instanceof Error ? error.message : String(error)}`.slice(0, 600);
-      await this.save(record, record.error);
+      await note.catch(() => undefined);
+      return exclusive(async fresh => {
+        if (existsSync(backup)) await rename(backup, this.videoPath(id)).catch(() => undefined);
+        else { await rm(this.videoPath(id), { force: true }); fresh.video = undefined; }
+        fresh.status = 'failed';
+        fresh.videoStale = fresh.video ? true : undefined; // the kept video is behind the board
+        fresh.error = `Perakitan gagal: ${error instanceof Error ? error.message : String(error)}`.slice(0, 600);
+        await this.save(fresh, fresh.error);
+        return fresh;
+      });
     }
-    return record;
   }
 
   /** Studio pickers changed: recompose the Style line (invalidates sheets/frames/clips whose prompt changed). */
@@ -1509,7 +1546,7 @@ export class StoryService {
 
   async reconcileAll(): Promise<void> {
     for (const id of await this.activeIds()) {
-      try { await this.reconcile(id); } catch (error) { console.error(`[stories] reconcile ${id}:`, error); }
+      try { await this.reconcile(id, { wait: false }); } catch (error) { console.error(`[stories] reconcile ${id}:`, error); }
     }
   }
 

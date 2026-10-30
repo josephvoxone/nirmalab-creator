@@ -170,7 +170,7 @@ export async function registerStoryRoutes(
   server.get<{ Params: { id: string } }>('/api/stories/:id', async (request, reply) => {
     if (!member(request, reply)) return undefined;
     try {
-      const story = (await stories.reconcile(request.params.id)) ?? (await stories.get(request.params.id));
+      const story = (await stories.reconcile(request.params.id, { wait: false })) ?? (await stories.get(request.params.id));
       if (!story) return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Story not found' } });
       return { story, storyboard: await stories.readStoryboard(story.id) };
     } catch (error) { return fail(reply, error); }
@@ -419,7 +419,7 @@ export async function registerStoryRoutes(
     if (!requireAdmin(auth, request, reply)) return undefined;
     try {
       await stories.retry(request.params.id);
-      return { story: await stories.reconcile(request.params.id) };
+      return { story: await stories.reconcile(request.params.id, { wait: false }) };
     } catch (error) { return fail(reply, error); }
   });
 

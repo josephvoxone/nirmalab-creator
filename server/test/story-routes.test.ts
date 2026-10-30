@@ -31,6 +31,16 @@ async function setup(draftReply?: string) {
   return { server, cookie, dataDir, flow: new FlowStore(join(dataDir, 'flow')) };
 }
 
+/** A GET reconciles and starts the assembly in the background (the page polls): wait until it is no longer "assembling". */
+async function settled(server: { inject: (o: any) => Promise<any> }, cookie: string, id: string) {
+  for (let i = 0; i < 150; i++) {
+    const r = (await server.inject({ url: `/api/stories/${id}`, headers: { cookie } })).json();
+    if (r.story.status !== 'assembling') return r;
+    await new Promise(res => setTimeout(res, 20));
+  }
+  throw new Error('assembly did not finish');
+}
+
 describe('story routes', () => {
   it('need a session', async () => {
     const { server } = await setup();
@@ -60,6 +70,7 @@ describe('story routes', () => {
       writeFileSync(join(clips, `${job.id}.mp4`), Buffer.alloc(9000, 1));
       await flow.completeJob(job.id, { filePath: join(clips, `${job.id}.mp4`), bytes: 9000 });
     }
+    await settled(server, cookie, id);
     const detail = await server.inject({ url: `/api/stories/${id}`, headers: { cookie } });
     expect(detail.json().story.status).toBe('done');
     expect(detail.json().storyboard.title).toBe('Kucing Hilang');
@@ -87,7 +98,7 @@ describe('story routes', () => {
       const done = await server.inject({ method: 'POST', url: `/api/flow/bridge/jobs/${claim.json().job.id}/complete`, headers: { ...h, 'content-type': 'application/octet-stream' }, payload: Buffer.alloc(9000, 1) });
       expect(done.statusCode).toBe(200);
     }
-    expect((await server.inject({ url: `/api/stories/${id}`, headers: { cookie } })).json().story.status).toBe('done');
+    expect((await settled(server, cookie, id)).story.status).toBe('done');
   });
 
   it('render answers 409 with the budget message when credits are short', async () => {

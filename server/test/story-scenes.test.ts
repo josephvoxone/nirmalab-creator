@@ -33,6 +33,16 @@ const board: Storyboard = {
 
 const cepat: Storyboard = { ...board, mode: 'cepat' };
 
+/** A GET reconciles and starts the assembly in the background (the page polls): wait until it is no longer "assembling". */
+async function settled(server: { inject: (o: any) => Promise<any> }, cookie: string, id: string) {
+  for (let i = 0; i < 150; i++) {
+    const r = (await server.inject({ url: `/api/stories/${id}`, headers: { cookie } })).json();
+    if (r.story.status !== 'assembling') return r;
+    await new Promise(res => setTimeout(res, 20));
+  }
+  throw new Error('assembly did not finish');
+}
+
 describe('normalizeScenes', () => {
   it('no or empty scenes → one scene with every shot', () => {
     const plain = { ...board, scenes: undefined };
@@ -447,7 +457,7 @@ describe('scene routes', () => {
     expect((await server.inject({ url: `/api/stories/${id}`, headers: { cookie } })).json().story.status).toBe('draft');
     await post(`/api/stories/${id}/render`, { scene: 'pasar' });
     await finishVideos();
-    expect((await server.inject({ url: `/api/stories/${id}`, headers: { cookie } })).json().story.status).toBe('done');
+    expect((await settled(server, cookie, id)).story.status).toBe('done');
 
     const b = (await server.inject({ url: `/api/stories/${id}`, headers: { cookie } })).json().storyboard;
     const put = await server.inject({ method: 'PUT', url: `/api/stories/${id}`, headers: { cookie }, payload: { storyboard: { ...b, scenes: [b.scenes[1], b.scenes[0]] } } });
