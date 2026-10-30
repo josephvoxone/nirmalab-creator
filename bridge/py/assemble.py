@@ -124,9 +124,26 @@ def shot_zoom_y(shot):
     return min(1.0, max(0.0, y))
 
 
+MAX_DUB_TEMPO = 1.25
+DUB_LEAD = 0.3  # the voice starts a moment into the shot, after the crossfade into it
+DUB_AMBIENT = 0.12
+
+
+def dub_tempo(seconds, window, max_tempo=MAX_DUB_TEMPO):
+    """(tempo, cut): speed a dub up to fit `window` seconds; past `max_tempo` the rest is cut (with a short fade)."""
+    if seconds <= 0:
+        return 1.0, False
+    if window <= 0:
+        return max_tempo, True
+    if seconds <= window:
+        return 1.0, False
+    need = seconds / window
+    return (need, False) if need <= max_tempo else (max_tempo, True)
+
+
 def filter_graph(durations, xf, transitions=None, title_input=None, total=None,
                  clip_volume=None, music_input=None, music=None, subtitles=None, fonts_dir=None, zooms=None,
-                 streams='av', zoom_ys=None):
+                 streams='av', zoom_ys=None, dubs=None):
     """One ffmpeg filter graph.  streams: 'av' (both), 'v' (video chain only) or 'a' (audio chain only).
 
     Production renders 'v' and 'a' in two ffmpeg runs: in one graph, ffmpeg 5.1 reads every clip to feed the
@@ -146,7 +163,23 @@ def filter_graph(durations, xf, transitions=None, title_input=None, total=None,
                 f'[{i}:v]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},{zoom}'
                 f'fps={FPS},setsar=1,format=yuv420p,settb=AVTB[v{i}]'
             )
-        if want_a:
+        dub = (dubs or [])[i] if dubs and i < len(dubs) else None
+        if want_a and dub:
+            lead_ms = int(round(float(dub.get('lead', DUB_LEAD)) * 1000))
+            dur = durations[i]
+            chain = f"[{dub['input']}:a]aformat=sample_rates=48000:channel_layouts=stereo,asetpts=PTS-STARTPTS"
+            if float(dub.get('tempo', 1.0)) > 1.0:
+                chain += f",atempo={dub['tempo']}"
+            chain += f',adelay={lead_ms}|{lead_ms},apad=whole_dur={dur},atrim=0:{dur}'
+            if dub.get('cut'):
+                chain += f',afade=t=out:st={round(max(0.0, dur - xf - 0.15), 3)}:d=0.15'
+            if dub.get('keep'):
+                parts.append(chain + f'[ad{i}]')
+                parts.append(f"[{i}:a]aformat=sample_rates=48000:channel_layouts=stereo,volume={dub['keep']},asetpts=PTS-STARTPTS[ac{i}]")
+                parts.append(f'[ad{i}][ac{i}]amix=inputs=2:duration=longest:normalize=0,atrim=0:{dur}[a{i}]')
+            else:
+                parts.append(chain + f'[a{i}]')
+        elif want_a:
             parts.append(f'[{i}:a]aformat=sample_rates=48000:channel_layouts=stereo,asetpts=PTS-STARTPTS[a{i}]')
     offsets = xfade_offsets(durations, xf)
     vprev, aprev = 'v0', 'a0'
@@ -268,6 +301,28 @@ def main(arg):
         inputs += (['-ss', str(float(music.get('from', 0)))] if music.get('from') else []) + ['-i', music['path']]
     else:
         music = None
+    dubs, warnings = [], []
+    for i, shot in enumerate(story['shots']):
+        d = shot.get('dub')
+        if not d or not d.get('file'):
+            dubs.append(None)
+            continue
+        dub_file = expand(d['file'])
+        if not os.path.exists(dub_file):
+            warnings.append(f"{shot['id']}: dub file is missing, the clip's own audio is kept")
+            dubs.append(None)
+            continue
+        seconds = float(d.get('seconds') or probe_duration(dub_file))
+        window = durations[i] - DUB_LEAD - (xf if i < len(durations) - 1 else 0.2)
+        tempo, cut = dub_tempo(seconds, window)
+        if cut:
+            warnings.append(f"{shot['id']}: dub {seconds:.1f}s does not fit the {window:.1f}s window even at {tempo}x: the end is cut")
+        elif tempo > 1.0:
+            warnings.append(f"{shot['id']}: dub {seconds:.1f}s sped up {tempo:.2f}x to fit the {window:.1f}s window")
+        idx = sum(1 for a in inputs if a == '-i')
+        inputs += ['-i', dub_file]
+        dubs.append({'input': idx, 'tempo': round(tempo, 3), 'lead': DUB_LEAD, 'cut': cut,
+                     **({'keep': DUB_AMBIENT} if edit.get('dubKeepAmbient') else {})})
     subs_dir, subs = None, None
     if edit.get('subtitles'):
         texts = [s.get('narration', '') or '' for s in story['shots']]
@@ -279,7 +334,7 @@ def main(arg):
                                                                 size=edit.get('subtitleSize'), y=edit.get('subtitleY')))
     graph_args = dict(title_input=title_input, total=total, clip_volume=edit.get('clipVolume'),
                       music_input=music_input, music=music, subtitles=subs,
-                      fonts_dir=FONTS_DIR if edit.get('subtitleStyle') == HANDWRITTEN else None, zooms=zooms, zoom_ys=zoom_ys)
+                      fonts_dir=FONTS_DIR if edit.get('subtitleStyle') == HANDWRITTEN else None, zooms=zooms, zoom_ys=zoom_ys, dubs=dubs)
     vgraph = filter_graph(durations, xf, transitions[1:], streams='v', **graph_args)
     agraph = filter_graph(durations, xf, transitions[1:], streams='a', **graph_args)
     final = os.path.join(out_dir, f"{story['slug']}.mp4")
@@ -300,7 +355,7 @@ def main(arg):
             shutil.rmtree(seq, ignore_errors=True)
         if subs_dir:
             shutil.rmtree(subs_dir, ignore_errors=True)
-    print(json.dumps({'file': final, 'shots': len(durations), 'durations': durations, 'total': total}))
+    print(json.dumps({'file': final, 'shots': len(durations), 'durations': durations, 'total': total, **({'warnings': warnings} if warnings else {})}))
 
 
 if __name__ == '__main__':
