@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { StoryBible } from '../src/bible/story.js';
 import { FlowStore, type FlowJob } from '../src/flow/store.js';
-import { StoryService } from '../src/stories/service.js';
+import { StoryService, type StoryDeps } from '../src/stories/service.js';
 import type { Storyboard } from '../src/stories/storyboard.js';
 
 export const bible = (): StoryBible => ({
@@ -40,14 +40,15 @@ export const bibleBoard = (): Storyboard => ({
   ]
 });
 
-export function serviceSetup() {
+export function serviceSetup(extra: Partial<StoryDeps> = {}) {
   const dataDir = mkdtempSync(join(tmpdir(), 'nc-rev-'));
   const flow = new FlowStore(join(dataDir, 'flow'));
   const service = new StoryService({
     dataDir, flow,
     probe: async () => ({ durationSec: 6, hasAudio: true }),
     imageSize: async () => ({ width: 768, height: 1376 }),
-    assemble: async dir => { writeFileSync(join(dir, 'final.mp4'), Buffer.alloc(4096, 1)); }
+    assemble: async dir => { writeFileSync(join(dir, 'final.mp4'), Buffer.alloc(4096, 1)); },
+    ...extra
   });
   return { dataDir, flow, service };
 }

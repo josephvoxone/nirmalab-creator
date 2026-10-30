@@ -53,12 +53,12 @@ export function sessionId(): string {
 /** Outcome of one model attempt: `next` = try the next model, `stop` = give up now. */
 type Attempt = { ok: ChatOutput } | { next: string; bad?: boolean } | { stop: string };
 
-const isToolCall = (v: unknown): v is ToolCall => {
+export const isToolCall = (v: unknown): v is ToolCall => {
   const c = v as ToolCall | undefined;
   return !!c && typeof c.id === 'string' && typeof c.function?.name === 'string' && typeof c.function?.arguments === 'string';
 };
 
-function parseReply(payload: unknown, model: string): ChatOutput | undefined {
+export function parseReply(payload: unknown, model: string): ChatOutput | undefined {
   const body = payload as { choices?: Array<{ message?: { content?: unknown; tool_calls?: unknown } }>; usage?: { total_tokens?: unknown } } | undefined;
   const msg = body?.choices?.[0]?.message;
   if (!msg || typeof msg !== 'object') return undefined;

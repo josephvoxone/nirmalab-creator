@@ -1,6 +1,7 @@
 import Fastify, { type FastifyInstance } from 'fastify';
 import fastifyStatic from '@fastify/static';
 import { existsSync } from 'node:fs';
+import { availableParallelism } from 'node:os';
 import { join } from 'node:path';
 import { registerAuthRoutes } from './auth/routes.js';
 import { UserAuthStore } from './auth/store.js';
@@ -32,6 +33,14 @@ import { auditShot } from './audit/vision.js';
 import { sampleFrames } from './audit/frames.js';
 import { AuditLedger } from './audit/ledger.js';
 import { TextModelConfigStore } from './llm/config.js';
+import { FairQueue } from './lib/fair-queue.js';
+import { ProviderKeys } from './lib/provider-keys.js';
+import { ElevenLabsClient } from './dub/elevenlabs.js';
+import { DubService } from './dub/service.js';
+import { registerDubRoutes } from './dub/routes.js';
+import { createGeminiModel } from './llm/gemini.js';
+import { TextRoutingStore, createRoutedModel, limitedModel } from './llm/router.js';
+import { requireAdmin } from './auth/routes.js';
 import { createOpenCodeModel, type TextModel } from './llm/opencode.js';
 
 export type AppOptions = {
@@ -52,6 +61,10 @@ export type AppOptions = {
     /** OpenRouter worker interval; 0 disables. Default 5 s. */
     workerMs?: number;
   };
+  /** Dubbing (ElevenLabs): the fetch used for its calls (tests inject a fake), resume of queued shots at boot, concurrency. */
+  dub?: { fetch?: typeof fetch; baseUrl?: string; resume?: boolean; concurrency?: number };
+  /** Concurrency of the shared work queues (env ASSEMBLY_CONCURRENCY / DUB_CONCURRENCY / LLM_CONCURRENCY otherwise). */
+  queues?: { assembly?: number; dub?: number; llm?: number };
   /** Project assistant limits (tests): whole-turn deadline and SSE heartbeat interval. */
   assistant?: { totalMs?: number; heartbeatMs?: number };
   text?: {
@@ -107,11 +120,21 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
     },
     frames: (clip, dir, shotId) => sampleFrames(clip, dir, shotId)
   };
+  const envInt = (name: string, fallback: number) => { const n = Number(env[name]); return Number.isFinite(n) && n >= 1 ? Math.floor(n) : fallback; };
+  // ffmpeg takes ~1.2 GB and several cores per assembly: two at once on a 4-core / 16 GB VPS.
+  const assemblyQueue = new FairQueue({ concurrency: options.queues?.assembly ?? envInt('ASSEMBLY_CONCURRENCY', Math.min(2, Math.max(1, Math.floor(availableParallelism() / 2)))), maxWaiting: 500 });
+  const dubQueue = new FairQueue({ concurrency: options.queues?.dub ?? options.dub?.concurrency ?? envInt('DUB_CONCURRENCY', 6), maxWaiting: 5000 });
+  const llmQueue = new FairQueue({ concurrency: options.queues?.llm ?? envInt('LLM_CONCURRENCY', 8), maxWaiting: 200 });
+  let dubService: DubService | undefined;
+  const dubRef = () => dubService!;
   const stories = new StoryService({
     dataDir: options.dataDir,
     flow: flowStore,
     probe: options.stories?.probe ?? probeClip,
-    assemble: options.stories?.assemble ?? assembleStory,
+    // One shared line for the CPU/RAM-heavy assembler: at most N at once, users served in turn (a hundred clicks no longer
+    // start a hundred ffmpeg that the kernel then kills). The wait is shown to the user as "antre".
+    assemble: (dir, ctx) => assemblyQueue.run(ctx?.owner ?? dir, () => (options.stories?.assemble ?? assembleStory)(dir, ctx), ctx?.onPosition ? { onPosition: ctx.onPosition } : {}),
+    dub: { for: id => dubRef().dubFor(id) },
     imageSize: options.stories?.imageSize ?? imageSize,
     audit,
     openRouter: {
@@ -159,8 +182,17 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   });
   // One text-model store + client per process; later features (project assistant, MCP) take `textModel` from here.
   const textStore = new TextModelConfigStore(options.dataDir);
-  const textModel = options.text?.model ?? createOpenCodeModel({ store: textStore, fetch: options.text?.fetch ?? providerFetch });
-  await registerProviderRoutes(server, { userAuthStore, dataDir: options.dataDir, flow: flowStore, fetch: providerFetch, catalog, text: { store: textStore, model: textModel } });
+  const openCodeModel = options.text?.model ?? createOpenCodeModel({ store: textStore, fetch: options.text?.fetch ?? providerFetch });
+  // API-key pools (round-robin, max 10 each): ElevenLabs for dubbing, Gemini as a text model next to OpenCode Go.
+  const elevenKeys = new ProviderKeys(options.dataDir, 'elevenlabs', { env });
+  const geminiKeys = new ProviderKeys(options.dataDir, 'gemini', { env });
+  await Promise.all([elevenKeys.load(), geminiKeys.load()]);
+  const textRouting = new TextRoutingStore(options.dataDir);
+  const dubFetch = options.dub?.fetch ?? providerFetch;
+  const geminiModel = createGeminiModel({ keys: geminiKeys, fetch: options.text?.fetch ?? providerFetch, chosenModel: async () => (await textRouting.view()).geminiModel });
+  // The model every feature uses: primary + automatic fallback, with a cap on simultaneous provider calls.
+  const textModel = options.text?.model ?? limitedModel(createRoutedModel({ opencode: openCodeModel, gemini: geminiModel, routing: () => textRouting.view() }), llmQueue);
+  await registerProviderRoutes(server, { userAuthStore, dataDir: options.dataDir, flow: flowStore, fetch: providerFetch, catalog, text: { store: textStore, model: openCodeModel } });
   await registerQuotaRoutes(server, { userAuthStore, dataDir: options.dataDir, flow: flowStore, balance: () => openRouterBalance(options.dataDir, { fetch: providerFetch }) });
   const workerMs = options.providers?.workerMs ?? 5000;
   if (workerMs > 0) {
@@ -193,6 +225,24 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
     usdPerClip: async (model: string) => { try { return (await catalog.find('video', model))?.usdPerClip ?? null; } catch { return null; } },
     usdPerImage: async (model: string) => { try { return (await catalog.find('image', model))?.usdPerImage ?? null; } catch { return null; } }
   };
+  const elevenClient = new ElevenLabsClient({ keys: elevenKeys, fetch: dubFetch, ...(options.dub?.baseUrl ? { baseUrl: options.dub.baseUrl } : {}) });
+  dubService = new DubService({
+    dir: id => stories.storyDir(id),
+    board: id => stories.readStoryboard(id),
+    markStale: id => stories.markVideoStale(id),
+    client: elevenClient,
+    queue: dubQueue,
+    probe: async file => (await (options.stories?.probe ?? probeClip)(file)).durationSec
+  });
+  await registerDubRoutes(server, { userAuthStore, stories, dub: dubService, client: elevenClient, keys: { elevenlabs: elevenKeys, gemini: geminiKeys }, routing: textRouting, fetch: providerFetch });
+  // Shots the user already confirmed before a restart are queued again.
+  if (options.dub?.resume !== false) void stories.list().then(all => dubService!.resume(all.map(r => r.id))).catch(() => undefined);
+  // Load of the shared queues, for the admin (and for deciding the concurrency limits with numbers).
+  server.get('/api/system/load', async (request, reply) => {
+    if (!requireAdmin(userAuthStore, request, reply)) return undefined;
+    const mem = process.memoryUsage();
+    return { assembly: assemblyQueue.stats(), dub: dubQueue.stats(), llm: llmQueue.stats(), process: { rssMb: Math.round(mem.rss / 1048576), heapMb: Math.round(mem.heapUsed / 1048576), uptimeSec: Math.round(process.uptime()) } };
+  });
   await registerStoryRoutes(server, {
     userAuthStore, stories, generateText, covers, media,
     // Project actions (breakdown, sheets): the shared text model and OpenRouter prices for estimates.

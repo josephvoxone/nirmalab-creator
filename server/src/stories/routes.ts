@@ -30,7 +30,7 @@ function failDraft(reply: FastifyReply, error: DraftError, log: FastifyBaseLogge
   return reply.code(503).send({ error: { code: 'STORY_FAILED', message: error.plain } });
 }
 
-function sendVideo(reply: FastifyReply, file: string, range: string | undefined, type = 'video/mp4') {
+export function sendVideo(reply: FastifyReply, file: string, range: string | undefined, type = 'video/mp4') {
   if (!existsSync(file)) return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Video belum ada' } });
   const size = statSync(file).size;
   reply.header('content-type', type).header('accept-ranges', 'bytes').header('cache-control', 'private, no-cache');

@@ -143,12 +143,19 @@ export type StoryRecord = {
 /** Displaced done takes kept per shot/frame/cast entry. */
 export const MAX_ARCHIVED = 5;
 
+export type AssembleContext = { owner?: string; onPosition?: (position: number, total: number) => void };
+
 export type StoryDeps = {
   dataDir: string;
   flow: FlowStore;
   probe: (file: string) => Promise<ClipProbe>;
-  /** Builds `<dir>/final.mp4` from `<dir>/assemble.json` and the shot clips in `<dir>`. */
-  assemble: (dir: string) => Promise<void>;
+  /**
+   * Builds `<dir>/final.mp4` from `<dir>/assemble.json` and the shot clips in `<dir>`. `ctx.owner` (the story's
+   * creator) lets a shared work queue serve users in turn; `ctx.onPosition` reports the place in that line.
+   */
+  assemble: (dir: string, ctx?: AssembleContext) => Promise<void>;
+  /** The fresh dubs (ElevenLabs) the assembler mixes in; absent = no dubbing feature. */
+  dub?: { for: (id: string) => Promise<{ keepAmbient: boolean; shots: Record<string, { file: string; seconds: number }> }> };
   /** Pixel size of a keyframe (QC: 9:16 stories need portrait frames). */
   imageSize?: (file: string) => Promise<{ width: number; height: number }>;
   /** OpenRouter price + balance for the budget check of an OpenRouter video engine (unknown = no check). */
@@ -211,6 +218,8 @@ function checkRev(record: StoryRecord, rev: number | undefined): void {
 
 export class StoryService {
   private locks = new Map<string, Promise<unknown>>();
+  /** Background assemblies started by `startAssembly`, per story. */
+  private assembling = new Map<string, Promise<void>>();
   private readonly root: string;
   /** Undo snapshots; they share this service's per-story lock. */
   readonly snapshots: SnapshotStore;
@@ -866,18 +875,25 @@ export class StoryService {
   private async writeAssemblyPlan(record: StoryRecord, board: Storyboard): Promise<void> {
     const dir = this.storyDir(record.id);
     const music = board.edit?.music;
+    const dubs = await this.deps.dub?.for(record.id);
+    const dubbed = dubs && Object.keys(dubs.shots).length > 0 ? dubs : undefined;
     const plan = {
       ...board,
       slug: 'final',
-      // The subtitle line of each shot travels with it (bible shots keep it on the intent).
-      shots: board.shots.map(s => ({ ...(s.reuse ? { ...s, reuse: { file: join(dir, `${s.id}.mp4`), start: s.reuse.start ?? 0 } } : s), narration: subtitleOf(s) })),
-      edit: board.edit ? {
-        ...(board.edit.clipVolume !== undefined ? { clipVolume: board.edit.clipVolume } : {}),
-        ...(board.edit.subtitles ? { subtitles: true } : {}),
-        ...(board.edit.subtitles && board.edit.subtitleStyle ? { subtitleStyle: board.edit.subtitleStyle } : {}),
-        ...(board.edit.subtitles && board.edit.subtitleSize !== undefined ? { subtitleSize: board.edit.subtitleSize } : {}),
-        ...(board.edit.subtitles && board.edit.subtitleY !== undefined ? { subtitleY: board.edit.subtitleY } : {}),
-        ...(music ? { music: { path: join(dir, music.file), volume: music.volume, at: music.at, ...(music.from ? { from: music.from } : {}) } } : {})
+      // The subtitle line of each shot travels with it (bible shots keep it on the intent); a fresh dub too.
+      shots: board.shots.map(s => ({
+        ...(s.reuse ? { ...s, reuse: { file: join(dir, `${s.id}.mp4`), start: s.reuse.start ?? 0 } } : s),
+        narration: subtitleOf(s),
+        ...(dubbed?.shots[s.id] ? { dub: dubbed.shots[s.id] } : {})
+      })),
+      edit: board.edit || dubbed?.keepAmbient ? {
+        ...(board.edit?.clipVolume !== undefined ? { clipVolume: board.edit.clipVolume } : {}),
+        ...(board.edit?.subtitles ? { subtitles: true } : {}),
+        ...(board.edit?.subtitles && board.edit.subtitleStyle ? { subtitleStyle: board.edit.subtitleStyle } : {}),
+        ...(board.edit?.subtitles && board.edit.subtitleSize !== undefined ? { subtitleSize: board.edit.subtitleSize } : {}),
+        ...(board.edit?.subtitles && board.edit.subtitleY !== undefined ? { subtitleY: board.edit.subtitleY } : {}),
+        ...(music ? { music: { path: join(dir, music.file), volume: music.volume, at: music.at, ...(music.from ? { from: music.from } : {}) } } : {}),
+        ...(dubbed?.keepAmbient ? { dubKeepAmbient: true } : {})
       } : undefined
     };
     await this.writeJson(join(dir, 'assemble.json'), plan);
@@ -924,26 +940,59 @@ export class StoryService {
     });
   }
 
-  /** Rebuild final.mp4 from the current order. Needs every shot done; free (no Flow). */
+  /** Rebuild final.mp4 from the current order. Needs every shot done; free (no Flow). Resolves when the video exists. */
   async assemble(id: string, opts: { rev?: number } = {}): Promise<StoryRecord> {
     return this.withLock(id, async () => {
-      const record = await this.require(id);
-      checkRev(record, opts.rev);
-      if (BUSY_STATUSES.includes(record.status)) throw new StoryError('BUSY', 'Story sedang diproses');
-      if (!record.shots.every(s => s.status === 'done')) throw new StoryError('INVALID', 'Semua shot harus selesai sebelum video dirakit');
-      // Audit gate (spec §4.4): a shot under 70 or flagged for review blocks the cut until fixed or approved.
-      const blockers = this.setGate(record);
-      if (blockers.length) {
-        record.status = 'review';
-        const message = record.gate!.message;
-        await this.save(record, message);
-        throw new StoryError('INVALID', message);
-      }
-      const board = await this.readStoryboard(id);
-      record.status = 'assembling';
-      record.error = undefined;
-      await this.save(record, 'Merakit ulang video');
+      const { record, board } = await this.beginAssembly(id, opts);
       return this.runAssembly(record, board);
+    });
+  }
+
+  /**
+   * Same, but returns at once with the story "assembling" and finishes in the background: a request must not stay
+   * open for minutes while the assembly waits its turn in the shared queue. `settle(id)` waits for the end (tests).
+   */
+  async startAssembly(id: string, opts: { rev?: number } = {}): Promise<StoryRecord> {
+    // A second click while one is running must be refused at once, not wait for the lock and then assemble again.
+    if (this.assembling.has(id)) throw new StoryError('BUSY', 'Story sedang diproses');
+    const { record, board } = await this.withLock(id, () => this.beginAssembly(id, opts));
+    const job = this.withLock(id, () => this.runAssembly(record, board)).then(() => undefined, () => undefined).finally(() => { if (this.assembling.get(id) === job) this.assembling.delete(id); });
+    this.assembling.set(id, job);
+    return { ...record };
+  }
+
+  async settle(id: string): Promise<void> {
+    await this.assembling.get(id);
+  }
+
+  private async beginAssembly(id: string, opts: { rev?: number }): Promise<{ record: StoryRecord; board: Storyboard }> {
+    const record = await this.require(id);
+    checkRev(record, opts.rev);
+    if (BUSY_STATUSES.includes(record.status)) throw new StoryError('BUSY', 'Story sedang diproses');
+    if (!record.shots.every(s => s.status === 'done')) throw new StoryError('INVALID', 'Semua shot harus selesai sebelum video dirakit');
+    // Audit gate (spec §4.4): a shot under 70 or flagged for review blocks the cut until fixed or approved.
+    const blockers = this.setGate(record);
+    if (blockers.length) {
+      record.status = 'review';
+      const message = record.gate!.message;
+      await this.save(record, message);
+      throw new StoryError('INVALID', message);
+    }
+    const board = await this.readStoryboard(id);
+    record.status = 'assembling';
+    record.error = undefined;
+    await this.save(record, 'Merakit ulang video');
+    return { record, board };
+  }
+
+  /** The dubbing (or anything else outside the board) changed what the video should contain: "assemble again". */
+  async markVideoStale(id: string): Promise<void> {
+    await this.withLock(id, async () => {
+      const record = await this.get(id);
+      if (!record || !record.video || record.videoStale) return;
+      record.videoStale = true;
+      if (!BUSY_STATUSES.includes(record.status)) record.status = idleStatus(record);
+      await this.save(record, 'Dubbing berubah: rakit ulang video');
     });
   }
 
@@ -954,7 +1003,16 @@ export class StoryService {
       await this.writeAssemblyPlan(record, board);
       // Keep the previous cut until the new one exists: a failed re-assembly must not lose it.
       if (existsSync(this.videoPath(id))) await rename(this.videoPath(id), backup);
-      await this.deps.assemble(this.storyDir(id));
+      // Waiting for a free assembler is written to the activity log, so the page shows "antre" instead of freezing.
+      let note: Promise<unknown> = Promise.resolve();
+      await this.deps.assemble(this.storyDir(id), {
+        owner: record.createdBy ?? id,
+        onPosition: (position, total) => {
+          if (position <= 1 && total <= 1) return;
+          note = note.then(() => this.save(record, `Antre perakitan: urutan ${position} dari ${total}`)).catch(() => undefined);
+        }
+      });
+      await note;
       const info = await stat(this.videoPath(id));
       record.status = 'done';
       record.video = { bytes: info.size, finishedAtMs: Date.now() };

@@ -138,6 +138,29 @@ describe('KeyPool', () => {
     expect(pool.view().map(v => [v.id, v.uses])).toEqual([['k2', 1], ['k3', 0]]);
   });
 
+  it('a scoped cooldown (a per-model quota) limits only that scope: other scopes still use the key', async () => {
+    const pool = new KeyPool({ waitTimeoutMs: 5_000 });
+    pool.setKeys([key(1)]);
+    await pool.run(async () => ({ rotate: { cooldownMs: 60_000, reason: '429', scoped: true } }), { scope: 'big' }).catch(() => undefined);
+    // the same key still serves another model...
+    expect(await pool.run(async () => ({ ok: 'small works' }), { scope: 'small' })).toBe('small works');
+    // ...but not the limited one until the cooldown is over
+    const seen: string[] = [];
+    await pool.run(async k => { seen.push(k.id); return { ok: 1 }; }, { scope: 'big' }).catch(e => seen.push(e.name));
+    expect(seen).toEqual(['PoolBusyError']);
+    expect(pool.view()[0]).toMatchObject({ state: 'ready', limited: ['big'] });
+    vi.setSystemTime(Date.now() + 61_000);
+    expect(await pool.run(async () => ({ ok: 'back' }), { scope: 'big' })).toBe('back');
+    expect(pool.view()[0]!.limited).toBeUndefined();
+  });
+
+  it('a scoped cooldown is not applied without a scope (it falls back to the whole key)', async () => {
+    const pool = new KeyPool();
+    pool.setKeys([key(1)]);
+    await pool.run(async () => ({ rotate: { cooldownMs: 60_000, reason: '429', scoped: true } })).catch(() => undefined);
+    expect(pool.view()[0]).toMatchObject({ state: 'cooldown' });
+  });
+
   it('counts uses and the last use per key', async () => {
     const pool = new KeyPool();
     pool.setKeys([key(1)]);

@@ -40,7 +40,8 @@ export type SynthesizeInput = {
   previousText?: string; nextText?: string; seed?: number; signal?: AbortSignal;
 };
 export type Voice = { id: string; name: string; category?: string; gender?: string; age?: string; accent?: string; description?: string; previewUrl?: string };
-export type SubscriptionInfo = { ok: true; tier: string; used: number; limit: number; left: number; resetAtMs?: number } | { ok: false; reason: string };
+/** `limited`: the key may speak but cannot read its subscription (a scoped key), so the credits are unknown. */
+export type SubscriptionInfo = { ok: true; tier: string; used: number; limit: number; left: number; resetAtMs?: number; limited?: boolean } | { ok: false; reason: string; rejected: boolean };
 
 const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v));
 const readJson = async (res: Response): Promise<any> => { try { return await res.json(); } catch { return undefined; } };
@@ -195,13 +196,35 @@ export class ElevenLabsClient {
   /** Credit balance of ONE stored key (free call; also proves the key works). */
   async subscription(keyId: string): Promise<SubscriptionInfo> {
     const secret = this.keys.secretOf(keyId);
-    if (!secret) return { ok: false, reason: 'key tidak ditemukan' };
-    const verdict = await this.callJson(`${this.base}/v1/user/subscription`, secret);
-    if ('rotate' in verdict) return { ok: false, reason: verdict.rotate.reason };
-    if ('fail' in verdict) return { ok: false, reason: verdict.fail.message };
-    const b = verdict.ok;
-    const used = Number(b?.character_count), limit = Number(b?.character_limit);
-    if (!Number.isFinite(used) || !Number.isFinite(limit)) return { ok: false, reason: 'jawaban tidak terbaca' };
-    return { ok: true, tier: String(b?.tier ?? '?'), used, limit, left: Math.max(0, limit - used), ...(Number.isFinite(Number(b?.next_character_count_reset_unix)) ? { resetAtMs: Number(b.next_character_count_reset_unix) * 1000 } : {}) };
+    return secret ? this.probeKey(secret) : { ok: false, reason: 'key tidak ditemukan', rejected: false };
+  }
+
+  /** Same for a key that is not stored yet (used to vet a key before it is added). */
+  async probeKey(secret: string): Promise<SubscriptionInfo> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 15_000);
+    try {
+      let res: Response;
+      try {
+        res = await this.fetchImpl(`${this.base}/v1/user/subscription`, { method: 'GET', headers: { 'xi-api-key': secret }, signal: controller.signal });
+      } catch {
+        return { ok: false, reason: 'ElevenLabs tidak bisa dihubungi', rejected: false };
+      }
+      const body = await readJson(res);
+      if (res.ok) {
+        const used = Number(body?.character_count), limit = Number(body?.character_limit);
+        if (!Number.isFinite(used) || !Number.isFinite(limit)) return { ok: false, reason: 'jawaban tidak terbaca', rejected: false };
+        const reset = Number(body?.next_character_count_reset_unix);
+        return { ok: true, tier: String(body?.tier ?? '?'), used, limit, left: Math.max(0, limit - used), ...(Number.isFinite(reset) && reset > 0 ? { resetAtMs: reset * 1000 } : {}) };
+      }
+      if (res.status === 401 || res.status === 403) {
+        // A key limited to text-to-speech cannot read the subscription: it is valid, only its balance is hidden.
+        if (statusOf(body) === 'missing_permissions' || /permission/i.test(reasonOf(body, ''))) return { ok: true, tier: '?', used: 0, limit: 0, left: 0, limited: true };
+        return { ok: false, reason: `ditolak (${res.status})`, rejected: true };
+      }
+      return { ok: false, reason: `HTTP ${res.status}`, rejected: false };
+    } finally {
+      clearTimeout(timer);
+    }
   }
 }
