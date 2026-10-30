@@ -18,7 +18,7 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { homedir, hostname } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { accountsToProbe, cdpReady, preflightUrl, cdpUrlForAccount, cdpUrlFromActivePort, ensureProject, whileAlive, isChromeAccount, parseToolResult, processJob, resultHeaders } from './src/core.mjs';
+import { accountsToProbe, cdpReady, preflightUrl, cdpUrlForAccount, cdpUrlFromActivePort, ensureProject, whileAlive, isChromeAccount, parseToolResult, processJob, resultHeaders, isDeadClientError } from './src/core.mjs';
 
 const env = process.env;
 const CREATOR_URL = (env.CREATOR_URL || 'https://creator.nirmalab.com').replace(/\/$/, '');
@@ -76,9 +76,23 @@ async function clientFor(account) {
   return client;
 }
 
+/** Forget a client whose child process or Chrome tab died, so clientFor() builds a fresh one next time. */
+async function dropClient(key, why) {
+  const client = clients.get(key);
+  if (!client) return;
+  clients.delete(key);
+  log('dropping dead mcp client for', key, '-', String(why).slice(0, 120));
+  await client.close().catch(() => {});
+}
+
 async function callTool(account, name, args) {
   const client = await clientFor(account);
-  return client.callTool({ name, arguments: args }, undefined, { timeout: 15 * 60_000 });
+  try {
+    return await client.callTool({ name, arguments: args }, undefined, { timeout: 15 * 60_000 });
+  } catch (error) {
+    if (isDeadClientError(error)) await dropClient(account.profileDir || 'default', error.message);
+    throw error;
+  }
 }
 
 async function api(path, init = {}) {
@@ -115,6 +129,7 @@ async function heartbeat(again = true) {
       if (id && typeof status?.credits === 'number') accounts.push({ id, credits: status.credits });
     } catch (error) {
       log('status failed for', key, error.message);
+      if (isDeadClientError(error)) await dropClient(key, error.message);
     }
   }
   const reply = await postJson('/api/flow/bridge/heartbeat', { bridgeId: BRIDGE_ID, accounts }).catch(e => log('heartbeat', e.message));

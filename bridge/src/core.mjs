@@ -24,6 +24,16 @@ export function parseToolResult(result) {
 const MIN = 60_000;
 
 /** Map an error message to a cooldown for the account that produced it. */
+/**
+ * True when an MCP / Chrome error means this client can never answer again (its child process or Chrome tab is
+ * gone).  The bridge then drops the cached client so the next heartbeat rebuilds it; before this, a single
+ * "Target crashed" left every later call failing with "Not connected" until the container was recreated.
+ */
+export function isDeadClientError(error) {
+  const text = String(error?.message ?? error ?? '');
+  return /not connected|connection closed|transport closed|target crashed|target closed|has been closed|\bEPIPE\b/i.test(text);
+}
+
 export function classifyError(message) {
   const m = String(message ?? '').toLowerCase();
   if (/not enough credits|insufficient credits|out of credits|exceeds max_credits|quota/.test(m)) {
