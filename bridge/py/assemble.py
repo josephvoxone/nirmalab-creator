@@ -107,34 +107,48 @@ def shot_zoom(shot):
 
 
 def filter_graph(durations, xf, transitions=None, title_input=None, total=None,
-                 clip_volume=None, music_input=None, music=None, subtitles=None, fonts_dir=None, zooms=None):
+                 clip_volume=None, music_input=None, music=None, subtitles=None, fonts_dir=None, zooms=None,
+                 streams='av'):
+    """One ffmpeg filter graph.  streams: 'av' (both), 'v' (video chain only) or 'a' (audio chain only).
+
+    Production renders 'v' and 'a' in two ffmpeg runs: in one graph, ffmpeg 5.1 reads every clip to feed the
+    audio chain and keeps the raw video frames of the later clips in memory (5.7-8 GB for 21 clips).
+    """
+    want_v, want_a = 'v' in streams, 'a' in streams
     parts = []
     n = len(durations)
     for i in range(n):
         z = (zooms or [])[i] if zooms and i < len(zooms) else 1.0
         zoom = f'scale=trunc(iw*{z}/2)*2:trunc(ih*{z}/2)*2,crop={W}:{H},' if z and z > 1.0 else ''
-        parts.append(
-            f'[{i}:v]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},{zoom}'
-            f'fps={FPS},setsar=1,format=yuv420p,settb=AVTB[v{i}]'
-        )
-        parts.append(f'[{i}:a]aformat=sample_rates=48000:channel_layouts=stereo,asetpts=PTS-STARTPTS[a{i}]')
+        if want_v:
+            parts.append(
+                f'[{i}:v]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},{zoom}'
+                f'fps={FPS},setsar=1,format=yuv420p,settb=AVTB[v{i}]'
+            )
+        if want_a:
+            parts.append(f'[{i}:a]aformat=sample_rates=48000:channel_layouts=stereo,asetpts=PTS-STARTPTS[a{i}]')
     offsets = xfade_offsets(durations, xf)
     vprev, aprev = 'v0', 'a0'
     for i in range(1, n):
         tr = (transitions or [])[i - 1] if transitions and i - 1 < len(transitions) else 'fade'
-        parts.append(f'[{vprev}][v{i}]xfade=transition={tr}:duration={xf}:offset={offsets[i - 1]}[vx{i}]')
-        parts.append(f'[{aprev}][a{i}]acrossfade=d={xf}[ax{i}]')
+        if want_v:
+            parts.append(f'[{vprev}][v{i}]xfade=transition={tr}:duration={xf}:offset={offsets[i - 1]}[vx{i}]')
+        if want_a:
+            parts.append(f'[{aprev}][a{i}]acrossfade=d={xf}[ax{i}]')
         vprev, aprev = f'vx{i}', f'ax{i}'
     video = f'[{vprev}]'
-    if title_input is not None:
-        parts.append(f'[{title_input}:v]format=rgba,setpts=PTS-STARTPTS[ttl]')
-        parts.append(f'[{vprev}][ttl]overlay=0:0:eof_action=pass[vt]')
-        video = '[vt]'
-    if subtitles:
-        video += f"subtitles=filename={subtitles}:fontsdir={fonts_dir or DEJAVU_DIR},"
-    if total:
-        video += f'fade=t=in:st=0:d=0.8,fade=t=out:st={round(total - 1.2, 3)}:d=1.2,'
-    parts.append(video.rstrip(',') + '[vout]' if video not in (f'[{vprev}]', '[vt]') else video + 'null[vout]')
+    if want_v:
+        if title_input is not None:
+            parts.append(f'[{title_input}:v]format=rgba,setpts=PTS-STARTPTS[ttl]')
+            parts.append(f'[{vprev}][ttl]overlay=0:0:eof_action=pass[vt]')
+            video = '[vt]'
+        if subtitles:
+            video += f"subtitles=filename={subtitles}:fontsdir={fonts_dir or DEJAVU_DIR},"
+        if total:
+            video += f'fade=t=in:st=0:d=0.8,fade=t=out:st={round(total - 1.2, 3)}:d=1.2,'
+        parts.append(video.rstrip(',') + '[vout]' if video not in (f'[{vprev}]', '[vt]') else video + 'null[vout]')
+    if not want_a:
+        return ';'.join(parts)
     audio = f'[{aprev}]'
     if clip_volume is not None and abs(float(clip_volume) - 1.0) > 1e-6:
         audio += f'volume={round(float(clip_volume), 3)},'
@@ -179,6 +193,19 @@ def resolve(arg):
         story = json.load(open(arg))
         return arg, os.path.join(flow_home(), 'stories', story['slug'])
     return os.path.join(flow_home(), 'stories', arg, 'storyboard.json'), os.path.join(flow_home(), 'stories', arg)
+
+
+def run_ffmpeg(cmd, label):
+    """Run one ffmpeg pass; exit with a message that says what happened (a killed process has no stderr)."""
+    done = subprocess.run(cmd, capture_output=True, text=True)
+    if done.returncode == 0:
+        return
+    if done.returncode in (-9, 137):
+        sys.exit(f'ffmpeg ({label}) was killed (SIGKILL): the server most likely ran out of memory')
+    if done.returncode < 0:
+        sys.exit(f'ffmpeg ({label}) was killed by signal {-done.returncode}')
+    lines = [l for l in done.stderr.strip().splitlines() if l.strip()]
+    sys.exit(f'ffmpeg failed ({label}): ' + ' | '.join(lines[-4:]))
 
 
 def main(arg):
@@ -228,19 +255,25 @@ def main(arg):
             subs = os.path.join(subs_dir, 'subs.ass')
             open(subs, 'w', encoding='utf-8').write(ass_document(events, W, H, style=edit.get('subtitleStyle'),
                                                                 size=edit.get('subtitleSize'), y=edit.get('subtitleY')))
-    graph = filter_graph(durations, xf, transitions[1:], title_input=title_input, total=total,
-                         clip_volume=edit.get('clipVolume'), music_input=music_input, music=music, subtitles=subs,
-                         fonts_dir=FONTS_DIR if edit.get('subtitleStyle') == HANDWRITTEN else None, zooms=zooms)
+    graph_args = dict(title_input=title_input, total=total, clip_volume=edit.get('clipVolume'),
+                      music_input=music_input, music=music, subtitles=subs,
+                      fonts_dir=FONTS_DIR if edit.get('subtitleStyle') == HANDWRITTEN else None, zooms=zooms)
+    vgraph = filter_graph(durations, xf, transitions[1:], streams='v', **graph_args)
+    agraph = filter_graph(durations, xf, transitions[1:], streams='a', **graph_args)
     final = os.path.join(out_dir, f"{story['slug']}.mp4")
-    cmd = ['ffmpeg', '-y', '-v', 'error', *inputs, '-filter_complex', graph, '-map', '[vout]', '-map', '[aout]',
-           '-c:v', 'libx264', '-preset', 'slow', '-crf', '18', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '192k',
-           '-movflags', '+faststart', '-t', str(total), final]
+    work = tempfile.mkdtemp(prefix='.pass-', dir=out_dir)
+    vfile, afile = os.path.join(work, 'video.mp4'), os.path.join(work, 'audio.m4a')
     try:
-        done = subprocess.run(cmd, capture_output=True, text=True)
-        if done.returncode != 0:
-            lines = [l for l in done.stderr.strip().splitlines() if l.strip()]
-            sys.exit('ffmpeg failed: ' + ' | '.join(lines[-4:]))
+        # Two sequential passes (see filter_graph): each reads the clips but only one stream is rendered.
+        run_ffmpeg(['ffmpeg', '-y', '-v', 'error', *inputs, '-filter_complex', vgraph, '-map', '[vout]',
+                    '-c:v', 'libx264', '-preset', 'slow', '-crf', '18', '-pix_fmt', 'yuv420p', '-t', str(total), vfile],
+                   'video pass')
+        run_ffmpeg(['ffmpeg', '-y', '-v', 'error', *inputs, '-filter_complex', agraph, '-map', '[aout]',
+                    '-c:a', 'aac', '-b:a', '192k', '-t', str(total), afile], 'audio pass')
+        run_ffmpeg(['ffmpeg', '-y', '-v', 'error', '-i', vfile, '-i', afile, '-map', '0:v:0', '-map', '1:a:0',
+                    '-c', 'copy', '-movflags', '+faststart', final], 'mux')
     finally:
+        shutil.rmtree(work, ignore_errors=True)
         if card_cfg:
             shutil.rmtree(seq, ignore_errors=True)
         if subs_dir:
