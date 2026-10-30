@@ -30,7 +30,7 @@ import { sized } from '../../lib/media.js';
 import { SequencePlayer } from './Player.js';
 import {
   boardOrder, editOf, formatSeconds, MIN_CLIP, nudgeScene, nudgeShot, rulerTicks, sceneKey, sequenceClips, shotKey, timelineDrop, timelineLayout,
-  withCaption, withEdit, withTrim, withZoom, type ClipStatus, type MusicEdit, type TimelineClip, type TimelineScene, type Trim
+  withCaption, withEdit, withTrim, withZoom, withZoomY, type ClipStatus, type MusicEdit, type TimelineClip, type TimelineScene, type Trim
 } from './TimelineModel.js';
 
 type Zoom = '50' | '100' | '200';
@@ -309,7 +309,15 @@ function Inspector(props: {
         <Segmented name="Zoom" value={String(clip.zoom)} disabled={busy}
           onChange={v => save(withZoom(board, clip.shotId, Number(v) > 1 ? Number(v) : undefined))}
           options={[{ value: '1', label: 'Asli', hint: 'Klip apa adanya' }, { value: '1.06', label: '106%', hint: 'Potong tipis tepi' },
-            { value: '1.12', label: '112%', hint: 'Sembunyikan tepi kertas' }, { value: '1.2', label: '120%', hint: 'Potong tepi lebar' }]} />
+            { value: '1.12', label: '112%', hint: 'Sembunyikan tepi kertas' }, { value: '1.2', label: '120%', hint: 'Potong tepi lebar' },
+            { value: '1.32', label: '132%', hint: 'Cukup untuk membuang band kertas ±24% di atas (dengan fokus Bawah)' },
+            { value: '1.4', label: '140%', hint: 'Potong paling lebar; tepi samping mulai terpotong' }]} />
+      )}
+      {clip.status === 'done' && clip.zoom > 1 && (
+        <Segmented name="Fokus zoom" value={String(clip.zoomY)} disabled={busy}
+          onChange={v => save(withZoomY(board, clip.shotId, Number(v)))}
+          options={[{ value: '0', label: 'Atas', hint: 'Potongan diambil dari bawah' }, { value: '0.5', label: 'Tengah', hint: 'Potong rata di semua sisi' },
+            { value: '1', label: 'Bawah', hint: 'Potongan diambil dari atas: membuang tepi kertas dan teks yang digambar model' }]} />
       )}
       <div className="flex gap-1">
         {nudge(nudgeShot(board, clip.shotId, -1), nudgeShot(board, clip.shotId, 1))}

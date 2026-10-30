@@ -140,8 +140,53 @@ class ShotZoom(unittest.TestCase):
         from assemble import shot_zoom
         self.assertEqual(shot_zoom({}), 1.0)
         self.assertEqual(shot_zoom({'zoom': 1.12}), 1.12)
-        self.assertEqual(shot_zoom({'zoom': 5}), 1.3)
+        self.assertEqual(shot_zoom({'zoom': 5}), 1.4)
         self.assertEqual(shot_zoom({'zoom': 0.5}), 1.0)
+
+
+class ZoomAnchor(unittest.TestCase):
+    """Zoom can be pinned to the bottom (or top) so a page edge + caption the model drew at the top is cropped out."""
+
+    def test_anchor_is_read_and_clamped_and_defaults_to_the_centre(self):
+        from assemble import shot_zoom_y
+        self.assertEqual(shot_zoom_y({}), 0.5)
+        self.assertEqual(shot_zoom_y({'zoomY': 1}), 1.0)
+        self.assertEqual(shot_zoom_y({'zoomY': 0}), 0.0)
+        self.assertEqual(shot_zoom_y({'zoomY': 7}), 1.0)
+        self.assertEqual(shot_zoom_y({'zoomY': -2}), 0.0)
+        self.assertEqual(shot_zoom_y({'zoomY': 'x'}), 0.5)
+
+    def test_bottom_anchor_crops_from_the_bottom_edge_and_centre_is_unchanged(self):
+        centred = filter_graph([5.0, 5.0], 0.3, total=9.7, zooms=[1.0, 1.3])
+        bottom = filter_graph([5.0, 5.0], 0.3, total=9.7, zooms=[1.0, 1.3], zoom_ys=[0.5, 1.0])
+        v1 = [p for p in bottom.split(';') if p.startswith('[1:v]')][0]
+        self.assertIn('crop=720:1280:(iw-720)/2:(ih-1280)*1.0', v1)
+        # a centred anchor must keep the exact graph that shipped before the anchor existed
+        self.assertEqual(centred, filter_graph([5.0, 5.0], 0.3, total=9.7, zooms=[1.0, 1.3], zoom_ys=[0.5, 0.5]))
+        self.assertEqual(centred, filter_graph([5.0, 5.0], 0.3, total=9.7, zooms=[1.0, 1.3], zoom_ys=None))
+
+    @unittest.skipUnless(has_filter('crop'), 'needs ffmpeg')
+    def test_bottom_anchor_really_drops_the_top_band_of_the_picture(self):
+        d = tempfile.mkdtemp(prefix='asm-anchor-')
+        try:
+            # top 15% white, rest black: after a 1.3x zoom pinned to the bottom the top row must be black
+            src = os.path.join(d, 's0.mp4')
+            subprocess.run(['ffmpeg', '-v', 'error', '-y', '-f', 'lavfi', '-i', 'color=c=black:s=720x1280:r=24:d=2',
+                            '-f', 'lavfi', '-i', 'sine=frequency=300:duration=2', '-shortest',
+                            '-vf', 'drawbox=x=0:y=0:w=720:h=200:color=white:t=fill', '-c:v', 'libx264', '-pix_fmt', 'yuv420p',
+                            '-c:a', 'aac', src], check=True)
+            for y, expect_white in ((0.5, True), (1.0, False)):
+                plan = {'slug': f'out{y}', 'crossfade': 0.3, 'shots': [{'id': 's0', 'zoom': 1.3, 'zoomY': y}]}
+                json.dump(plan, open(os.path.join(d, 'assemble.json'), 'w'))
+                out = subprocess.run(['python3', os.path.join(os.path.dirname(__file__), 'assemble.py'), d], capture_output=True, text=True)
+                self.assertEqual(out.returncode, 0, out.stderr)
+                png = os.path.join(d, f'f{y}.png')
+                subprocess.run(['ffmpeg', '-v', 'error', '-y', '-ss', '1', '-i', os.path.join(d, f'out{y}.mp4'), '-frames:v', '1',
+                                '-vf', 'crop=720:40:0:0,scale=1:1', '-pix_fmt', 'gray', '-f', 'rawvideo', png], check=True)
+                luma = open(png, 'rb').read()[0]
+                self.assertEqual(luma > 128, expect_white, f'zoomY={y}: top luma {luma}')
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
 
 
 class SubtitleSizeAndPosition(unittest.TestCase):

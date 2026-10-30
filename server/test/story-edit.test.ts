@@ -44,6 +44,17 @@ describe('timeline edit: validation', () => {
     expect(errors(b => { b.edit = { subtitles: true, subtitleY: 0.99 }; })).toMatch(/subtitleY/);
     expect(errors(b => { b.shots[0]!.caption = 'Terang untuk satu langkah'; b.edit = { subtitles: true, subtitleSize: 1.25, subtitleY: 0.42 }; })).toBe('');
     expect(errors(b => { b.shots[0]!.zoom = 1.12; })).toBe('');
+    expect(errors(b => { b.shots[0]!.zoom = 1.4; })).toBe('');
+    expect(errors(b => { b.shots[0]!.zoom = 1.41; })).toMatch(/zoom/);
+  });
+
+  it('zoomY (where the zoom window sits) is a number from 0 (top) to 1 (bottom)', () => {
+    const errors = (patch: (b: Storyboard) => void) => { const b = board(); patch(b); return validateStoryboard(b).join('; '); };
+    expect(errors(b => { b.shots[0]!.zoom = 1.3; b.shots[0]!.zoomY = 1; })).toBe('');
+    expect(errors(b => { b.shots[0]!.zoomY = 0; })).toBe('');
+    expect(errors(b => { b.shots[0]!.zoomY = 1.2; })).toMatch(/zoomY/);
+    expect(errors(b => { b.shots[0]!.zoomY = -0.1; })).toMatch(/zoomY/);
+    expect(errors(b => { b.shots[0]!.zoomY = 'bawah' as unknown as number; })).toMatch(/zoomY/);
   });
 
   it('edits never change a clip prompt: no clip is rendered again for a trim, music or subtitles', () => {
@@ -148,6 +159,22 @@ describe('timeline edit: the video must be assembled again', () => {
     await t.service.assemble(id);
     const plan = JSON.parse(readFileSync(join(t.service.storyDir(id), 'assemble.json'), 'utf8'));
     expect(plan.shots[0].zoom).toBe(1.12);
+  });
+
+  it('zoomY: pinning the zoom to the bottom marks the video stale, reaches the plan, never re-queues the paid clip', async () => {
+    const { t, id } = await assembled();
+    const b = await t.service.readStoryboard(id);
+    b.shots[0]!.zoom = 1.3;
+    await t.service.updateStoryboard(id, b);
+    await t.service.assemble(id);
+    expect((await t.service.get(id))!.videoStale).toBeFalsy();
+    b.shots[0]!.zoomY = 1;
+    const after = await t.service.updateStoryboard(id, b);
+    expect(after.videoStale).toBe(true);
+    expect(after.shots.every(s => s.status === 'done')).toBe(true);
+    await t.service.assemble(id);
+    const plan = JSON.parse(readFileSync(join(t.service.storyDir(id), 'assemble.json'), 'utf8'));
+    expect(plan.shots[0].zoomY).toBe(1);
   });
 
   it('handwritten subtitles: the style reaches the assembly plan, and switching it marks the video stale', async () => {

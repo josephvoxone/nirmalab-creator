@@ -97,18 +97,36 @@ def ass_document(events, w, h, style=None, size=None, y=None):
     return '\n'.join(lines) + '\n'
 
 
+MAX_ZOOM = 1.4
+
+
 def shot_zoom(shot):
-    """Assembly crop into the clip centre: 1.0 (none) .. 1.3."""
+    """Assembly crop into the clip: 1.0 (none) .. MAX_ZOOM."""
     try:
         z = float(shot.get('zoom') or 1.0)
     except (TypeError, ValueError):
         return 1.0
-    return min(1.3, max(1.0, z))
+    return min(MAX_ZOOM, max(1.0, z))
+
+
+def shot_zoom_y(shot):
+    """Where the zoom window sits vertically: 0 = pinned to the top, 0.5 = centre (default), 1 = pinned to the bottom.
+
+    Pinned to the bottom, the whole crop comes off the top: that removes the page edge and the made-up caption a
+    model sometimes draws there, without touching the characters.
+    """
+    try:
+        y = float(shot.get('zoomY', 0.5))
+    except (TypeError, ValueError):
+        return 0.5
+    if y != y:  # NaN
+        return 0.5
+    return min(1.0, max(0.0, y))
 
 
 def filter_graph(durations, xf, transitions=None, title_input=None, total=None,
                  clip_volume=None, music_input=None, music=None, subtitles=None, fonts_dir=None, zooms=None,
-                 streams='av'):
+                 streams='av', zoom_ys=None):
     """One ffmpeg filter graph.  streams: 'av' (both), 'v' (video chain only) or 'a' (audio chain only).
 
     Production renders 'v' and 'a' in two ffmpeg runs: in one graph, ffmpeg 5.1 reads every clip to feed the
@@ -119,7 +137,10 @@ def filter_graph(durations, xf, transitions=None, title_input=None, total=None,
     n = len(durations)
     for i in range(n):
         z = (zooms or [])[i] if zooms and i < len(zooms) else 1.0
-        zoom = f'scale=trunc(iw*{z}/2)*2:trunc(ih*{z}/2)*2,crop={W}:{H},' if z and z > 1.0 else ''
+        zy = (zoom_ys or [])[i] if zoom_ys and i < len(zoom_ys) else 0.5
+        # a centred anchor keeps the exact crop that shipped before the anchor existed
+        crop = f'crop={W}:{H}' if zy == 0.5 else f'crop={W}:{H}:(iw-{W})/2:(ih-{H})*{zy}'
+        zoom = f'scale=trunc(iw*{z}/2)*2:trunc(ih*{z}/2)*2,{crop},' if z and z > 1.0 else ''
         if want_v:
             parts.append(
                 f'[{i}:v]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},{zoom}'
@@ -213,6 +234,7 @@ def main(arg):
     story = json.load(open(story_path))
     inputs, durations, transitions = [], [], []
     zooms = [shot_zoom(s) for s in story['shots']]
+    zoom_ys = [shot_zoom_y(s) for s in story['shots']]
     edit = story.get('edit') or {}
     for shot in story['shots']:
         if shot.get('reuse'):
@@ -257,7 +279,7 @@ def main(arg):
                                                                 size=edit.get('subtitleSize'), y=edit.get('subtitleY')))
     graph_args = dict(title_input=title_input, total=total, clip_volume=edit.get('clipVolume'),
                       music_input=music_input, music=music, subtitles=subs,
-                      fonts_dir=FONTS_DIR if edit.get('subtitleStyle') == HANDWRITTEN else None, zooms=zooms)
+                      fonts_dir=FONTS_DIR if edit.get('subtitleStyle') == HANDWRITTEN else None, zooms=zooms, zoom_ys=zoom_ys)
     vgraph = filter_graph(durations, xf, transitions[1:], streams='v', **graph_args)
     agraph = filter_graph(durations, xf, transitions[1:], streams='a', **graph_args)
     final = os.path.join(out_dir, f"{story['slug']}.mp4")

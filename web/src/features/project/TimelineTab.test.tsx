@@ -208,6 +208,29 @@ describe('Timeline edit (Premiere-style)', () => {
     await waitFor(() => expect(lastBoard(api.calls)?.shots[0]!.zoom).toBeUndefined());
   });
 
+  it('zoom focus: pin the crop to the bottom to drop a drawn page edge + caption from the top; the monitor previews it', async () => {
+    const api = fakeProjectApi({ story: allDone() });
+    open(api);
+    const monitor = await screen.findByRole('group', { name: /program monitor/i });
+    await userEvent.click(within(track(/track video v1/i)).getByRole('button', { name: /^shot 1:/i }));
+    const inspector = () => within(screen.getByRole('region', { name: /inspector/i }));
+    // no focus choice while there is no zoom
+    expect(inspector().queryByRole('radiogroup', { name: 'Fokus zoom' })).toBeNull();
+    await userEvent.click(within(inspector().getByRole('radiogroup', { name: 'Zoom' })).getByRole('radio', { name: /^140%/ }));
+    const focus = () => inspector().getByRole('radiogroup', { name: 'Fokus zoom' });
+    expect(within(focus()).getByRole('radio', { name: /^Tengah/ })).toBeChecked();
+    await userEvent.click(within(focus()).getByRole('radio', { name: /^Bawah/ }));
+    await waitFor(() => expect(lastBoard(api.calls)?.shots[0]).toMatchObject({ zoom: 1.4, zoomY: 1 }));
+    await waitFor(() => expect(within(monitor).getByTestId('program-video').style.transformOrigin).toBe('50% 100%'));
+    // back to the centre drops the field (the default stays out of the board)
+    await userEvent.click(within(focus()).getByRole('radio', { name: /^Tengah/ }));
+    await waitFor(() => expect((lastBoard(api.calls)?.shots[0] as { zoomY?: number }).zoomY).toBeUndefined());
+    // Asli removes both
+    await userEvent.click(within(focus()).getByRole('radio', { name: /^Bawah/ }));
+    await userEvent.click(within(inspector().getByRole('radiogroup', { name: 'Zoom' })).getByRole('radio', { name: /^Asli/ }));
+    await waitFor(() => expect(lastBoard(api.calls)?.shots[0]).not.toHaveProperty('zoomY'));
+  });
+
   it('trim handles on the clip edges move with the keyboard and save once you stop', async () => {
     const story = allDone();
     story.shots[1]!.durationSec = 6;

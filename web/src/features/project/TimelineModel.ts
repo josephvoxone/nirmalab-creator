@@ -19,6 +19,8 @@ export type TimelineClip = {
   captioned: boolean;
   /** Assembly crop into the clip centre (1 = none). */
   zoom: number;
+  /** Vertical anchor of the zoom window: 0 top, 0.5 centre, 1 bottom. */
+  zoomY: number;
 };
 
 export type Trim = { in?: number; out?: number };
@@ -70,8 +72,19 @@ export function withCaption(b: Board, shotId: string, caption: string | undefine
 export function withZoom(b: Board, shotId: string, zoom: number | undefined): Board {
   return { ...b, shots: b.shots.map(s => {
     if (s.id !== shotId) return s;
-    const { zoom: _old, ...rest } = s as typeof s & { zoom?: number };
-    return zoom && zoom > 1 ? { ...rest, zoom } : rest;
+    const { zoom: _old, zoomY: _oldY, ...rest } = s as typeof s & { zoom?: number; zoomY?: number };
+    // no zoom = no anchor either; changing the zoom keeps the chosen anchor
+    const keepY = (s as { zoomY?: number }).zoomY;
+    return zoom && zoom > 1 ? { ...rest, zoom, ...(keepY !== undefined ? { zoomY: keepY } : {}) } : rest;
+  }) };
+}
+
+/** The board with one shot's zoom anchor set (0 top .. 1 bottom); the centre (default) removes the field. */
+export function withZoomY(b: Board, shotId: string, zoomY: number): Board {
+  return { ...b, shots: b.shots.map(s => {
+    if (s.id !== shotId) return s;
+    const { zoomY: _old, ...rest } = s as typeof s & { zoomY?: number };
+    return zoomY === 0.5 ? rest : { ...rest, zoomY };
   }) };
 }
 
@@ -121,7 +134,8 @@ export function timelineLayout(input: Board, story?: Story): TimelineLayout {
         narration: line || '—', captioned: Boolean(own),
         frame: st?.frame?.mediaId, frameDone: st?.frame?.status === 'done', clipVersion: st?.jobId ?? (st ? String(st.attempts) : undefined),
         trimIn: window.start, ...(trim?.out !== undefined ? { trimOut: trim.out } : {}), full, line,
-        zoom: (shot as { zoom?: number }).zoom ?? 1
+        zoom: (shot as { zoom?: number }).zoom ?? 1,
+        zoomY: (shot as { zoomY?: number }).zoomY ?? 0.5
       });
       t += seconds;
     }
@@ -219,7 +233,7 @@ export function sequenceClips(id: string, board: Board, story: Story, shotIds?: 
     seconds: c.seconds,
     ...(c.status === 'done' && (c.trimIn > 0 || c.seconds < c.full) ? { from: c.trimIn, to: r3(c.trimIn + c.seconds) } : {}),
     ...(subtitles && c.line ? { caption: c.line } : {}),
-    ...(c.zoom > 1 ? { zoom: c.zoom } : {}),
+    ...(c.zoom > 1 ? { zoom: c.zoom, ...(c.zoomY !== 0.5 ? { zoomY: c.zoomY } : {}) } : {}),
     src: c.status === 'done' ? media.clip(id, c.shotId, c.clipVersion) : undefined,
     // rendered: the clip's own poster (never a black box); else its keyframe still
     poster: c.status === 'done' ? poster.shot(id, c.shotId, pw, c.clipVersion) : c.frameDone ? sized(media.frame(id, c.shotId, c.frame), pw) : undefined

@@ -30,8 +30,10 @@ export type TimelineEdit = { clipVolume?: number; subtitles?: boolean; subtitleS
 export type Shot = {
   id: string;
   trim?: ShotTrim;
-  /** Assembly-only crop into the clip centre (1 = none, max 1.3): hides a page edge the model drew. Never in a prompt. */
+  /** Assembly-only crop into the clip (1 = none, max 1.4): hides a page edge the model drew. Never in a prompt. */
   zoom?: number;
+  /** Where the zoom window sits vertically: 0 top, 0.5 centre (default), 1 bottom. Pinned to the bottom, the crop comes off the top (page edge + stray caption). */
+  zoomY?: number;
   /** Subtitle text of this shot when it should differ from the narration (assembly only, never in a prompt). */
   caption?: string;
   prompt: string;
@@ -505,7 +507,8 @@ const isNum = (v: unknown, min: number, max: number) => typeof v === 'number' &&
 export function validateEdit(board: Storyboard): string[] {
   const errors: string[] = [];
   for (const shot of board.shots) {
-    if (shot.zoom !== undefined && !isNum(shot.zoom, 1, 1.3)) errors.push(`${shot.id}: zoom must be a number from 1 to 1.3`);
+    if (shot.zoom !== undefined && !isNum(shot.zoom, 1, 1.4)) errors.push(`${shot.id}: zoom must be a number from 1 to 1.4`);
+    if (shot.zoomY !== undefined && !isNum(shot.zoomY, 0, 1)) errors.push(`${shot.id}: zoomY must be a number from 0 (top) to 1 (bottom)`);
     if (shot.caption !== undefined && (typeof shot.caption !== 'string' || shot.caption.length > 200)) errors.push(`${shot.id}: caption must be text of at most 200 characters`);
     const t = shot.trim as unknown;
     if (t === undefined) continue;
@@ -543,7 +546,7 @@ export function validateEdit(board: Storyboard): string[] {
 export function editPrint(board: Storyboard): string {
   return JSON.stringify({
     e: board.edit ?? null,
-    s: board.shots.map(s => [s.id, s.trim ?? null, board.edit?.subtitles ? subtitleOf(s) : null, ...(s.zoom && s.zoom !== 1 ? [s.zoom] : [])])
+    s: board.shots.map(s => [s.id, s.trim ?? null, board.edit?.subtitles ? subtitleOf(s) : null, ...(s.zoom && s.zoom !== 1 ? [s.zoom] : []), ...(s.zoom && s.zoom !== 1 && s.zoomY !== undefined && s.zoomY !== 0.5 ? [`y${s.zoomY}`] : [])])
   });
 }
 
