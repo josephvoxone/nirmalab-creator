@@ -251,7 +251,7 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
       };
     }
   });
-  await registerFreeGenerateRoutes(server, { userAuthStore, dataDir: options.dataDir });
+  await registerFreeGenerateRoutes(server, { userAuthStore, dataDir: options.dataDir, env });
   await registerFlowRoutes(server, {
     userAuthStore,
     dataDir: options.dataDir,
