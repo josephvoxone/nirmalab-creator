@@ -53,7 +53,7 @@ export function JobList(props: {
       <div className="mx-auto mt-6 flex max-w-sm flex-col items-center gap-2 text-center">
         <Clapperboard aria-hidden="true" className="size-6 text-muted-foreground" />
         <b className="text-sm font-medium">Belum ada hasil</b>
-        <p className="text-[13px] text-muted-foreground">Klip dan gambar yang kamu antrekan muncul di sini. Bridge di Mac mengambilnya satu per satu dari akun Flow.</p>
+        <p className="text-[13px] text-muted-foreground">Klip dan gambar yang kamu antrekan muncul di sini. Bridge di Mac mengambilnya satu per satu dari akun Flow. Daftar ini hanya berisi hasil milikmu.</p>
         <Button variant="glass" size="sm" onClick={props.onStart}>Buat yang pertama</Button>
       </div>
     );

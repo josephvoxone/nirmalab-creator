@@ -33,6 +33,28 @@ export type FlowJob = {
   error?: string;
 };
 
+/**
+ * What an operator sees of a job on `GET /api/admin/flow/jobs`: load and state, never the prompt, technique, group, characters or result.
+ * (`GET /api/flow/jobs` is the caller's OWN list and keeps the full `FlowJob`.)
+ */
+export type AdminFlowJob = {
+  id: string;
+  kind: 'video' | 'image' | 'character';
+  status: 'queued' | 'running' | 'done' | 'failed' | string;
+  provider: string;
+  model?: string;
+  accountId?: string;
+  attempts: number;
+  error?: string;
+  ownerId?: string;
+  ownerEmail?: string;
+  createdAtMs: number;
+  startedAtMs?: number;
+  finishedAtMs?: number;
+  credits: number;
+  cancelled?: true;
+};
+
 export type FlowBridge = { bridgeId?: string; lastSeenMs?: number; online: boolean };
 
 async function readJson(response: Response): Promise<unknown> {
@@ -72,7 +94,10 @@ export function flowClient(baseUrl: string, fetchImpl: FlowFetch) {
       request<{ account: FlowAccount }>(fetchImpl, `${baseUrl}/api/flow/accounts`, { method: 'POST', body: JSON.stringify(input) }),
     removeAccount: (id: string) =>
       request<{ ok: boolean }>(fetchImpl, `${baseUrl}/api/flow/accounts/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+    /** The signed-in user's own jobs (the server filters by owner; nothing of anybody else's arrives). */
     jobs: () => request<{ jobs: FlowJob[] }>(fetchImpl, `${baseUrl}/api/flow/jobs`),
+    /** Admin only: queue load of every user, without content (for the system console, not for Studio). */
+    adminJobs: () => request<{ jobs: AdminFlowJob[] }>(fetchImpl, `${baseUrl}/api/admin/flow/jobs`),
     createJob: (input: JobInput) =>
       request<{ job: FlowJob }>(fetchImpl, `${baseUrl}/api/flow/jobs`, { method: 'POST', body: JSON.stringify(input) }),
     fileUrl: (jobId: string) => `${baseUrl}/api/flow/jobs/${jobId}/file`

@@ -36,7 +36,9 @@ export function StudioPage(props: { baseUrl: string; fetchImpl: FlowFetch; techn
   const [accounts, setAccounts] = useState<FlowAccount[]>([]);
   const [bridge, setBridge] = useState<FlowBridge>({ online: false });
   const [jobs, setJobs] = useState<FlowJob[]>([]);
+  /** Your own results (GET /api/flow/jobs) load on their own: Flow accounts are an admin matter and may be refused (403). */
   const [loaded, setLoaded] = useState(false);
+  const [accountsState, setAccountsState] = useState<'loading' | 'ready' | 'forbidden' | 'error'>('loading');
   const [loadError, setLoadError] = useState<unknown>();
   const [step, setStep] = useState(KIND);
   const [kind, setKind] = useState<Kind>('video');
@@ -52,16 +54,20 @@ export function StudioPage(props: { baseUrl: string; fetchImpl: FlowFetch; techn
   const [budget, setBudget] = useState<{ message: string; input: JobInput; done: string; fallback: string; then?: () => void }>();
 
   const refresh = useCallback(async () => {
-    try {
-      const [a, j] = await Promise.all([api.accounts(), api.jobs()]);
-      setAccounts(a.accounts);
-      setBridge(a.bridge);
-      setJobs(j.jobs);
-      setLoaded(true);
-      setLoadError(undefined);
-    } catch (e) {
-      setLoadError(e);
+    const [accountsResult, jobsResult] = await Promise.allSettled([api.accounts(), api.jobs()]);
+    if (jobsResult.status === 'fulfilled') { setJobs(jobsResult.value.jobs); setLoaded(true); }
+    let accountsFailure: unknown;
+    if (accountsResult.status === 'fulfilled') {
+      setAccounts(accountsResult.value.accounts);
+      setBridge(accountsResult.value.bridge);
+      setAccountsState('ready');
+    } else if (accountsResult.reason instanceof ApiError && accountsResult.reason.status === 403) {
+      setAccountsState('forbidden'); // not an admin: no bridge line, no account management, and no error to show
+    } else {
+      setAccountsState(state => (state === 'ready' ? state : 'error'));
+      accountsFailure = accountsResult.reason;
     }
+    setLoadError(jobsResult.status === 'rejected' ? jobsResult.reason : accountsFailure);
   }, [api]);
 
   useEffect(() => {
@@ -187,9 +193,9 @@ export function StudioPage(props: { baseUrl: string; fetchImpl: FlowFetch; techn
   return (
     <div className="mx-auto flex w-full max-w-[1100px] flex-col gap-3 pt-2 text-[13px]">
       <div className="flex min-h-8 flex-wrap items-center gap-x-3 gap-y-1.5">
-        {!loaded && loadError === undefined ? (
+        {accountsState === 'loading' && loadError === undefined ? (
           <Skeleton aria-label="Memuat status bridge" className="h-4 w-64" />
-        ) : loaded ? (
+        ) : accountsState === 'ready' ? (
           <p className="flex items-center gap-1.5 text-[12.5px] text-muted-foreground">
             <i aria-hidden="true" className={cn('size-1.5 shrink-0 rounded-full', bridge.online ? 'bg-(--success)' : 'bg-destructive')} />
             <span>{bridge.online ? 'Bridge online' : 'Bridge offline · render menunggu Mac'}</span>
@@ -197,9 +203,11 @@ export function StudioPage(props: { baseUrl: string; fetchImpl: FlowFetch; techn
             <span>· {readyCount}/{accounts.length} akun siap</span>
           </p>
         ) : null}
-        <Button variant="ghost" size="sm" onClick={() => navigate('/pengaturan/flow', { state: { background: location } })}>
-          <Settings2 /> Kelola akun Flow
-        </Button>
+        {accountsState !== 'forbidden' && (
+          <Button variant="ghost" size="sm" onClick={() => navigate('/pengaturan/flow', { state: { background: location } })}>
+            <Settings2 /> Kelola akun Flow
+          </Button>
+        )}
         <div className="ml-auto flex items-center gap-1">
           {step !== RESULTS && (
             <Button variant="ghost" size="sm" onClick={() => go(RESULTS)}>Lihat hasil ({jobs.length})</Button>
@@ -212,7 +220,7 @@ export function StudioPage(props: { baseUrl: string; fetchImpl: FlowFetch; techn
       {loadError !== undefined && (
         <div role="alert" className="glass-panel flex flex-wrap items-center gap-2 rounded-lg px-3 py-2.5">
           <div className="min-w-0 flex-1">
-            <b className="text-[13px] font-medium">{loaded ? 'Gagal memperbarui status Flow' : 'Status Flow tidak termuat'}</b>
+            <b className="text-[13px] font-medium">{!loaded ? 'Hasilmu belum termuat' : accountsState === 'ready' ? 'Gagal memperbarui status Flow' : 'Status Flow tidak termuat'}</b>
             <p className="text-[12.5px] text-muted-foreground">{describeError(loadError)}</p>
           </div>
           <Button variant="glass" size="sm" onClick={() => void refresh()}><RotateCcw /> Coba lagi</Button>

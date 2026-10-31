@@ -4,13 +4,15 @@ import { createReadStream, readFileSync } from 'node:fs';
 import { mkdir, stat, writeFile } from 'node:fs/promises';
 import { join, resolve, sep } from 'node:path';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import { requireAdmin } from '../auth/routes.js';
+import { requireAdmin, sessionUser } from '../auth/routes.js';
+import { resolveMainOwner } from '../publisher/owner.js';
 import { MediaCache, sendImage } from '../media/images.js';
 import type { UserAuthStore } from '../auth/store.js';
 import { usdLabel } from '../providers/catalog.js';
 import { AXCEL_MODELS, isAxcelModel } from '../providers/axcel.js';
 import { isModelId } from '../providers/config.js';
 import { QuotaError } from '../quota/errors.js';
+import { adminJobView, appendTenancyLog, jobOwnerId, ownsJob } from './job-access.js';
 import { FLOW_ROTATIONS, FlowInputError, FlowStore, type FlowAccountPatch, type FlowRotation } from './store.js';
 
 export type FlowRouteOptions = {
@@ -31,6 +33,8 @@ export type FlowRouteOptions = {
   };
   /** Thumbnail cache for `GET /api/flow/jobs/:id/file?w=` (image jobs). */
   media?: MediaCache;
+  /** Process env (`TENANCY_DEFAULT_OWNER_EMAIL` picks the main owner, who inherits jobs made before attribution). */
+  env?: NodeJS.ProcessEnv;
 };
 
 const MIN_CLIP_BYTES = 1024;
@@ -63,6 +67,15 @@ export async function registerFlowRoutes(server: FastifyInstance, options: FlowR
     } catch {
       return undefined;
     }
+  };
+
+  // Jobs without `createdBy` (before attribution) belong to the main owner; resolved per request so a new first admin is honoured.
+  const mainOwnerId = (): string | undefined => resolveMainOwner(auth.listUsers(), options.env ?? {}).owner?.user.id;
+  const notFound = (reply: FastifyReply) => bad(reply, 404, 'NOT_FOUND', 'Job not found');
+  const requireUser = (request: FastifyRequest, reply: FastifyReply) => {
+    const user = sessionUser(auth, request);
+    if (!user) void reply.code(401).send({ error: { code: 'UNAUTHORIZED', message: 'Unauthorized' } });
+    return user;
   };
 
   const requireBridge = (request: FastifyRequest, reply: FastifyReply): boolean => {
@@ -171,9 +184,43 @@ export async function registerFlowRoutes(server: FastifyInstance, options: FlowR
     };
   });
 
+  // Your own jobs only (T4): a job belongs to the user who queued it; the system (covers) and other people's jobs never appear.
   server.get('/api/flow/jobs', async (request, reply) => {
+    const user = requireUser(request, reply);
+    if (!user) return undefined;
+    const main = mainOwnerId();
+    const all = await store.listJobs(Number.MAX_SAFE_INTEGER);
+    return { jobs: all.filter(job => ownsJob(job, user.id, main)).slice(0, 100) };
+  });
+
+  // Operators see queue LOAD, never content: no prompt, technique, group, characters or result (T4 / audit 06 §A.3).
+  server.get<{ Querystring: { limit?: string } }>('/api/admin/flow/jobs', async (request, reply) => {
     if (!requireAdmin(auth, request, reply)) return undefined;
-    return { jobs: await store.listJobs() };
+    const parsed = Number.parseInt(String(request.query?.limit ?? ''), 10);
+    const limit = Number.isFinite(parsed) ? Math.min(Math.max(parsed, 1), 500) : 200;
+    const main = mainOwnerId();
+    const jobs = (await store.listJobs(limit)).map(job => {
+      const ownerId = jobOwnerId(job, main) ?? (job.createdBy?.startsWith('system:') || job.technique?.startsWith('cover:') ? 'system' : undefined);
+      const email = ownerId && ownerId !== 'system' ? auth.findUserById(ownerId)?.email : undefined;
+      return adminJobView(job, { ...(ownerId ? { id: ownerId } : {}), ...(email ? { email } : {}) });
+    });
+    return { jobs };
+  });
+
+  // D7: an operator may stop a QUEUED job that is stuck, whoever owns it. Never a running one, always logged, the owner sees why.
+  server.post<{ Params: { id: string } }>('/api/admin/flow/jobs/:id/cancel', async (request, reply) => {
+    const admin = requireAdmin(auth, request, reply);
+    if (!admin) return undefined;
+    if (!JOB_ID.test(request.params.id)) return notFound(reply);
+    const before = await store.getJob(request.params.id);
+    if (!before) return notFound(reply);
+    if (before.status !== 'queued') return bad(reply, 409, 'INVALID_STATE', 'Hanya job yang masih antre yang bisa dibatalkan pengelola sistem');
+    const outcome = await store.cancelJob(request.params.id, 'pengelola sistem');
+    if (!outcome.ok) return outcome.code === 'NOT_FOUND' ? notFound(reply) : bad(reply, 409, 'INVALID_STATE', 'Job tidak bisa dibatalkan: sudah berjalan atau selesai');
+    const ownerId = jobOwnerId(before, mainOwnerId()) ?? before.createdBy;
+    await appendTenancyLog(options.dataDir, { action: 'flow.job.cancel', by: admin.id, byEmail: admin.email, jobId: before.id, kind: before.kind, ...(ownerId ? { ownerId } : {}) });
+    const ownerEmail = ownerId ? auth.findUserById(ownerId)?.email : undefined;
+    return { job: adminJobView(outcome.job, { ...(ownerId ? { id: ownerId } : {}), ...(ownerEmail ? { email: ownerEmail } : {}) }) };
   });
 
   server.post<{ Body: { prompt?: unknown; technique?: unknown; aspect?: unknown; durationSec?: unknown; kind?: unknown; provider?: unknown; model?: unknown; force?: unknown } }>(
@@ -228,6 +275,9 @@ export async function registerFlowRoutes(server: FastifyInstance, options: FlowR
     const user = requireAdmin(auth, request, reply);
     if (!user) return undefined;
     if (!JOB_ID.test(request.params.id)) return bad(reply, 404, 'NOT_FOUND', 'Job not found');
+    // Your own jobs only (another owner's job answers exactly like a missing one); stuck queued jobs: POST /api/admin/flow/jobs/:id/cancel.
+    const target = await store.getJob(request.params.id);
+    if (target && !ownsJob(target, user.id, mainOwnerId())) return notFound(reply);
     const outcome = await store.cancelJob(request.params.id, user.email, { force: request.body?.force === true });
     if (outcome.ok) return { job: outcome.job };
     if (outcome.code === 'NOT_FOUND') return bad(reply, 404, 'NOT_FOUND', 'Job not found');
@@ -235,10 +285,13 @@ export async function registerFlowRoutes(server: FastifyInstance, options: FlowR
   });
 
   server.get<{ Params: { id: string } }>('/api/flow/jobs/:id/file', async (request, reply) => {
-    if (!requireAdmin(auth, request, reply)) return undefined;
-    if (!JOB_ID.test(request.params.id)) return bad(reply, 404, 'NOT_FOUND', 'Job not found');
+    const user = requireUser(request, reply);
+    if (!user) return undefined;
+    if (!JOB_ID.test(request.params.id)) return notFound(reply);
     const job = await store.getJob(request.params.id);
-    if (!job || job.status !== 'done') return bad(reply, 404, 'NOT_FOUND', 'Clip not ready');
+    // Not yours = not found, word for word the same as a job that does not exist (no oracle for ids).
+    if (!job || !ownsJob(job, user.id, mainOwnerId())) return notFound(reply);
+    if (job.status !== 'done') return bad(reply, 404, 'NOT_FOUND', 'Clip not ready');
     const path = join(clipsDir, `${job.id}.${job.kind === 'video' ? 'mp4' : 'png'}`);
     const query = request.query as Record<string, unknown> | undefined;
     if (job.kind === 'video' && query?.w !== undefined) return bad(reply, 400, 'INVALID_INPUT', 'w is for image jobs only');

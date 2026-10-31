@@ -151,6 +151,9 @@ export const ROUTE_POLICY: PolicyRegistry = {
   'GET /assets/*': { policy: 'PUBLIK' },
   'GET /api/auth/client-ip': { policy: 'SISTEM-ADMIN' },
   'POST /api/flow/jobs/:id/cancel': { policy: 'PENGGUNA-PEMILIK', resource: 'flowjob:id' },
+  // T4 jobs: queue load without content, and the D7 emergency stop of a stuck QUEUED job (logged).
+  'GET /api/admin/flow/jobs': { policy: 'SISTEM-ADMIN' },
+  'POST /api/admin/flow/jobs/:id/cancel': { policy: 'SISTEM-ADMIN' },
   'POST /api/stories/:id/motion-check': { policy: 'PENGGUNA-PEMILIK', resource: 'story:id' },
 };
 
