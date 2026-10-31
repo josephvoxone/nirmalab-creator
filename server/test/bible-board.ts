@@ -66,8 +66,8 @@ export async function finishQueued(t: ReturnType<typeof serviceSetup>, kind: Flo
 }
 
 /** A cepat story with every clip rendered and paid for. */
-export async function renderedStory(t: ReturnType<typeof serviceSetup>, board: Storyboard) {
-  const story = await t.service.create(board);
+export async function renderedStory(t: ReturnType<typeof serviceSetup>, board: Storyboard, createdBy?: string) {
+  const story = await t.service.create(board, createdBy ? { createdBy } : {});
   await t.service.render(story.id, { force: true });
   await finishQueued(t, 'video');
   await t.service.reconcile(story.id);

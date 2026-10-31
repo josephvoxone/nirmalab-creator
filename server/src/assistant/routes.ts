@@ -73,7 +73,7 @@ export async function registerAssistantRoutes(
         const message = typeof body.message === 'string' ? body.message.trim() : '';
         if (!message) return send(reply, 400, 'INVALID', 'Tulis pesan dulu');
         if (message.length > MAX_MESSAGE_CHARS) return send(reply, 400, 'INVALID', `Pesan terlalu panjang (maks ${MAX_MESSAGE_CHARS} karakter)`);
-        const attachments = await resolveAttachments(stories, id, body.attachments);
+        const attachments = await resolveAttachments(stories, id, body.attachments, user.id);
         start = (emit, signal) => runTurn(deps, { storyId: id, userId: user.id, message, attachments, signal }, emit);
       }
 

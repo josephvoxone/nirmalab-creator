@@ -49,6 +49,8 @@ const call = (name: string, args: unknown): ChatMessage => ({
   role: 'assistant', content: '',
   tool_calls: [{ id: `call_${++callSeq}`, type: 'function', function: { name, arguments: typeof args === 'string' ? args : JSON.stringify(args) } }]
 });
+/** The project belongs to the user the assistant runs as (tenancy: it only works on its caller's projects). */
+const ownStory = (t: ReturnType<typeof serviceSetup>, board: Storyboard) => t.service.create(board, { createdBy: 'u_admin' });
 const say = (content: string): ChatMessage => ({ role: 'assistant', content });
 
 /** Scripted text model: each chat() answers the next step; records the messages it was given. */
@@ -156,7 +158,7 @@ describe('skills pack', () => {
 describe('history module', () => {
   it('appends turns, keeps the last 50, and marks a change undone', async () => {
     const t = serviceSetup();
-    const story = await t.service.create(threeShots());
+    const story = await ownStory(t, threeShots());
     const dir = t.service.storyDir(story.id);
     expect(await listTurns(dir)).toEqual([]);
     for (let i = 0; i < 60; i++) await appendTurn(dir, { role: i % 2 ? 'assistant' : 'user', text: `t${i}`, source: 'mcp', by: 'laptop' });
@@ -496,7 +498,7 @@ describe('POST /api/stories/:id/assistant/undo/:undoId', () => {
 describe('runTurn (core)', () => {
   async function core(model: TextModel, extra: Partial<AssistantDeps> = {}) {
     const t = serviceSetup();
-    const story = await t.service.create(threeShots());
+    const story = await ownStory(t, threeShots());
     const deps: AssistantDeps = { stories: t.service, model, ...extra };
     const evs: Ev[] = [];
     return { t, story, deps, evs, emit: (event: string, data: Record<string, unknown>) => { evs.push({ event, data }); } };
@@ -619,7 +621,7 @@ describe('the user approves exactly the cost that runs', () => {
 
   it('runPending checks the approved rev under the story lock: an edit that slips in before the job → STALE, no job', async () => {
     const t = serviceSetup();
-    const story = await t.service.create(threeShots());
+    const story = await ownStory(t, threeShots());
     const render = t.service.render.bind(t.service);
     // A PUT lands after every check outside the lock, right before render takes the lock.
     t.service.render = async (id, opts) => {

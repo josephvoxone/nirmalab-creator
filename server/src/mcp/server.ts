@@ -65,7 +65,7 @@ export function mcpTools(): Tool[] {
   const tools: Tool[] = [
     {
       name: 'list_projects',
-      description: 'List every project (newest first): project_id, title, status, number of shots, last update. Use a project_id from here in the other tools.',
+      description: 'List your own projects (newest first): project_id, title, status, number of shots, last update. Use a project_id from here in the other tools.',
       inputSchema: { type: 'object', properties: {}, additionalProperties: false },
       annotations: { readOnlyHint: true }
     },
@@ -112,13 +112,14 @@ const text = (value: unknown, isError = false): CallToolResult => ({
 });
 const failure = (message: string) => text(message, true);
 
-async function findStory(stories: StoryService, id: unknown): Promise<StoryRecord | undefined> {
+/** The caller's own project (the token acts as its owner); somebody else's looks exactly like a missing one. */
+async function findStory(stories: StoryService, id: unknown, userId: string): Promise<StoryRecord | undefined> {
   if (typeof id !== 'string' || !id) return undefined;
-  try { return await stories.get(id); } catch (error) { if (error instanceof StoryError && error.code === 'NOT_FOUND') return undefined; throw error; }
+  try { return await stories.assertOwner(id, userId); } catch (error) { if (error instanceof StoryError && error.code === 'NOT_FOUND') return undefined; throw error; }
 }
 
-async function listProjects(deps: McpDeps): Promise<CallToolResult> {
-  const records = await deps.stories.list();
+async function listProjects(deps: McpDeps, caller: McpCaller): Promise<CallToolResult> {
+  const records = await deps.stories.listFor(caller.userId);
   return text(records.map(r => ({ project_id: r.id, title: r.title, status: r.status, shots: r.shots.length, updatedAt: new Date(r.updatedAtMs).toISOString() })));
 }
 
@@ -155,7 +156,7 @@ async function createProject(deps: McpDeps, caller: McpCaller, args: Record<stri
 }
 
 async function runActionTool(deps: McpDeps, caller: McpCaller, name: ActionName, args: Record<string, unknown>, signal?: AbortSignal): Promise<CallToolResult> {
-  const record = await findStory(deps.stories, args.project_id);
+  const record = await findStory(deps.stories, args.project_id, caller.userId);
   if (!record) return failure(typeof args.project_id === 'string' && args.project_id ? 'Proyek tidak ditemukan — cek project_id dari list_projects.' : 'project_id wajib diisi (dari list_projects).');
   const storyId = record.id;
   const action = ACTIONS[name];
@@ -219,7 +220,7 @@ export function createMcpServer(deps: McpDeps, caller: McpCaller, log?: FastifyB
     if (typeof raw !== 'object' || Array.isArray(raw)) return failure('Argumen harus objek JSON.');
     const args = raw as Record<string, unknown>;
     try {
-      if (name === 'list_projects') return await listProjects(deps);
+      if (name === 'list_projects') return await listProjects(deps, caller);
       if (name === 'create_project') return await createProject(deps, caller, args, extra.signal);
       if ((ACTION_NAMES as readonly string[]).includes(name)) return await runActionTool(deps, caller, name as ActionName, args, extra.signal);
       return failure(`Tool "${name.slice(0, 40)}" tidak ada.`);

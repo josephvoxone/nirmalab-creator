@@ -15,6 +15,8 @@ import { bibleBoard, finishQueued, renderedStory, serviceSetup } from './bible-b
 
 type T = ReturnType<typeof serviceSetup>;
 
+/** The project belongs to the user the actions run as (tenancy: an action only touches its caller's projects). */
+const ownStory = (t: T, board: Storyboard) => t.service.create(board, { createdBy: 'u_admin' });
 const ctxFor = (t: T, extra: Partial<ActionContext> = {}): ActionContext => ({
   stories: t.service, snapshots: t.service.snapshots, userId: 'u_admin', source: 'chat', turn: {}, ...extra
 });
@@ -111,7 +113,7 @@ describe('image uploads (helper)', () => {
 describe('get_project', () => {
   it('summarises scenes and globally numbered shots, characters, locations and the remaining cost', async () => {
     const t = serviceSetup();
-    const story = await t.service.create(twoScenes());
+    const story = await ownStory(t, twoScenes());
     const r = okOf(await run(ctxFor(t), story.id, 'get_project'));
     const data = r.data as { title: string; rev: number; scenes: Array<{ n: number; id: string }>; shots: Array<{ n: number; id: string; scene: number }>; characters: Array<{ token: string }>; locations: unknown[]; estimate: { credits?: number } };
     expect(data.title).toBe('Pasar Pagi');
@@ -128,7 +130,7 @@ describe('get_project', () => {
     const b = bibleBoard();
     const long = 'x'.repeat(400);
     const shots = Array.from({ length: 30 }, (_, i) => ({ ...b.shots[0]!, id: `s-${i + 1}`, narration: 'Laras pergi ke pasar pagi itu.', intent: { ...b.shots[0]!.intent!, action: `stands still behind the fish stall ${long}` } }));
-    const story = await t.service.create({ ...b, shots, scenes: [{ ...b.scenes![0]!, shots: shots.map(s => s.id) }] });
+    const story = await ownStory(t, { ...b, shots, scenes: [{ ...b.scenes![0]!, shots: shots.map(s => s.id) }] });
     const r = okOf(await run(ctxFor(t), story.id, 'get_project'));
     expect(JSON.stringify(r.data).length).toBeLessThan(6000);
   });
@@ -137,7 +139,7 @@ describe('get_project', () => {
 describe('edit_shot', () => {
   it('bible board: edits the intent, rebuilds the prompt, snapshots once per turn and bumps rev each time', async () => {
     const t = serviceSetup();
-    const story = await t.service.create(twoScenes());
+    const story = await ownStory(t, twoScenes());
     const before = readFileSync(boardFile(t, story.id), 'utf8');
     const ctx = ctxFor(t);
     const r = okOf(await run(ctx, story.id, 'edit_shot', { shot: 3, action: 'runs with the basket into the narrow alley' }));
@@ -164,7 +166,7 @@ describe('edit_shot', () => {
 
   it('bible board: raw prompt text is refused (intent only) and nothing changes', async () => {
     const t = serviceSetup();
-    const story = await t.service.create(twoScenes());
+    const story = await ownStory(t, twoScenes());
     const before = readFileSync(boardFile(t, story.id), 'utf8');
     const error = errOf(await run(ctxFor(t), story.id, 'edit_shot', { shot: 1, prompt: 'A cinematic shot of Laras.' }));
     expect(error).toMatch(/intent/);
@@ -174,7 +176,7 @@ describe('edit_shot', () => {
 
   it('bible board: an edit that breaks a compiling shot is refused with the compiler issues', async () => {
     const t = serviceSetup();
-    const story = await t.service.create(twoScenes());
+    const story = await ownStory(t, twoScenes());
     const error = errOf(await run(ctxFor(t), story.id, 'edit_shot', { shot: 1, endState: 'her hands are empty' }));
     expect(error).toMatch(/state change/);
     expect((await t.service.get(story.id))!.rev).toBe(1);
@@ -182,7 +184,7 @@ describe('edit_shot', () => {
 
   it('bible board: framing must be a catalog id', async () => {
     const t = serviceSetup();
-    const story = await t.service.create(twoScenes());
+    const story = await ownStory(t, twoScenes());
     expect(errOf(await run(ctxFor(t), story.id, 'edit_shot', { shot: 1, framing: 'drone shot' }))).toMatch(/medium-close/);
     okOf(await run(ctxFor(t), story.id, 'edit_shot', { shot: 1, framing: 'close-up', move: 'push-in' }));
     const shot = (await t.service.readStoryboard(story.id)).shots[0]!;
@@ -193,7 +195,7 @@ describe('edit_shot', () => {
   it('camera ids: rack-focus is a catalog move and compiles as one; spelled loosely it is normalised; unknown ids list the choices', async () => {
     expect(CATALOG.moves.map(m => m.id)).toContain('rack-focus');
     const t = serviceSetup();
-    const story = await t.service.create(twoScenes());
+    const story = await ownStory(t, twoScenes());
     okOf(await run(ctxFor(t), story.id, 'edit_shot', { shot: 1, move: 'rack-focus' }));
     let board = await t.service.readStoryboard(story.id);
     expect(board.shots[0]!.intent!.move).toBe('rack-focus');
@@ -227,7 +229,7 @@ describe('edit_shot', () => {
 
   it('legacy board: edits only that shot\'s prose, passes validateStoryboard, keeps the other paid clip', async () => {
     const t = serviceSetup();
-    const done = await renderedStory(t, legacyBoard());
+    const done = await renderedStory(t, legacyBoard(), 'u_admin');
     const introBefore = done.shots.find(s => s.id === '00-intro')!;
     okOf(await run(ctxFor(t), done.id, 'edit_shot', { shot: 2, prompt: 'Close-up of a kitten asleep on a porch.', narration: 'Mimi tertidur.' }));
     const board = await t.service.readStoryboard(done.id);
@@ -242,14 +244,14 @@ describe('edit_shot', () => {
 
   it('legacy board: intent fields are refused (no silent upgrade to a bible)', async () => {
     const t = serviceSetup();
-    const story = await t.service.create(legacyBoard());
+    const story = await ownStory(t, legacyBoard());
     expect(errOf(await run(ctxFor(t), story.id, 'edit_shot', { shot: 2, action: 'sleeps' }))).toMatch(/bible/);
     expect((await t.service.readStoryboard(story.id)).bible).toBeUndefined();
   });
 
   it('unknown shot 99 → plain error listing valid numbers, nothing changed, no snapshot', async () => {
     const t = serviceSetup();
-    const story = await t.service.create(twoScenes());
+    const story = await ownStory(t, twoScenes());
     const before = readFileSync(boardFile(t, story.id), 'utf8');
     const error = errOf(await run(ctxFor(t), story.id, 'edit_shot', { shot: 99, emotion: 'lega' }));
     expect(error).toBe('Shot 99 tidak ada. Shot yang ada: 1–3.');
@@ -262,8 +264,8 @@ describe('edit_shot', () => {
 describe('scope', () => {
   it('an action on story A never touches story B, even with B\'s shot ids or B\'s undo id', async () => {
     const t = serviceSetup();
-    const a = await t.service.create(legacyBoard());
-    const b = await t.service.create(twoScenes());
+    const a = await ownStory(t, legacyBoard());
+    const b = await ownStory(t, twoScenes());
     const bBefore = readFileSync(boardFile(t, b.id), 'utf8');
     const ctx = ctxFor(t);
     expect(errOf(await run(ctx, a.id, 'edit_shot', { shot: '03-gang', prompt: 'Close-up of a kitten.' }))).toMatch(/Shot yang ada: 1–2/);
@@ -289,7 +291,7 @@ describe('scope', () => {
 describe('structure actions', () => {
   it('add_shot on a bible board adds a compiled intent shot after the given shot; remove_shot and move_shot work by number', async () => {
     const t = serviceSetup();
-    const story = await t.service.create(twoScenes());
+    const story = await ownStory(t, twoScenes());
     const ctx = ctxFor(t);
     const added = okOf(await run(ctx, story.id, 'add_shot', {
       scene: 1, after: 1, subject: 'KAPAS', action: 'peeks out of the woven basket', startState: 'the basket lid is closed', endState: 'one floppy ear shows above the rim',
@@ -314,7 +316,7 @@ describe('structure actions', () => {
 
   it('add_scene on a bible board needs a goal and writes the bible card; edit_scene sets title and goal', async () => {
     const t = serviceSetup();
-    const story = await t.service.create(twoScenes());
+    const story = await ownStory(t, twoScenes());
     expect(errOf(await run(ctxFor(t), story.id, 'add_scene', { title: 'Di Rumah' }))).toMatch(/goal|tujuan/);
     okOf(await run(ctxFor(t), story.id, 'add_scene', { title: 'Di Rumah', goal: 'Laras melepaskan Kapas di kebun', location: 'PASAR_IKAN' }));
     let board = await t.service.readStoryboard(story.id);
@@ -331,7 +333,7 @@ describe('structure actions', () => {
 
   it('edit_character changes the bible card; anchors rebuild the cast look; add_location writes both sides', async () => {
     const t = serviceSetup();
-    const story = await t.service.create(twoScenes());
+    const story = await ownStory(t, twoScenes());
     okOf(await run(ctxFor(t), story.id, 'edit_character', { token: 'Laras', anchors: ['two black braids', 'a red scarf'] }));
     let board = await t.service.readStoryboard(story.id);
     expect(board.bible!.characters[0]!.anchors).toEqual(['two black braids', 'a red scarf']);
@@ -347,7 +349,7 @@ describe('structure actions', () => {
 
   it('edit_character says what must be made again when a rename or new anchors invalidate paid clips', async () => {
     const t = serviceSetup();
-    const story = await renderedStory(t, bibleBoard());
+    const story = await renderedStory(t, bibleBoard(), 'u_admin');
     expect(story.shots.filter(s => s.status === 'done')).toHaveLength(2);
     const r = okOf(await run(ctxFor(t), story.id, 'edit_character', { token: 'LARAS', name: 'Larasati' }));
     const after = (await t.service.get(story.id))!;
@@ -362,7 +364,7 @@ describe('structure actions', () => {
 
   it('set_look changes the look family and bumps rev', async () => {
     const t = serviceSetup();
-    const story = await t.service.create(twoScenes());
+    const story = await ownStory(t, twoScenes());
     const r = okOf(await run(ctxFor(t), story.id, 'set_look', { family: 'noir' }));
     expect(r.changed).toBe(true);
     expect((await t.service.readStoryboard(story.id)).look!.family).toBe('noir');
@@ -372,7 +374,7 @@ describe('structure actions', () => {
 
   it('set_look refuses a pick that is not a catalog id (no silent fallback), and the schema lists the ids', async () => {
     const t = serviceSetup();
-    const story = await t.service.create(twoScenes());
+    const story = await ownStory(t, twoScenes());
     const before = readFileSync(boardFile(t, story.id), 'utf8');
     const err = errOf(await run(ctxFor(t), story.id, 'set_look', { palette: 'warm golden tones' }));
     expect(err).toContain('palette');
@@ -387,7 +389,7 @@ describe('structure actions', () => {
 describe('spending actions need confirm', () => {
   it('render without confirm → needsConfirm with the credits estimate and no job; with confirm → jobs queued', async () => {
     const t = serviceSetup();
-    const story = await t.service.create(twoScenes());
+    const story = await ownStory(t, twoScenes());
     const r = await run(ctxFor(t), story.id, 'render', { scene: 1 });
     expect(r).toMatchObject({ ok: false, needsConfirm: true, estimate: { credits: 20 } });
     expect((r as { label: string }).label).toMatch(/20/);
@@ -400,7 +402,7 @@ describe('spending actions need confirm', () => {
 
   it('render on an Axcel engine: still needs confirm, the label names the Axcel plan and no Flow credits', async () => {
     const t = serviceSetup();
-    const story = await t.service.create({ ...twoScenes(), engine: { video: { provider: 'axcel', model: 'Seedance 2.0' } } } as Storyboard);
+    const story = await ownStory(t, { ...twoScenes(), engine: { video: { provider: 'axcel', model: 'Seedance 2.0' } } } as Storyboard);
     const r = await run(ctxFor(t), story.id, 'render', { scene: 1 });
     expect(r).toMatchObject({ ok: false, needsConfirm: true, estimate: {} });
     expect((r as { label: string }).label).toBe('Render 2 klip (scene 1, Axcel Seedance 2.0 · termasuk paket, 0 kredit Flow)');
@@ -411,7 +413,7 @@ describe('spending actions need confirm', () => {
 
   it('confirmation comes from the caller (ctx.confirmed === true), never from model input', async () => {
     const t = serviceSetup();
-    const story = await t.service.create(twoScenes());
+    const story = await ownStory(t, twoScenes());
     // A model that writes confirm:true itself gets the question back, and nothing is queued.
     expect(await run(ctxFor(t), story.id, 'render', { shot: 1, confirm: true })).toMatchObject({ needsConfirm: true });
     expect(await runAction(ctxFor(t), story.id, 'render', { shot: 1, confirm: true })).toMatchObject({ needsConfirm: true });
@@ -426,7 +428,7 @@ describe('spending actions need confirm', () => {
 
   it('render on an OpenRouter video engine estimates USD from usdPerClip', async () => {
     const t = serviceSetup();
-    const story = await t.service.create({ ...twoScenes(), engine: { video: { provider: 'openrouter', model: 'google/veo-3.1-fast' } } });
+    const story = await ownStory(t, { ...twoScenes(), engine: { video: { provider: 'openrouter', model: 'google/veo-3.1-fast' } } });
     const price = { usdPerClip: async (model: string) => (model === 'google/veo-3.1-fast' ? 0.4 : null) };
     const r = await run(ctxFor(t, { price }), story.id, 'render', {});
     expect(r).toMatchObject({ needsConfirm: true });
@@ -436,7 +438,7 @@ describe('spending actions need confirm', () => {
 
   it('assemble and prepare also ask first', async () => {
     const t = serviceSetup();
-    const story = await t.service.create(konsistenBoard());
+    const story = await ownStory(t, konsistenBoard());
     expect(await run(ctxFor(t), story.id, 'prepare', {})).toMatchObject({ needsConfirm: true, estimate: { credits: 0 } });
     expect(await run(ctxFor(t), story.id, 'assemble', {})).toMatchObject({ needsConfirm: true, estimate: { credits: 0 } });
     expect(await t.flow.listJobs()).toHaveLength(0);
@@ -453,7 +455,7 @@ describe('spending actions need confirm', () => {
 describe('make_sheet', () => {
   it('queues exactly one sheet job for that token only (0 credits on Flow)', async () => {
     const t = serviceSetup();
-    const story = await t.service.create(konsistenBoard());
+    const story = await ownStory(t, konsistenBoard());
     expect(await run(ctxFor(t), story.id, 'make_sheet', { token: 'KAPAS' })).toMatchObject({ needsConfirm: true, estimate: { credits: 0 } });
     expect(await t.flow.listJobs()).toHaveLength(0);
     okOf(await run(ctxFor(t, { confirmed: true }), story.id, 'make_sheet', { token: 'KAPAS' }));
@@ -473,7 +475,7 @@ describe('make_sheet', () => {
 
   it('a cepat board has no sheets', async () => {
     const t = serviceSetup();
-    const story = await t.service.create(twoScenes());
+    const story = await ownStory(t, twoScenes());
     expect(errOf(await run(ctxFor(t, { confirmed: true }), story.id, 'make_sheet', { token: 'LARAS' }))).toMatch(/konsisten/);
   });
 });
@@ -486,7 +488,7 @@ describe('references', () => {
 
   it('edit_character {reference} stores the upload on the card; make_sheet sends it to OpenRouter as a reference', async () => {
     const t = serviceSetup();
-    const story = await t.service.create(konsistenBoard({ image: { provider: 'openrouter', model: 'google/gemini-2.5-flash-image' } }));
+    const story = await ownStory(t, konsistenBoard({ image: { provider: 'openrouter', model: 'google/gemini-2.5-flash-image' } }));
     const up = await upload(t, story.id);
     okOf(await run(ctxFor(t), story.id, 'edit_character', { token: 'KAPAS', reference: up.id }));
     const card = (await t.service.readStoryboard(story.id)).bible!.characters.find(c => c.token === 'KAPAS')!;
@@ -501,7 +503,7 @@ describe('references', () => {
 
   it('on Flow the reference is stored and the label says Flow uses the generated sheet', async () => {
     const t = serviceSetup();
-    const story = await t.service.create(konsistenBoard());
+    const story = await ownStory(t, konsistenBoard());
     const up = await upload(t, story.id);
     const r = okOf(await run(ctxFor(t), story.id, 'edit_character', { token: 'LARAS', reference: up.id }));
     expect(r.label).toContain('Referensi disimpan; Flow memakai sheet yang dibuat');
@@ -510,14 +512,14 @@ describe('references', () => {
 
   it('an unknown or traversal reference is refused', async () => {
     const t = serviceSetup();
-    const story = await t.service.create(konsistenBoard());
+    const story = await ownStory(t, konsistenBoard());
     expect(errOf(await run(ctxFor(t), story.id, 'edit_character', { token: 'LARAS', reference: '../../etc/passwd' }))).toMatch(/[Rr]eferensi/);
     expect(errOf(await run(ctxFor(t), story.id, 'edit_character', { token: 'LARAS', reference: 'up_0123456789abcdef' }))).toMatch(/[Rr]eferensi/);
   });
 
   it('media pointers resolve to story media: "sheet LARAS" is copied into uploads', async () => {
     const t = serviceSetup();
-    const story = await t.service.create(konsistenBoard());
+    const story = await ownStory(t, konsistenBoard());
     writeFileSync(t.service.castPath(story.id, 'LARAS'), png(1024, 576, 20_000));
     okOf(await run(ctxFor(t), story.id, 'edit_character', { token: 'KAPAS', reference: 'sheet LARAS' }));
     const card = (await t.service.readStoryboard(story.id)).bible!.characters.find(c => c.token === 'KAPAS')!;
@@ -528,7 +530,7 @@ describe('references', () => {
 
   it('add_shot {startFrame} is stored for OpenRouter video and used as the first frame; Flow does not store it', async () => {
     const t = serviceSetup();
-    const story = await t.service.create({ ...twoScenes(), engine: { video: { provider: 'openrouter', model: 'google/veo-3.1-fast' } } });
+    const story = await ownStory(t, { ...twoScenes(), engine: { video: { provider: 'openrouter', model: 'google/veo-3.1-fast' } } });
     const up = await upload(t, story.id);
     const shotInput = {
       scene: 2, subject: 'KAPAS', action: 'peeks out of the woven basket', startState: 'the basket lid is closed', endState: 'one floppy ear shows above the rim',
@@ -542,7 +544,7 @@ describe('references', () => {
     const [job] = await t.flow.listJobs();
     expect(job!.startImage).toBe(join(t.service.storyDir(story.id), 'uploads', up.file));
 
-    const flowStory = await t.service.create(twoScenes());
+    const flowStory = await ownStory(t, twoScenes());
     const flowUp = await upload(t, flowStory.id);
     const r = okOf(await run(ctxFor(t), flowStory.id, 'add_shot', { ...shotInput, startFrame: flowUp.id }));
     expect(r.label).toMatch(/OpenRouter/);
@@ -551,7 +553,7 @@ describe('references', () => {
 
   it('redraw_frame {reference} sends it with the keyframe job on OpenRouter, after confirm', async () => {
     const t = serviceSetup();
-    const story = await t.service.create(konsistenBoard({ image: { provider: 'openrouter', model: 'google/gemini-2.5-flash-image' } }));
+    const story = await ownStory(t, konsistenBoard({ image: { provider: 'openrouter', model: 'google/gemini-2.5-flash-image' } }));
     await t.service.prepare(story.id);
     await finishQueued(t, 'character');
     await t.service.reconcile(story.id);
@@ -572,7 +574,7 @@ describe('references', () => {
 describe('undo_last', () => {
   it('restores the latest committed snapshot byte for byte', async () => {
     const t = serviceSetup();
-    const story = await t.service.create(twoScenes());
+    const story = await ownStory(t, twoScenes());
     const before = readFileSync(boardFile(t, story.id), 'utf8');
     okOf(await run(ctxFor(t), story.id, 'edit_shot', { shot: 2, emotion: 'lega' }));
     const r = okOf(await run(ctxFor(t), story.id, 'undo_last', {}));
@@ -582,7 +584,7 @@ describe('undo_last', () => {
 
   it('refuses after a later manual edit with the spec message', async () => {
     const t = serviceSetup();
-    const story = await t.service.create(twoScenes());
+    const story = await ownStory(t, twoScenes());
     okOf(await run(ctxFor(t), story.id, 'edit_shot', { shot: 2, emotion: 'lega' }));
     const board = await t.service.readStoryboard(story.id);
     await t.service.updateStoryboard(story.id, { ...board, title: 'Pasar Siang' });
@@ -593,7 +595,7 @@ describe('undo_last', () => {
 
   it('nothing to undo → plain error; busy story → wait message', async () => {
     const t = serviceSetup();
-    const story = await t.service.create(twoScenes());
+    const story = await ownStory(t, twoScenes());
     expect(errOf(await run(ctxFor(t), story.id, 'undo_last', {}))).toMatch(/Belum ada/);
     okOf(await run(ctxFor(t), story.id, 'edit_shot', { shot: 2, emotion: 'lega' }));
     await t.service.render(story.id, { force: true });
@@ -729,7 +731,7 @@ const withProseShot = (): Storyboard => {
 describe('edit_shot on an intent-less shot of a bible board', () => {
   it('a narration edit keeps the prose prompt byte-identical, attaches no intent and keeps the paid clip', async () => {
     const t = serviceSetup();
-    const done = await renderedStory(t, withProseShot());
+    const done = await renderedStory(t, withProseShot(), 'u_admin');
     expect(done.shots.find(s => s.id === '03-prose')!.status).toBe('done');
     const jobs = (await t.flow.listJobs()).length;
     const prompt = withProseShot().shots[2]!.prompt;
@@ -746,7 +748,7 @@ describe('edit_shot on an intent-less shot of a bible board', () => {
 
   it('intent fields on an intent-less shot need all four slots at once', async () => {
     const t = serviceSetup();
-    const story = await t.service.create(withProseShot());
+    const story = await ownStory(t, withProseShot());
     const before = readFileSync(boardFile(t, story.id), 'utf8');
     expect(errOf(await run(ctxFor(t), story.id, 'edit_shot', { shot: 3, action: 'walks home' })))
       .toBe('Shot 3 belum punya niat — isi subjek, aksi, keadaan awal dan akhir sekaligus.');
@@ -763,7 +765,7 @@ describe('edit_shot on an intent-less shot of a bible board', () => {
 describe('mutate: commit and stale edges', () => {
   it('a commit failure after the board was written still reports the change', async () => {
     const t = serviceSetup();
-    const story = await t.service.create(twoScenes());
+    const story = await ownStory(t, twoScenes());
     const snapshots = snapshotsWith(t, { commit: async () => { throw new Error('disk full'); } });
     const r = okOf(await run(ctxFor(t, { snapshots }), story.id, 'edit_shot', { shot: 2, emotion: 'lega' }));
     expect(r.changed).toBe(true);
@@ -773,7 +775,7 @@ describe('mutate: commit and stale edges', () => {
 
   it('STALE between take and write → plain error, the snapshot is discarded, no orphan upload', async () => {
     const t = serviceSetup();
-    const story = await t.service.create(konsistenBoard());
+    const story = await ownStory(t, konsistenBoard());
     writeFileSync(t.service.castPath(story.id, 'LARAS'), png(1024, 576, 20_000));
     const taken: string[] = [];
     const snapshots = snapshotsWith(t, { take: racingTake(t, taken) });
@@ -790,7 +792,7 @@ describe('mutate: commit and stale edges', () => {
 describe('plans have no side effects', () => {
   it('needsConfirm with a media-pointer reference copies nothing into uploads', async () => {
     const t = serviceSetup();
-    const story = await t.service.create(konsistenBoard({ image: { provider: 'openrouter', model: 'google/gemini-2.5-flash-image' } }));
+    const story = await ownStory(t, konsistenBoard({ image: { provider: 'openrouter', model: 'google/gemini-2.5-flash-image' } }));
     writeFileSync(t.service.castPath(story.id, 'LARAS'), png(1024, 576, 20_000));
     expect(await run(ctxFor(t), story.id, 'make_sheet', { token: 'KAPAS', reference: 'sheet LARAS' })).toMatchObject({ needsConfirm: true });
     expect(uploadsOf(t, story.id)).toEqual([]);
@@ -806,7 +808,7 @@ describe('plans have no side effects', () => {
 
   it('edit_character {reference: null} clears the card reference', async () => {
     const t = serviceSetup();
-    const story = await t.service.create(konsistenBoard());
+    const story = await ownStory(t, konsistenBoard());
     writeFileSync(t.service.castPath(story.id, 'LARAS'), png(1024, 576, 20_000));
     okOf(await run(ctxFor(t), story.id, 'edit_character', { token: 'KAPAS', reference: 'sheet LARAS' }));
     expect((await t.service.readStoryboard(story.id)).bible!.characters.find(c => c.token === 'KAPAS')!.reference).toBeTruthy();
@@ -819,7 +821,7 @@ describe('plans have no side effects', () => {
 describe('render and redraw edges', () => {
   it('konsisten render: a missing keyframe only blocks when its shot will actually be rendered', async () => {
     const t = serviceSetup();
-    const story = await t.service.create(konsistenBoard());
+    const story = await ownStory(t, konsistenBoard());
     const record = JSON.parse(readFileSync(storyFile(t, story.id), 'utf8'));
     // Shot 1: clip already paid, keyframe since redrawn (not done). Shot 2: keyframe done, clip still to render.
     record.shots[0].status = 'done';
@@ -835,7 +837,7 @@ describe('render and redraw edges', () => {
 
   it('redraw_frame {note} keeps a pending audit repair of the shot', async () => {
     const t = serviceSetup();
-    const story = await t.service.create(konsistenBoard());
+    const story = await ownStory(t, konsistenBoard());
     await t.service.prepare(story.id);
     await finishQueued(t, 'character');
     await t.service.reconcile(story.id);
@@ -867,7 +869,7 @@ describe('get_project worst case', () => {
     };
     const board = { ...b, locations, scenes, shots, bible };
     expect(validateStoryboard(board)).toEqual([]);
-    const story = await t.service.create(board);
+    const story = await ownStory(t, board);
     const r = okOf(await run(ctxFor(t), story.id, 'get_project'));
     expect(JSON.stringify(r.data).length).toBeLessThanOrEqual(6500);
   });

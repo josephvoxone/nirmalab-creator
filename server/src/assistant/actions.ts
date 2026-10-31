@@ -202,11 +202,19 @@ function toFailure(error: unknown): ActionResult {
   return fail(`Gagal: ${clip(error instanceof Error ? error.message : String(error), 300)}`, 'FAILED');
 }
 
-/** Story must exist; every failure becomes a plain `{ ok: false }`. */
+/**
+ * The story must exist AND belong to `ctx.userId` (tenancy, defence in depth: the HTTP gate is not the only door — chat and MCP
+ * come here directly); every failure becomes a plain `{ ok: false }`. Not yours and not there look the same.
+ */
 async function guarded(ctx: ActionContext, storyId: string, fn: (record: StoryRecord) => Promise<ActionResult>): Promise<ActionResult> {
   try {
-    const record = await ctx.stories.get(storyId);
-    if (!record) return fail('Proyek tidak ditemukan.', 'NOT_FOUND');
+    let record: StoryRecord;
+    try {
+      record = await ctx.stories.assertOwner(storyId, ctx.userId);
+    } catch (error) {
+      if (error instanceof StoryError && error.code === 'NOT_FOUND') return fail('Proyek tidak ditemukan.', 'NOT_FOUND');
+      throw error;
+    }
     return await fn(record);
   } catch (error) {
     return toFailure(error);

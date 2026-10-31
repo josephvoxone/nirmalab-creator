@@ -243,10 +243,21 @@ function recordChange(ctx: ActionContext, revBefore: number | undefined, result:
   }
 }
 
+/** Tenancy (defence in depth): the assistant works only on a project of `userId`; anyone else gets the 404 of a missing project, before anything is read or written. */
+async function assertProjectOwner(stories: StoryService, storyId: string, userId: string): Promise<void> {
+  try {
+    await stories.assertOwner(storyId, userId);
+  } catch (error) {
+    if (error instanceof StoryError && error.code === 'NOT_FOUND') throw new AssistantError(404, 'NOT_FOUND', 'Story not found');
+    throw error;
+  }
+}
+
 // ------------------------------------------------------------------ attachments
 
 /** Upload ids of this story → turn attachments; anything unknown is a 400. */
-export async function resolveAttachments(stories: StoryService, storyId: string, ids: unknown): Promise<TurnAttachment[]> {
+export async function resolveAttachments(stories: StoryService, storyId: string, ids: unknown, userId: string): Promise<TurnAttachment[]> {
+  await assertProjectOwner(stories, storyId, userId);
   if (ids === undefined || ids === null) return [];
   if (!Array.isArray(ids) || ids.some(id => typeof id !== 'string')) throw new AssistantError(400, 'INVALID', 'attachments harus daftar id unggahan');
   if (ids.length > MAX_ATTACHMENTS) throw new AssistantError(400, 'INVALID', `Maksimal ${MAX_ATTACHMENTS} lampiran per pesan`);
@@ -273,6 +284,7 @@ export type TurnRequest = { storyId: string; userId: string; message: string; at
 export async function runTurn(deps: AssistantDeps, req: TurnRequest, emit: Emit): Promise<void> {
   const { stories, model } = deps;
   const storyId = req.storyId;
+  await assertProjectOwner(stories, storyId, req.userId);
   const dir = stories.storyDir(storyId);
   const earlier = await listTurns(dir);
   await appendTurn(dir, { role: 'user', text: req.message, ...(req.attachments.length ? { attachments: req.attachments } : {}), source: 'chat' });
@@ -437,6 +449,7 @@ const sameEstimate = (a: Estimate | undefined, b: Estimate | undefined) => JSON.
  * A busy story gives the claim back, so the same Jalankan works once the running job ends.
  */
 export async function confirmPending(deps: AssistantDeps, req: { storyId: string; userId: string; pendingId: string; clientRev?: number }): Promise<TurnPending> {
+  await assertProjectOwner(deps.stories, req.storyId, req.userId);
   const pending = await claimPending(deps.stories, req.storyId, req.pendingId, req.clientRev);
   let plan: ActionResult;
   try {
@@ -465,6 +478,7 @@ export async function confirmPending(deps: AssistantDeps, req: { storyId: string
 export async function runPending(deps: AssistantDeps, req: { storyId: string; userId: string; pending: TurnPending }, emit: Emit): Promise<void> {
   const { stories } = deps;
   const { storyId, pending } = req;
+  await assertProjectOwner(stories, storyId, req.userId);
   const dir = stories.storyDir(storyId);
   await appendTurn(dir, { role: 'user', text: `Jalankan: ${pending.label}`, source: 'chat' });
   const turnId = newTurnId();
