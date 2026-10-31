@@ -18,6 +18,10 @@ import { assembleStory, imageSize, probeClip } from './stories/media.js';
 import { registerStoryRoutes } from './stories/routes.js';
 import { registerAssistantRoutes } from './assistant/routes.js';
 import { registerMcpRoutes } from './mcp/routes.js';
+import { McpTokenStore } from './mcp/tokens.js';
+import { scanProjects } from './tenancy/project-meta.js';
+import { AdminAuditLog } from './tenancy/audit-log.js';
+import { registerAdminRoutes } from './tenancy/admin-routes.js';
 import { CoverService } from './stories/covers.js';
 import { captionFor } from './stories/caption.js';
 import { MediaCache, type FfmpegRunner } from './media/images.js';
@@ -133,8 +137,21 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
 
   server.get('/api/health', async () => ({ ok: true, app: 'nirmalab-creator', version: options.version ?? 'dev' }));
 
+  // T8 admin: one MCP token store per process (shared with the MCP routes below), so removing a member can revoke their tokens.
+  const mcpTokens = new McpTokenStore(options.dataDir, userAuthStore);
+  const adminAudit = new AdminAuditLog(options.dataDir, id => userAuthStore.findUserById(id)?.email ?? userAuthStore.findTombstone(id)?.email);
   await server.register(async scoped => {
     await registerAuthRoutes(scoped, userAuthStore, {
+      audit: entry => adminAudit.append(entry),
+      // T8 member removal (audit 06 §C.3): the account is already gone when this runs; revoke what hangs on it. Idempotent, so a retry heals a half-done removal.
+      // The member's projects are NOT touched: they become orphans the admin moves or deletes from Pengaturan > Penyimpanan.
+      onMemberRemoved: async member => {
+        await mcpTokens.revokeAllFor(member.id);
+        await publisherService.revokeAllFor(member.id);
+        await quotaLimits.set(member.id, {});
+        const { projects } = await scanProjects(options.dataDir, { withBytes: false });
+        return { orphanedProjects: projects.filter(project => project.ownerId === member.id).length };
+      },
       bootstrapAdminEmail: env.OPENCREATOR_ADMIN_EMAIL,
       bootstrapAdminPassword: env.OPENCREATOR_ADMIN_PASSWORD,
       trustProxyHops,
@@ -311,7 +328,7 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   // One cached disk scan for the sidebar quota; the storage janitor drops it when it has changed the volume.
   const storageMeter = new StorageMeter(options.dataDir);
   await registerQuotaRoutes(server, { userAuthStore, dataDir: options.dataDir, flow: flowStore, balance: () => openRouterBalance(options.dataDir, { fetch: providerFetch }), storage: storageMeter, quotaLedger: { ledger: quotaLedger, limits: quotaLimits } });
-  await registerQuotaLimitRoutes(server, { userAuthStore, ledger: quotaLedger, limits: quotaLimits });
+  await registerQuotaLimitRoutes(server, { userAuthStore, ledger: quotaLedger, limits: quotaLimits, audit: entry => adminAudit.append(entry) });
   const workerMs = options.providers?.workerMs ?? 5000;
   if (workerMs > 0) {
     const stopWorker = new OpenRouterWorker({ dataDir: options.dataDir, store: flowStore, fetch: providerFetch, catalog }).start(workerMs);
@@ -382,7 +399,7 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   // Project assistant chat (SSE), history and undo: same text model and prices as the story actions.
   await registerAssistantRoutes(server, { userAuthStore, stories, textModel, price: actionPrice, ...(options.assistant ?? {}) });
   // Remote MCP (`/mcp`, bearer personal tokens) + token routes: the same action layer as the chat.
-  await registerMcpRoutes(server, { userAuthStore, dataDir: options.dataDir, stories, generateText, textModel, price: actionPrice, version: options.version });
+  await registerMcpRoutes(server, { userAuthStore, dataDir: options.dataDir, tokens: mcpTokens, stories, generateText, textModel, price: actionPrice, version: options.version });
   await registerTrendRoutes(server, { userAuthStore, dataDir: options.dataDir, stories, env });
   const reconcileMs = options.stories?.reconcileMs ?? 5000;
   if (reconcileMs > 0) {
@@ -398,6 +415,8 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
 
   const sweepOnce = serialCleanup(options.dataDir, { jobs: () => flowStore.listJobs(Number.MAX_SAFE_INTEGER) });
   const cleanup = async () => { try { return await sweepOnce(); } finally { storageMeter.invalidate(); } };
+  // T8 admin console: accounts, orphans, limits, audit trail (no route here reads the content of a project).
+  await registerAdminRoutes(server, { userAuthStore, dataDir: options.dataDir, flow: flowStore, ledger: quotaLedger, limits: quotaLimits, audit: adminAudit, lock: stories.lockStory.bind(stories), onChange: () => storageMeter.invalidate() });
   await registerStorageRoutes(server, { userAuthStore, dataDir: options.dataDir, cleanup, meter: storageMeter });
   const cleanupMs = options.media?.cleanupMs ?? 24 * 3_600_000;
   if (cleanupMs > 0) {

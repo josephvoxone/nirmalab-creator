@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { isValidEmail, normalizeEmail } from './password.js';
-import { MemberError, UserAuthStore } from './store.js';
+import { MemberError, UserAuthStore, type Tombstone } from './store.js';
 import { isCloudflarePeer, resolveClientIp } from './proxy.js';
 
 export const SESSION_COOKIE = 'oc_session';
@@ -72,6 +72,13 @@ export type AuthRouteOptions = {
    * `Secure` on a plain-http page would make the browser drop the cookie, so auto is the safe default.
    */
   secureCookies?: 'auto' | boolean;
+  /**
+   * Called once an account has been removed (and again on a retry of the same removal): revokes what hangs on the account
+   * (MCP tokens, publisher connections) and reports how many projects were left without an owner. Must be idempotent.
+   */
+  onMemberRemoved?: (member: Tombstone) => Promise<{ orphanedProjects: number }>;
+  /** Called after an admin action on an account (remove / suspend / role); a failing recorder never fails the action. */
+  audit?: (entry: { by: string; action: string; targetId: string; targetEmail?: string; detail?: Record<string, string | number | boolean | null> }) => Promise<void>;
 };
 
 async function bootstrapAdminIfNeeded(store: UserAuthStore, options: AuthRouteOptions): Promise<void> {
@@ -113,6 +120,10 @@ export async function registerAuthRoutes(
     const user = await store.verifyCredentials(email, password);
     if (!user) {
       return reply.code(401).send({ error: { code: 'INVALID_CREDENTIALS', message: 'Wrong email or password' } });
+    }
+    // Said only after the right password, so the message cannot be used to learn which emails exist.
+    if (user.suspendedAt) {
+      return reply.code(403).send({ error: { code: 'ACCOUNT_SUSPENDED', message: 'Akun ini ditangguhkan oleh pengelola. Hubungi pengelola untuk mengaktifkannya kembali; proyek Anda tetap aman.' } });
     }
     const session = store.createSession(user.id);
     setSessionCookie(request, reply, session.token, secureCookies);
@@ -219,7 +230,10 @@ export async function registerAuthRoutes(
       return reply.code(400).send({ error: { code: 'INVALID_INPUT', message: 'isAdmin must be true or false' } });
     }
     try {
-      return { member: store.setAdmin(request.params.id, isAdmin, user.id) };
+      const before = store.findUserById(request.params.id)?.isAdmin;
+      const member = store.setAdmin(request.params.id, isAdmin, user.id);
+      if (before !== undefined && before !== isAdmin) await options.audit?.({ by: user.id, action: 'anggota.peran', targetId: member.id, targetEmail: member.email, detail: { isAdmin } }).catch(() => undefined);
+      return { member };
     } catch (error) {
       return sendMemberError(reply, error);
     }
@@ -228,12 +242,20 @@ export async function registerAuthRoutes(
   server.delete<{ Params: { id: string } }>('/auth/members/:id', async (request, reply) => {
     const user = requireAdmin(store, request, reply);
     if (!user) return undefined;
+    let tombstone: Tombstone;
+    let alreadyRemoved = false;
     try {
-      store.removeUser(request.params.id, user.id);
-      return { ok: true };
+      tombstone = store.removeUser(request.params.id, user.id);
     } catch (error) {
-      return sendMemberError(reply, error);
+      // A retry of a removal that already happened: finish the revocations the first attempt may not have reached.
+      const earlier = error instanceof MemberError && error.code === 'NOT_FOUND' ? store.findTombstone(request.params.id) : undefined;
+      if (!earlier) return sendMemberError(reply, error);
+      tombstone = earlier;
+      alreadyRemoved = true;
     }
+    if (!alreadyRemoved) await options.audit?.({ by: user.id, action: 'anggota.hapus', targetId: tombstone.id, targetEmail: tombstone.email }).catch(() => undefined);
+    const cleanup = await options.onMemberRemoved?.(tombstone) ?? { orphanedProjects: 0 };
+    return { ok: true, orphanedProjects: cleanup.orphanedProjects, ...(alreadyRemoved ? { alreadyRemoved: true } : {}) };
   });
 
   server.get<{ Querystring: { token?: string } }>('/auth/invites/peek', async request => {

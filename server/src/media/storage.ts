@@ -11,6 +11,7 @@ import { join, relative, sep } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { requireAdmin } from '../auth/routes.js';
 import type { UserAuthStore } from '../auth/store.js';
+import { isOrphan, scanProjects } from '../tenancy/project-meta.js';
 import { isNoLinkError } from './link.js';
 
 export type StorageAreas = { stories: number; clips: number; cache: number; covers: number; other: number };
@@ -213,7 +214,16 @@ export async function registerStorageRoutes(
   server.get('/api/storage', async (request, reply) => {
     if (!requireAdmin(options.userAuthStore, request, reply)) return undefined;
     // Always a fresh scan for the admin; when the quota cache exists it takes this figure too.
-    return options.meter ? options.meter.get(true) : measureStorage(options.dataDir);
+    const report = await (options.meter ? options.meter.get(true) : measureStorage(options.dataDir));
+    // T8: bytes per owner (project folders) WITHOUT titles; projects without a living owner are summed as `orphans`.
+    const { projects } = await scanProjects(options.dataDir);
+    const alive = new Set(options.userAuthStore.listUsers().map(user => user.id));
+    const byOwner = options.userAuthStore.listUsers().map(user => {
+      const mine = projects.filter(project => project.ownerId === user.id);
+      return { userId: user.id, email: user.email, projects: mine.length, bytes: mine.reduce((n, project) => n + project.bytes, 0) };
+    });
+    const orphans = projects.filter(project => isOrphan(project, alive));
+    return { ...report, byOwner, orphans: { projects: orphans.length, bytes: orphans.reduce((n, project) => n + project.bytes, 0) } };
   });
 
   server.post('/api/storage/cleanup', async (request, reply) => {

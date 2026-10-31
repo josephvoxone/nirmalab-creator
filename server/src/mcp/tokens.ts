@@ -4,8 +4,9 @@
  *   stored or logged. The file keeps only its sha256 hex.
  * - `<data>/mcp/tokens.json` (0600, via writePrivateJsonFile) = `{ version: 1, tokens: [{id, userId,
  *   name, sha256, createdAt, lastUsedAt}] }`. Revoking deletes the entry.
- * - `verify` accepts a token only while its owner still exists and is still an admin (read from
- *   the auth store on every call, so a demotion or removal takes effect at once).
+ * - `verify` accepts a token only while its owner still exists, is still an admin and is not suspended (read from
+ *   the auth store on every call, so a demotion, suspension or removal takes effect at once).
+ * - `revokeAllFor(userId)` deletes every token of a removed member (the removal flow calls it).
  * - `lastUsedAt` is written at most once per minute per token.
  */
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
@@ -123,6 +124,16 @@ export class McpTokenStore {
     });
   }
 
+  /** Member removal: every token of `userId` goes. Returns how many were removed; nothing left = 0 (idempotent). */
+  async revokeAllFor(userId: string): Promise<number> {
+    return this.update(tokens => {
+      const kept = tokens.filter(t => t.userId !== userId);
+      const removed = tokens.length - kept.length;
+      tokens.splice(0, tokens.length, ...kept);
+      return removed;
+    });
+  }
+
   /**
    * The token's record and owner, or undefined for: a malformed or unknown token, a revoked one,
    * an owner that was removed or is no longer an admin.
@@ -138,7 +149,7 @@ export class McpTokenStore {
     }
     if (!match) return undefined;
     const user = this.users.findUserById(match.userId);
-    if (!user || !user.isAdmin) return undefined;
+    if (!user || !user.isAdmin || user.suspendedAt) return undefined;
     let lastUsedAt = match.lastUsedAt ?? null;
     const now = this.now();
     if (!lastUsedAt || now - Date.parse(lastUsedAt) >= TOUCH_MS) {

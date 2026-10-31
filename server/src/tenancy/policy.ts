@@ -155,6 +155,16 @@ export const ROUTE_POLICY: PolicyRegistry = {
   'GET /api/admin/flow/jobs': { policy: 'SISTEM-ADMIN' },
   'POST /api/admin/flow/jobs/:id/cancel': { policy: 'SISTEM-ADMIN' },
   'POST /api/stories/:id/motion-check': { policy: 'PENGGUNA-PEMILIK', resource: 'story:id' },
+  // T8 admin console (SISTEM-ADMIN, numbers and metadata only; none reads a project's content)
+  'GET /api/admin/projects': { policy: 'SISTEM-ADMIN' },
+  'POST /api/admin/projects/:id/transfer': { policy: 'SISTEM-ADMIN' },
+  'DELETE /api/admin/projects/:id': { policy: 'SISTEM-ADMIN' },
+  'GET /api/admin/usage': { policy: 'SISTEM-ADMIN' },
+  'GET /api/admin/users/:id/limits': { policy: 'SISTEM-ADMIN' },
+  'PUT /api/admin/users/:id/limits': { policy: 'SISTEM-ADMIN' },
+  'GET /api/admin/audit-log': { policy: 'SISTEM-ADMIN' },
+  'POST /api/admin/users/:id/suspend': { policy: 'SISTEM-ADMIN' },
+  'POST /api/admin/users/:id/activate': { policy: 'SISTEM-ADMIN' },
 };
 
 export type PolicyFinding = { key: string; policy: string; status: number };

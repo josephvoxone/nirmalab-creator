@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react';
-import { Cable, Check, Copy, Cpu, Gauge, Link2, LogOut, Server, Settings2, UserRound, Users } from 'lucide-react';
+import { Cable, Check, Copy, Cpu, Gauge, HardDrive, Link2, LogOut, Server, Settings2, UserRound, Users } from 'lucide-react';
+import { LimitsDialog, RemoveMemberDialog, StorageTab } from './AdminPanels.js';
 import { ConnectionsPanel } from './ConnectionsPanel.js';
 import { IntegrationsPanel } from './IntegrationsPanel.js';
 import { ProviderPanel } from './ProviderPanel.js';
@@ -17,13 +18,14 @@ import {
 } from './settingsClient.js';
 
 type Api = ReturnType<typeof settingsApi>;
-export type SettingsTab = 'umum' | 'akun' | 'anggota' | 'penggunaan' | 'flow' | 'provider' | 'integrasi' | 'koneksi';
+export type SettingsTab = 'umum' | 'akun' | 'anggota' | 'penggunaan' | 'penyimpanan' | 'flow' | 'provider' | 'integrasi' | 'koneksi';
 
 export const TABS: Array<{ id: SettingsTab; label: string; icon: typeof Users; admin?: boolean }> = [
   { id: 'umum', label: 'Umum', icon: Settings2 },
   { id: 'akun', label: 'Akun', icon: UserRound },
   { id: 'anggota', label: 'Anggota', icon: Users, admin: true },
   { id: 'penggunaan', label: 'Penggunaan', icon: Gauge, admin: true },
+  { id: 'penyimpanan', label: 'Penyimpanan', icon: HardDrive, admin: true },
   { id: 'flow', label: 'Akun Flow', icon: Server, admin: true },
   { id: 'provider', label: 'Provider', icon: Cpu, admin: true },
   { id: 'integrasi', label: 'Integrasi', icon: Cable, admin: true },
@@ -219,11 +221,10 @@ function AccountTab(props: { api: Api }) {
 
 /* ---------- Anggota ---------- */
 
-function MemberRow(props: { member: Member; me: boolean; onRole: (m: Member) => void; onRemove: (m: Member) => void; busy: boolean }) {
+function MemberRow(props: { member: Member; me: boolean; onRole: (m: Member) => void; onRemove: (m: Member) => void; onSuspend: (m: Member) => void; onLimits: (m: Member) => void; busy: boolean }) {
   const { member: m } = props;
-  const [confirming, setConfirming] = useState(false);
   return (
-    <li aria-label={m.email} className="flex items-center gap-3 border-b border-border/60 py-2 last:border-b-0">
+    <li aria-label={m.email} className="flex flex-wrap items-center gap-3 border-b border-border/60 py-2 last:border-b-0">
       <span aria-hidden="true" className="glass-chosen flex size-7 shrink-0 items-center justify-center rounded-full text-xs font-semibold">{m.email.slice(0, 1).toUpperCase()}</span>
       <div className="flex min-w-0 flex-col">
         <span className="truncate text-[13px]">{m.email}{props.me && <span className="text-muted-foreground"> · kamu</span>}</span>
@@ -231,18 +232,20 @@ function MemberRow(props: { member: Member; me: boolean; onRole: (m: Member) => 
           Bergabung {formatDate(m.createdAt)}{m.lastSeenAt ? ` · aktif ${relativeTime(Date.parse(m.lastSeenAt))}` : ''}
         </span>
       </div>
-      <Badge variant="secondary" className="ml-auto">{m.isAdmin ? 'Admin' : 'Anggota'}</Badge>
-      {!props.me && (confirming ? (
-        <div className="flex items-center gap-1">
-          <Button size="sm" variant="ghost" onClick={() => setConfirming(false)}>Batal</Button>
-          <Button size="sm" variant="destructive" disabled={props.busy} onClick={() => props.onRemove(m)}>Ya, keluarkan</Button>
-        </div>
-      ) : (
-        <div className="flex items-center gap-1">
-          <Button size="sm" variant="ghost" disabled={props.busy} onClick={() => props.onRole(m)}>{m.isAdmin ? 'Jadikan anggota' : 'Jadikan admin'}</Button>
-          <Button size="sm" variant="ghost" className="text-destructive" disabled={props.busy} onClick={() => setConfirming(true)}>Keluarkan</Button>
-        </div>
-      ))}
+      <span className="ml-auto flex items-center gap-1.5">
+        {m.suspendedAt && <Badge variant="secondary">Ditangguhkan</Badge>}
+        <Badge variant="secondary">{m.isAdmin ? 'Admin' : 'Anggota'}</Badge>
+      </span>
+      <div className="flex items-center gap-1">
+        <Button size="sm" variant="ghost" disabled={props.busy} onClick={() => props.onLimits(m)}>Batas &amp; pemakaian</Button>
+        {!props.me && (
+          <>
+            <Button size="sm" variant="ghost" disabled={props.busy} onClick={() => props.onSuspend(m)}>{m.suspendedAt ? 'Aktifkan' : 'Tangguhkan'}</Button>
+            <Button size="sm" variant="ghost" disabled={props.busy} onClick={() => props.onRole(m)}>{m.isAdmin ? 'Jadikan anggota' : 'Jadikan admin'}</Button>
+            <Button size="sm" variant="ghost" className="text-destructive" disabled={props.busy} onClick={() => props.onRemove(m)}>Keluarkan</Button>
+          </>
+        )}
+      </div>
     </li>
   );
 }
@@ -254,6 +257,9 @@ function MembersCard(props: { api: Api }) {
   const { data, error, reload, setData } = useLoad(fn);
   const [busy, setBusy] = useState<string>();
   const [actionError, setActionError] = useState('');
+  const [removed, setRemoved] = useState('');
+  const [removing, setRemoving] = useState<Member>();
+  const [limitsOf, setLimitsOf] = useState<Member>();
 
   const act = async (id: string, run: () => Promise<unknown>) => {
     setBusy(id);
@@ -264,17 +270,29 @@ function MembersCard(props: { api: Api }) {
   return (
     <Section id="set-members" title="Anggota" hint={members ? `${members.length} orang di workspace ini · ${members.filter(m => m.isAdmin).length} admin` : 'Orang yang bisa masuk ke workspace ini.'}>
       {actionError && <Notice>{actionError}</Notice>}
+      {removed && <Notice tone="ok">{removed}</Notice>}
       {error && !members ? <Failed what="Daftar anggota" error={error} onRetry={reload} />
         : !members ? <Rows count={3} />
         : (
           <ul className="flex flex-col">
             {members.map(m => (
               <MemberRow key={m.id} member={m} me={m.id === user.id} busy={busy === m.id}
-                onRole={x => void act(x.id, async () => { const r = await api.setAdmin(x.id, !x.isAdmin); setData({ members: members.map(y => y.id === x.id ? { ...y, ...r.member, isAdmin: !x.isAdmin } : y) }); })}
-                onRemove={x => void act(x.id, async () => { await api.removeMember(x.id); setData({ members: members.filter(y => y.id !== x.id) }); })} />
+                onLimits={setLimitsOf} onRemove={setRemoving}
+                onSuspend={x => void act(x.id, async () => {
+                  const r = x.suspendedAt ? await api.activate(x.id) : await api.suspend(x.id);
+                  setData({ members: members.map(y => y.id === x.id ? { ...y, ...r.member, suspendedAt: r.member.suspendedAt } : y) });
+                })}
+                onRole={x => void act(x.id, async () => { const r = await api.setAdmin(x.id, !x.isAdmin); setData({ members: members.map(y => y.id === x.id ? { ...y, ...r.member, isAdmin: !x.isAdmin } : y) }); })} />
             ))}
           </ul>
         )}
+      <RemoveMemberDialog member={removing} busy={!!busy} onCancel={() => setRemoving(undefined)}
+        onConfirm={x => { setRemoving(undefined); void act(x.id, async () => {
+          const r = await api.removeMember(x.id);
+          if (members) setData({ members: members.filter(y => y.id !== x.id) });
+          setRemoved(r.orphanedProjects ? `${x.email} dikeluarkan. ${r.orphanedProjects} proyek menjadi yatim — kelola di Penyimpanan.` : `${x.email} dikeluarkan.`);
+        }); }} />
+      <LimitsDialog api={api} member={limitsOf} onClose={() => setLimitsOf(undefined)} />
     </Section>
   );
 }
@@ -669,6 +687,7 @@ export default function SettingsPage(props: { tab?: SettingsTab; onTab?: (tab: S
         {own === 'akun' && <AccountTab api={api} />}
         {own === 'anggota' && <><MembersCard api={api} /><InvitesCard api={api} /></>}
         {own === 'penggunaan' && <UsageTab api={api} />}
+        {own === 'penyimpanan' && <StorageTab api={api} />}
         {own === 'flow' && <><PoolCard api={api} /><FlowCard api={api} /></>}
         {own === 'provider' && <ProviderPanel onOpenFlow={() => choose('flow')} />}
         {own === 'integrasi' && <IntegrationsPanel />}
