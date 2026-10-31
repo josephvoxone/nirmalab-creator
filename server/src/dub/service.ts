@@ -9,11 +9,12 @@
  * The assembler mixes only FRESH dubs (hash matches what the shot says now).
  */
 import { createHash } from 'node:crypto';
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { DEFAULT_DUB_MODEL, DUB_MODELS, DubError, MAX_TEXT_CHARS, estimateCredits, isDubModel, type DubModel, type SynthesizeInput, type VoiceSettings } from './elevenlabs.js';
 import type { FairQueue } from '../lib/fair-queue.js';
 import { estimateWords, type Word } from './words.js';
+import { normalizeText } from './text.js';
 import { SHOT_ID, narrationOf, type Shot, type Storyboard } from '../stories/storyboard.js';
 
 export type DubSettings = { voiceId?: string; modelId: string; languageCode: string; voice: Required<VoiceSettings>; keepAmbient: boolean };
@@ -21,7 +22,11 @@ export type SettingsPatch = { voiceId?: string | null; modelId?: string; voice?:
 export type DubScope = { kind: 'all' } | { kind: 'scene'; sceneId: string } | { kind: 'shots'; shotIds: string[] };
 export type ShotStatus = 'none' | 'queued' | 'running' | 'done' | 'stale' | 'failed';
 
-type ShotDub = { text?: string; voiceId?: string; hash?: string; file?: string; seconds?: number; chars?: number; words?: Word[]; status?: 'queued' | 'running' | 'failed'; error?: string; atMs?: number };
+/** An earlier finished dub of a shot, kept so that going back to that text (or those settings) costs nothing. */
+type Archived = { hash: string; file: string; seconds?: number; chars?: number; words?: Word[]; atMs?: number };
+type ShotDub = { text?: string; voiceId?: string; hash?: string; file?: string; seconds?: number; chars?: number; words?: Word[]; status?: 'queued' | 'running' | 'failed'; error?: string; atMs?: number; archive?: Archived[] };
+/** How many earlier dubs per shot stay on disk (about 90 KB each). */
+export const ARCHIVE_KEEP = 3;
 type Doc = { version: 1; settings: DubSettings; shots: Record<string, ShotDub> };
 
 export type ShotView = {
@@ -35,13 +40,21 @@ export type DubState = {
 };
 export type DubPlan = { shotIds: string[]; chars: number; credits: number; modelId: string };
 /** `words`: when each word is spoken (seconds into the file), for the karaoke subtitles. */
-export type AssemblyDub = { keepAmbient: boolean; shots: Record<string, { file: string; seconds: number; words?: Word[] }> };
+export type AssemblyDub = {
+  keepAmbient: boolean; shots: Record<string, { file: string; seconds: number; words?: Word[] }>;
+  /** Shots that have text but no fresh dub, in a project that already has dubs: they would be silent in the video. */
+  staleShots: string[];
+};
 
 export type DubDeps = {
   dir: (storyId: string) => string;
   board: (storyId: string) => Promise<Storyboard>;
   markStale: (storyId: string) => Promise<void>;
-  client: { configured(): boolean; synthesize(input: SynthesizeInput): Promise<{ audio: Buffer; keyId: string; words?: Word[] }> };
+  client: {
+    configured(): boolean; synthesize(input: SynthesizeInput): Promise<{ audio: Buffer; keyId: string; words?: Word[] }>;
+    /** Credits the keys can still spend; undefined = not known (a scoped key, provider unreachable): never a reason to refuse. */
+    balance?(): Promise<number | undefined>;
+  };
   queue: FairQueue;
   probe: (file: string) => Promise<number>;
 };
@@ -100,18 +113,27 @@ export class DubService {
 
   private effective(doc: Doc, shot: Shot) {
     const own = doc.shots[shot.id] ?? {};
-    const override = typeof own.text === 'string' && own.text.trim() ? own.text.trim() : undefined;
-    const text = override ?? (shot.silent ? '' : narrationOf(shot));
+    const overrideRaw = typeof own.text === 'string' && own.text.trim() ? own.text.trim() : undefined;
+    const raw = overrideRaw ?? (shot.silent ? '' : narrationOf(shot));
+    const text = normalizeText(raw);
     const voiceId = own.voiceId || doc.settings.voiceId;
-    const hash = createHash('sha256').update(JSON.stringify({ t: text, v: voiceId ?? '', m: doc.settings.modelId, l: doc.settings.languageCode, s: doc.settings.voice })).digest('hex').slice(0, 16);
-    return { text, textSource: override ? 'override' as const : 'narration' as const, voiceId, hash, entry: own };
+    const hashOf = (t: string) => createHash('sha256').update(JSON.stringify({ t, v: voiceId ?? '', m: doc.settings.modelId, l: doc.settings.languageCode, s: doc.settings.voice })).digest('hex').slice(0, 16);
+    const hash = hashOf(text);
+    // Dubs made before the text was normalised carry the hash of the raw text: they are the same dub.
+    const legacyHash = raw === text ? hash : hashOf(raw);
+    const same = (h: string | undefined) => h !== undefined && (h === hash || h === legacyHash);
+    // A finished dub of an earlier text/settings that the shot says again right now is as good as a fresh one.
+    const restored = own.file && same(own.hash) ? undefined : (own.archive ?? []).find(a => same(a.hash));
+    const entry: ShotDub = restored ? { ...own, hash: restored.hash, file: restored.file, seconds: restored.seconds, chars: restored.chars, words: restored.words, atMs: restored.atMs } : own;
+    if (restored && !restored.words) delete entry.words;
+    return { text, textSource: overrideRaw ? 'override' as const : 'narration' as const, voiceId, hash, legacyHash, entry, restored, fresh: Boolean(entry.file) && same(entry.hash), same };
   }
 
   private statusOf(doc: Doc, shot: Shot): ShotStatus {
     const e = this.effective(doc, shot);
     const own = e.entry;
     if (own.status === 'queued' || own.status === 'running') return own.status;
-    if (own.file && own.hash === e.hash) return 'done';
+    if (e.fresh) return 'done';
     if (own.file) return 'stale';
     return own.status === 'failed' ? 'failed' : 'none';
   }
@@ -162,6 +184,7 @@ export class DubService {
         };
       }
     });
+    await this.adopt(id);
     return this.state(id);
   }
 
@@ -175,7 +198,36 @@ export class DubService {
       if (patch.text === null) delete e.text; else if (typeof patch.text === 'string') e.text = patch.text;
       if (patch.voiceId === null) delete e.voiceId; else if (typeof patch.voiceId === 'string') e.voiceId = patch.voiceId;
     });
+    await this.adopt(id);
     return this.state(id);
+  }
+
+  /** Swaps `a` (an archived dub) in as the shot's current dub; the dub it replaces is archived in turn. */
+  private swapIn(own: ShotDub, a: Archived): void {
+    const archive = (own.archive ?? []).filter(x => x.hash !== a.hash);
+    if (own.file && own.hash) archive.unshift({ hash: own.hash, file: own.file, ...(own.seconds !== undefined ? { seconds: own.seconds } : {}), ...(own.chars !== undefined ? { chars: own.chars } : {}), ...(own.words ? { words: own.words } : {}), ...(own.atMs !== undefined ? { atMs: own.atMs } : {}) });
+    own.archive = archive.slice(0, ARCHIVE_KEEP);
+    Object.assign(own, { hash: a.hash, file: a.file, seconds: a.seconds, chars: a.chars, atMs: a.atMs });
+    if (a.words) own.words = a.words; else delete own.words;
+    if (a.seconds === undefined) delete own.seconds;
+    if (a.chars === undefined) delete own.chars;
+    if (a.atMs === undefined) delete own.atMs;
+    delete own.status; delete own.error;
+  }
+
+  /** Shots whose text/settings went back to an archived dub get it back as their current dub (free). True when something changed. */
+  private async adopt(id: string): Promise<boolean> {
+    const [doc, board] = await Promise.all([this.read(id), this.deps.board(id)]);
+    if (!board.shots.some(shot => this.effective(doc, shot).restored)) return false;
+    let changed = false;
+    await this.mutate(id, d => {
+      for (const shot of board.shots) {
+        const e = this.effective(d, shot);
+        if (e.restored && d.shots[shot.id]) { this.swapIn(d.shots[shot.id]!, e.restored); changed = true; }
+      }
+    });
+    if (changed) await this.deps.markStale(id);
+    return changed;
   }
 
   private async requireShot(id: string, shotId: string): Promise<Shot> {
@@ -232,11 +284,17 @@ export class DubService {
   async render(id: string, scope: DubScope, opts: { owner: string; confirmCredits?: number; force?: boolean }): Promise<DubState> {
     // Estimate, checks and the "queued" mark are ONE step per story: a second click waits for it and then sees the shots as taken.
     const started = await this.exclusive(id, async () => {
+      await this.adopt(id);
       const { plan, hashes } = await this.planWithHashes(id, scope, opts.force ? { force: true } : {});
       if (!plan.shotIds.length) return undefined;
       if (!this.deps.client.configured()) throw new DubError('NOT_CONFIGURED', 'API key ElevenLabs belum diisi. Isi di Pengaturan › Provider › ElevenLabs.');
       if (typeof opts.confirmCredits !== 'number' || Math.abs(opts.confirmCredits - plan.credits) > 0.01) {
         throw new DubError('CONFIRM_REQUIRED', `Dubbing ${plan.shotIds.length} shot memakai ±${plan.credits} kredit ElevenLabs (${plan.chars} karakter, model ${plan.modelId}). Konfirmasi dulu.`);
+      }
+      // Money check against the real balance, when it is known: a render that cannot finish must not start (it leaves half a dub).
+      const left = await Promise.resolve(this.deps.client.balance?.()).catch(() => undefined);
+      if (typeof left === 'number' && Number.isFinite(left) && left < plan.credits) {
+        throw new DubError('INSUFFICIENT', `Kredit ElevenLabs tidak cukup: sisa ±${left}, dubbing ini butuh ±${plan.credits}. Tambah kredit atau dub lebih sedikit shot.`);
       }
       await this.mutate(id, doc => { for (const sid of plan.shotIds) { const e = (doc.shots[sid] ??= {}); e.status = 'queued'; delete e.error; } });
       for (const sid of plan.shotIds) this.inflight.set(`${id}/${sid}`, hashes.get(sid)!);
@@ -246,7 +304,7 @@ export class DubService {
     return this.state(id);
   }
 
-  private enqueue(id: string, shotIds: string[], owner: string, opts: { force?: boolean } = {}): void {
+  private enqueue(id: string, shotIds: string[], owner: string, opts: { force?: boolean; adopt?: boolean } = {}): void {
     let ctl = this.aborts.get(id);
     if (!ctl || ctl.signal.aborted) { ctl = new AbortController(); this.aborts.set(id, ctl); }
     const set = this.pending.get(id) ?? new Set<Promise<unknown>>();
@@ -267,18 +325,27 @@ export class DubService {
     await this.mutate(id, doc => { const e = (doc.shots[shotId] ??= {}); e.status = 'failed'; e.error = message.slice(0, 300); }).catch(() => undefined);
   }
 
-  private async renderShot(id: string, shotId: string, opts: { force?: boolean } = {}): Promise<void> {
+  private async renderShot(id: string, shotId: string, opts: { force?: boolean; adopt?: boolean } = {}): Promise<void> {
     const [doc, board] = await Promise.all([this.read(id), this.deps.board(id)]);
     const index = board.shots.findIndex(s => s.id === shotId);
     if (index < 0) return;
     const shot = board.shots[index]!;
     const e = this.effective(doc, shot);
     const dir = join(this.deps.dir(id), 'dub');
-    if (!opts.force && e.entry.file && e.entry.hash === e.hash) { // already fresh (e.g. a resumed duplicate): spend nothing
-      await this.mutate(id, d => { if (d.shots[shotId]) delete d.shots[shotId]!.status; });
+    if (!opts.force && e.fresh) { // already fresh (e.g. a resumed duplicate, or an archived dub that is current again): spend nothing
+      await this.mutate(id, d => { const own = d.shots[shotId]; if (!own) return; const x = this.effective(d, shot); if (x.restored) this.swapIn(own, x.restored); delete own.status; });
       return;
     }
     if (!e.text || !e.voiceId) { await this.mutate(id, d => { if (d.shots[shotId]) delete d.shots[shotId]!.status; }); return; }
+    if (opts.adopt && !opts.force) { // after a restart: the audio may have been saved just before the crash (the provider already billed it)
+      for (const h of new Set([e.hash, e.legacyHash])) {
+        const name = `${shotId}-${h.slice(0, 8)}.mp3`;
+        if (!(await stat(join(dir, name)).then(st => st.size > 0, () => false))) continue;
+        const seconds = Math.round((await this.deps.probe(join(dir, name))) * 1000) / 1000;
+        await this.commit(id, shotId, e, name, seconds, undefined);
+        return;
+      }
+    }
     await this.mutate(id, d => { const x = (d.shots[shotId] ??= {}); x.status = 'running'; });
     const neighbour = (step: number): string | undefined => {
       for (let i = index + step; i >= 0 && i < board.shots.length; i += step) { const t = this.effective(doc, board.shots[i]!).text; if (t) return t; }
@@ -295,15 +362,26 @@ export class DubService {
     await writeFile(tmp, audio, { mode: 0o600 });
     await rename(tmp, join(dir, name));
     const seconds = Math.round((await this.deps.probe(join(dir, name))) * 1000) / 1000;
-    const old = await this.mutate(id, d => {
+    await this.commit(id, shotId, e, name, seconds, words);
+  }
+
+  /** Makes the finished audio the shot's current dub; the one it replaces goes to the archive (the oldest beyond the limit is deleted). */
+  private async commit(id: string, shotId: string, e: ReturnType<DubService['effective']>, name: string, seconds: number, words: Word[] | undefined): Promise<void> {
+    const file = `dub/${name}`;
+    const evicted: string[] = [];
+    await this.mutate(id, d => {
       const x = (d.shots[shotId] ??= {});
-      const previous = x.file;
-      Object.assign(x, { hash: e.hash, file: `dub/${name}`, seconds, chars: e.text.length, atMs: Date.now() });
+      const archive = (x.archive ?? []).filter(a => !e.same(a.hash) && a.file !== file);
+      if (x.file && x.hash && x.file !== file && !e.same(x.hash)) {
+        archive.unshift({ hash: x.hash, file: x.file, ...(x.seconds !== undefined ? { seconds: x.seconds } : {}), ...(x.chars !== undefined ? { chars: x.chars } : {}), ...(x.words ? { words: x.words } : {}), ...(x.atMs !== undefined ? { atMs: x.atMs } : {}) });
+      } else if (x.file && x.file !== file) evicted.push(x.file); // same dub under an older hash name
+      while (archive.length > ARCHIVE_KEEP) evicted.push(archive.pop()!.file);
+      if (archive.length) x.archive = archive; else delete x.archive;
+      Object.assign(x, { hash: e.hash, file, seconds, chars: e.text.length, atMs: Date.now() });
       if (words) x.words = words; else delete x.words;
       delete x.status; delete x.error;
-      return previous;
     });
-    if (old && old !== `dub/${name}`) await rm(join(this.deps.dir(id), old), { force: true });
+    for (const f of evicted) await rm(join(this.deps.dir(id), f), { force: true });
     await this.deps.markStale(id);
   }
 
@@ -326,8 +404,13 @@ export class DubService {
 
   async remove(id: string, shotId: string): Promise<DubState> {
     await this.requireShot(id, shotId);
-    const old = await this.mutate(id, doc => { const x = doc.shots[shotId]; const f = x?.file; if (x) { delete x.file; delete x.hash; delete x.seconds; delete x.chars; delete x.words; delete x.atMs; delete x.status; delete x.error; } return f; });
-    if (old) { await rm(join(this.deps.dir(id), old), { force: true }); await this.deps.markStale(id); }
+    const old = await this.mutate(id, doc => {
+      const x = doc.shots[shotId]; const files = [...(x?.file ? [x.file] : []), ...(x?.archive ?? []).map(a => a.file)];
+      if (x) { delete x.file; delete x.hash; delete x.seconds; delete x.chars; delete x.words; delete x.atMs; delete x.status; delete x.error; delete x.archive; }
+      return files;
+    });
+    for (const f of old) await rm(join(this.deps.dir(id), f), { force: true });
+    if (old.length) await this.deps.markStale(id);
     return this.state(id);
   }
 
@@ -335,14 +418,17 @@ export class DubService {
   async dubFor(id: string): Promise<AssemblyDub> {
     const [doc, board] = await Promise.all([this.read(id), this.deps.board(id)]);
     const shots: AssemblyDub['shots'] = {};
+    const missing: string[] = [];
     for (const shot of board.shots) {
       const e = this.effective(doc, shot);
-      if (e.entry.file && e.entry.hash === e.hash && typeof e.entry.seconds === 'number') {
+      if (e.fresh && typeof e.entry.seconds === 'number') {
         const words = e.entry.words ?? estimateWords(e.text, e.entry.seconds);
-        shots[shot.id] = { file: join(this.deps.dir(id), e.entry.file), seconds: e.entry.seconds, ...(words ? { words } : {}) };
-      }
+        shots[shot.id] = { file: join(this.deps.dir(id), e.entry.file!), seconds: e.entry.seconds, ...(words ? { words } : {}) };
+      } else if (e.text) missing.push(shot.id);
     }
-    return { keepAmbient: doc.settings.keepAmbient, shots };
+    // A project that has never had a dub is not "dubbed": nothing is expected to be silent there. One whose dubs all went stale is.
+    const dubbed = Object.keys(shots).length > 0 || board.shots.some(shot => doc.shots[shot.id]?.file);
+    return { keepAmbient: doc.settings.keepAmbient, shots, staleShots: dubbed ? missing : [] };
   }
 
   /** The audio file of one finished shot, or undefined. */
@@ -358,7 +444,9 @@ export class DubService {
       const shotIds = Object.entries(doc.shots).filter(([, v]) => v.status === 'queued' || v.status === 'running').map(([k]) => k);
       if (!shotIds.length) continue;
       await this.mutate(id, d => { for (const sid of shotIds) if (d.shots[sid]) d.shots[sid]!.status = 'queued'; });
-      this.enqueue(id, shotIds, 'resume');
+      const board = await this.deps.board(id).catch(() => undefined);
+      for (const sid of shotIds) { const shot = board?.shots.find(x => x.id === sid); if (shot) this.inflight.set(`${id}/${sid}`, this.effective(doc, shot).hash); }
+      this.enqueue(id, shotIds, 'resume', { adopt: true });
     }
   }
 }

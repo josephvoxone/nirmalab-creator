@@ -31,7 +31,7 @@ export function estimateCredits(texts: string[], modelId: string): number {
   return texts.reduce((sum, t) => sum + t.length, 0) * rate;
 }
 
-export type DubErrorCode = 'NOT_CONFIGURED' | 'UNAVAILABLE' | 'REJECTED' | 'CONFIRM_REQUIRED' | 'INVALID' | 'NOT_FOUND';
+export type DubErrorCode = 'NOT_CONFIGURED' | 'UNAVAILABLE' | 'REJECTED' | 'CONFIRM_REQUIRED' | 'INVALID' | 'NOT_FOUND' | 'INSUFFICIENT' | 'TOO_LONG';
 export class DubError extends Error {
   constructor(readonly code: DubErrorCode, message: string) { super(message); this.name = 'DubError'; }
 }
@@ -206,6 +206,22 @@ export class ElevenLabsClient {
   async subscription(keyId: string): Promise<SubscriptionInfo> {
     const secret = this.keys.secretOf(keyId);
     return secret ? this.probeKey(secret) : { ok: false, reason: 'key tidak ditemukan', rejected: false };
+  }
+
+  /**
+   * Credits (characters) every usable key can still spend, summed; undefined when any key's balance is not known
+   * (a text-to-speech-only key hides it, or the provider cannot be reached). Free calls. A key the provider refuses
+   * counts for nothing: it cannot speak either.
+   */
+  async balance(): Promise<number | undefined> {
+    const ids = this.keys.view().map(v => v.id);
+    if (!ids.length) return undefined;
+    const infos = await Promise.all(ids.map(id => this.subscription(id)));
+    let left = 0; let counted = 0;
+    for (const info of infos) {
+      if (info.ok && !info.limited) { left += info.left; counted++; } else if (!info.ok && info.rejected) continue; else return undefined;
+    }
+    return counted ? left : undefined;
   }
 
   /** Same for a key that is not stored yet (used to vet a key before it is added). */

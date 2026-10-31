@@ -16,7 +16,7 @@ import { DubError, type DubErrorCode, type ElevenLabsClient } from './elevenlabs
 import type { DubScope, DubService } from './service.js';
 
 const PROVIDERS: PoolProvider[] = ['elevenlabs', 'gemini'];
-const DUB_STATUS: Record<DubErrorCode, number> = { NOT_CONFIGURED: 400, INVALID: 400, NOT_FOUND: 404, CONFIRM_REQUIRED: 409, REJECTED: 422, UNAVAILABLE: 503 };
+const DUB_STATUS: Record<DubErrorCode, number> = { NOT_CONFIGURED: 400, INVALID: 400, NOT_FOUND: 404, CONFIRM_REQUIRED: 409, REJECTED: 422, UNAVAILABLE: 503, INSUFFICIENT: 409, TOO_LONG: 409 };
 
 export type DubRouteOptions = {
   userAuthStore: UserAuthStore;

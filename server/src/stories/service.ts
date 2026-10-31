@@ -132,6 +132,8 @@ export type StoryRecord = {
   createdBy?: string;
   /** Why the last assembly was refused (spec §4.4), so the UI can list the shots. */
   gate?: { message: string; shots: GateBlocker[] };
+  /** Heads-up from the last assembly start (not a refusal): `dub-basi:<shot>` = that shot has text but no fresh dub, so it is silent in the video. */
+  warnings?: string[];
   /**
    * Paid done takes an edit or an undo displaced (`clip:<shotId>`, `frame:<shotId>`, `cast:<token>`;
    * newest first, at most MAX_ARCHIVED each). When an edit brings back a prompt one of them was
@@ -155,7 +157,7 @@ export type StoryDeps = {
    */
   assemble: (dir: string, ctx?: AssembleContext) => Promise<void>;
   /** The fresh dubs (ElevenLabs) the assembler mixes in; absent = no dubbing feature. */
-  dub?: { for: (id: string) => Promise<{ keepAmbient: boolean; shots: Record<string, { file: string; seconds: number }> }> };
+  dub?: { for: (id: string) => Promise<{ keepAmbient: boolean; shots: Record<string, { file: string; seconds: number }>; staleShots?: string[] }> };
   /** Pixel size of a keyframe (QC: 9:16 stories need portrait frames). */
   imageSize?: (file: string) => Promise<{ width: number; height: number }>;
   /** OpenRouter price + balance for the budget check of an OpenRouter video engine (unknown = no check). */
@@ -937,6 +939,7 @@ export class StoryService {
           await this.save(record, record.gate!.message);
           return record;
         }
+        record.warnings = await this.dubWarnings(id);
         record.status = 'assembling';
         record.videoStale = undefined; // same as beginAssembly: stale from here on means "changed after this cut started"
         await this.save(record, 'Semua shot siap, merakit video');
@@ -987,6 +990,12 @@ export class StoryService {
     await this.assembling.get(id);
   }
 
+  /** `dub-basi:<shot>` for every shot that has text but no fresh dub in a project that already has dubs (undefined = nothing to say). */
+  private async dubWarnings(id: string): Promise<string[] | undefined> {
+    const stale = (await this.deps.dub?.for(id).catch(() => undefined))?.staleShots;
+    return stale?.length ? stale.map(shot => `dub-basi:${shot}`) : undefined;
+  }
+
   private async beginAssembly(id: string, opts: { rev?: number }): Promise<{ record: StoryRecord; board: Storyboard }> {
     const record = await this.require(id);
     checkRev(record, opts.rev);
@@ -1001,6 +1010,7 @@ export class StoryService {
       throw new StoryError('INVALID', message);
     }
     const board = await this.readStoryboard(id);
+    record.warnings = await this.dubWarnings(id);
     record.status = 'assembling';
     record.error = undefined;
     // From here on "stale" means: changed AFTER this cut started (a dub edited meanwhile), so it is set again by that change.
