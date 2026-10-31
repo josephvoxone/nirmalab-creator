@@ -85,7 +85,9 @@ describe('S7: render refuses TOO_LONG unless the writer accepts it', () => {
     const plan = await h.svc.plan(ID, both);
     await h.svc.render(ID, both, { owner: 'u', confirmCredits: plan.credits, acceptTooLong: true });
     await h.svc.idle(ID);
-    expect(h.calls.map(c => c.text)).toEqual(['Aku mau yang indah.', LONG]);
+    // Shots render concurrently, so the ORDER of the calls is not part of the contract — the count per shot is.
+    expect(h.calls.map(c => c.text).sort()).toEqual(['Aku mau yang indah.', LONG].sort());
+    expect(h.calls).toHaveLength(2);
   });
 
   it('shortening the line clears the block; the last shot (hold) and warn-level shots never need acceptTooLong', async () => {
