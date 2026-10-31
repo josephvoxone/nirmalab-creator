@@ -38,7 +38,7 @@ export const MCP_INSTRUCTIONS = [
   'Spending tools (make_sheet, redraw_frame, prepare, render, assemble) use Flow credits or OpenRouter money. Call them once WITHOUT confirm: the answer is {needsConfirm, label, estimate, rev}. Show that cost to the user. Only after the user agrees, call again with the same arguments plus confirm: true and that rev. Never set confirm on your own.',
   'Every change appears in the project chat inside the app with an undo button; undo_last reverts the newest change.',
   'Labels and errors are in Indonesian: pass them on to the user as they are.',
-  'Rules for good shots, continuity, copy and hooks are resources nirmalab://skills/<name>; read them before writing intent or narration.'
+  'Rules for good shots, continuity, copy and hooks are resources shotweave://skills/<name>; read them before writing intent or narration.'
 ].join('\n');
 
 export type McpDeps = {
@@ -232,7 +232,7 @@ export function createMcpServer(deps: McpDeps, caller: McpCaller, log?: FastifyB
   });
 
   for (const skill of listSkills()) {
-    const uri = `nirmalab://skills/${skill.name}`;
+    const uri = `shotweave://skills/${skill.name}`;
     mcp.registerResource(skill.name, uri, { title: skill.title, description: `Nirmalab skill: ${skill.title}`, mimeType: 'text/markdown' },
       async () => ({ contents: [{ uri, mimeType: 'text/markdown', text: skill.text }] }));
   }

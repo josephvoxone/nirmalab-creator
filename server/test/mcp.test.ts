@@ -408,14 +408,14 @@ describe('/mcp (Streamable HTTP, bearer token)', () => {
     expect((await rpc(s, theirs.token)).status).toBe(401);
   });
 
-  it('resources: the five skills as nirmalab://skills/NAME (markdown)', async () => {
+  it('resources: the five skills as shotweave://skills/NAME (markdown)', async () => {
     const s = await setup();
     const { token } = await s.createToken();
     const client = await connect(s, token);
     const { resources } = await client.listResources();
-    expect(resources.map(r => r.uri).sort()).toEqual(['cinematic', 'continuity', 'copy', 'hooks', 'pacing'].map(n => `nirmalab://skills/${n}`));
+    expect(resources.map(r => r.uri).sort()).toEqual(['cinematic', 'continuity', 'copy', 'hooks', 'pacing'].map(n => `shotweave://skills/${n}`));
     for (const r of resources) expect(r.mimeType).toBe('text/markdown');
-    const copy = await client.readResource({ uri: 'nirmalab://skills/copy' });
+    const copy = await client.readResource({ uri: 'shotweave://skills/copy' });
     expect((copy.contents[0] as { text: string }).text).toContain('fantastis');
     const { prompts } = await client.listPrompts();
     expect(prompts.length).toBeGreaterThanOrEqual(1);

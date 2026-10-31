@@ -16,7 +16,7 @@ export const GEMINI_FALLBACK_MODELS = ['gemini-3.6-flash'];
 export const GEMINI_MODEL_ID = /^gemini-[a-z0-9][a-z0-9.\-]{1,60}$/i;
 export const isGeminiModel = (v: unknown): v is string => typeof v === 'string' && GEMINI_MODEL_ID.test(v);
 
-const USER_AGENT = 'nirmalab-creator/1.0 (+https://nirmalab.com)';
+const USER_AGENT = 'shotweave-studio/1.0 (+https://github.com/josephvoxone/shotweave-studio)';
 const CANCELLED = 'Permintaan ke model teks dibatalkan.';
 const scrub = (text: string) => text.replace(/AIza[\w-]{10,}/g, '•••').replace(/\b(sk|xi)[-_][\w-]{10,}/gi, '•••').slice(0, 220);
 const reasonOf = (body: any, fallback: string) => scrub(String(body?.error?.message ?? body?.[0]?.error?.message ?? fallback));

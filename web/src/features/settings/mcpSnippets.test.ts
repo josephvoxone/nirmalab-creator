@@ -33,13 +33,13 @@ describe('snippetFor', () => {
   it('claude-code: remote HTTP transport with an Authorization header', () => {
     const s = snippetFor('claude-code', URL);
     expect(s.language).toBe('bash');
-    expect(s.text).toBe(`claude mcp add --transport http nirmalab ${URL} --header "Authorization: Bearer <TOKEN>"`);
+    expect(s.text).toBe(`claude mcp add --transport http shotweave ${URL} --header "Authorization: Bearer <TOKEN>"`);
     expect(s.docUrl).toBe('https://docs.claude.com/en/docs/claude-code/mcp');
   });
 
   it('claude-desktop: mcp-remote shim, header from AUTH_HEADER env, Node 18+ named', () => {
     const s = snippetFor('claude-desktop', URL);
-    const server = JSON.parse(s.text).mcpServers.nirmalab;
+    const server = JSON.parse(s.text).mcpServers.shotweave;
     expect(server.command).toBe('npx');
     expect(server.args).toEqual(['-y', 'mcp-remote', URL, '--header', 'Authorization:${AUTH_HEADER}']);
     expect(server.env).toEqual({ AUTH_HEADER: 'Bearer <TOKEN>' });
@@ -49,7 +49,7 @@ describe('snippetFor', () => {
 
   it('cursor: url + headers', () => {
     const s = snippetFor('cursor', URL);
-    expect(JSON.parse(s.text)).toEqual({ mcpServers: { nirmalab: { url: URL, headers: { Authorization: 'Bearer <TOKEN>' } } } });
+    expect(JSON.parse(s.text)).toEqual({ mcpServers: { shotweave: { url: URL, headers: { Authorization: 'Bearer <TOKEN>' } } } });
     expect(s.file).toMatch(/\.cursor\/mcp\.json/);
     expect(s.docUrl).toBe('https://cursor.com/docs/context/mcp');
   });
@@ -58,7 +58,7 @@ describe('snippetFor', () => {
     const s = snippetFor('opencode', URL);
     expect(JSON.parse(s.text)).toEqual({
       $schema: 'https://opencode.ai/config.json',
-      mcp: { nirmalab: { type: 'remote', url: URL, enabled: true, headers: { Authorization: 'Bearer <TOKEN>' } } }
+      mcp: { shotweave: { type: 'remote', url: URL, enabled: true, headers: { Authorization: 'Bearer <TOKEN>' } } }
     });
     expect(s.file).toMatch(/opencode\.json/);
   });
@@ -66,7 +66,7 @@ describe('snippetFor', () => {
   it('codex: TOML with bearer_token_env_var, token goes into an export line', () => {
     const s = snippetFor('codex', URL);
     expect(s.language).toBe('toml');
-    expect(s.text).toBe(`[mcp_servers.nirmalab]\nurl = "${URL}"\nbearer_token_env_var = "NIRMALAB_MCP_TOKEN"`);
+    expect(s.text).toBe(`[mcp_servers.shotweave]\nurl = "${URL}"\nbearer_token_env_var = "NIRMALAB_MCP_TOKEN"`);
     expect(s.text).not.toContain('<TOKEN>');
     expect(s.extra).toEqual({ label: expect.any(String), language: 'bash', text: 'export NIRMALAB_MCP_TOKEN="<TOKEN>"' });
     expect(s.file).toBe('~/.codex/config.toml');

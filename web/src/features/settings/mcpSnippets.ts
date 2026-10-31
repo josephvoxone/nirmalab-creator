@@ -24,7 +24,7 @@ export type McpSnippet = {
 };
 
 export const TOKEN_PLACEHOLDER = '<TOKEN>';
-const SERVER = 'nirmalab';
+const SERVER = 'shotweave';
 const CODEX_ENV = 'NIRMALAB_MCP_TOKEN';
 
 export const MCP_CLIENTS: Array<{ id: McpClient; label: string }> = [
@@ -47,7 +47,7 @@ export function snippetFor(client: McpClient, url: string, token: string = TOKEN
         steps: [
           'Buka terminal di folder proyek tempat kamu memakai Claude Code.',
           'Jalankan perintah di bawah. Tambahkan --scope user agar tersedia di semua proyek.',
-          'Cek dengan claude mcp list (nirmalab ✓ connected) atau ketik /mcp di Claude Code.'
+          'Cek dengan claude mcp list (shotweave ✓ connected) atau ketik /mcp di Claude Code.'
         ],
         docUrl: 'https://docs.claude.com/en/docs/claude-code/mcp'
       };
@@ -79,7 +79,7 @@ export function snippetFor(client: McpClient, url: string, token: string = TOKEN
         steps: [
           'Buka atau buat file mcp.json di lokasi di bawah.',
           'Tempel blok di bawah (gabungkan dengan mcpServers yang sudah ada), lalu simpan.',
-          'Cek di Cursor Settings → MCP: nirmalab bertitik hijau.'
+          'Cek di Cursor Settings → MCP: shotweave bertitik hijau.'
         ],
         docUrl: 'https://cursor.com/docs/context/mcp'
       };
@@ -94,7 +94,7 @@ export function snippetFor(client: McpClient, url: string, token: string = TOKEN
         steps: [
           'Buka atau buat file opencode.json di lokasi di bawah.',
           'Tempel blok di bawah (gabungkan dengan bagian mcp yang sudah ada), lalu simpan.',
-          'Jalankan ulang OpenCode; tools nirmalab muncul di daftar MCP.'
+          'Jalankan ulang OpenCode; tools shotweave muncul di daftar MCP.'
         ],
         docUrl: 'https://opencode.ai/docs/mcp-servers/'
       };

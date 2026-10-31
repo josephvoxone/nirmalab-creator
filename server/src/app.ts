@@ -135,7 +135,7 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
     return payload;
   });
 
-  server.get('/api/health', async () => ({ ok: true, app: 'nirmalab-creator', version: options.version ?? 'dev' }));
+  server.get('/api/health', async () => ({ ok: true, app: 'shotweave-studio', version: options.version ?? 'dev' }));
 
   // T8 admin: one MCP token store per process (shared with the MCP routes below), so removing a member can revoke their tokens.
   const mcpTokens = new McpTokenStore(options.dataDir, userAuthStore);

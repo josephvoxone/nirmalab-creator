@@ -12,7 +12,7 @@ try { version = readFileSync(new URL('./BUILD', import.meta.url), 'utf8').trim()
 const app = await buildApp({ dataDir, webDist, version, logger: process.env.NODE_ENV !== 'test', stories: { motion: createMotionQc() } });
 const port = Number(process.env.PORT || 3000);
 await app.listen({ host: '0.0.0.0', port });
-console.log(`[nirmalab-creator] ${version} listening on :${port}, data ${dataDir}`);
+console.log(`[shotweave-studio] ${version} listening on :${port}, data ${dataDir}`);
 
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.once(signal, () => {

@@ -7,9 +7,11 @@ keyframes and clips, dub the narration, burn word-synced captions, and assemble 
 
 Self-hosted, one container, your own keys and data directory.
 
-> Environment variable and on-disk path names still carry the prefixes from the first
-> version (`OPENCREATOR_*`, `~/Documents/nirmalab/...`). Renaming them would break running
-> deployments, so they stay for now.
+> Some runtime identifiers still carry the prefixes from the first version: the
+> `OPENCREATOR_*` environment variables, the default data folder, the Flow bridge header and the
+> platform OAuth callbacks. Renaming them would break running deployments and registered
+> redirect URIs, so they stay. The public name, the health response, the MCP resource scheme and
+> the client snippets are `shotweave`.
 
 ## What is in it
 

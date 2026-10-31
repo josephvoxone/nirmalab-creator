@@ -143,7 +143,7 @@ describe('Pengaturan › Integrasi', () => {
     open(fake());
     const picker = within(setupRegion()).getByRole('radiogroup', { name: /klien/i });
     expect(within(picker).getAllByRole('radio').map(r => r.textContent)).toEqual(['Claude Code', 'Claude Desktop', 'Cursor', 'OpenCode', 'Codex']);
-    expect(code()).toHaveTextContent('claude mcp add --transport http nirmalab');
+    expect(code()).toHaveTextContent('claude mcp add --transport http shotweave');
     expect(code()).toHaveTextContent(`${window.location.origin}/mcp`);
     // Long commands wrap instead of scrolling sideways (clipped at 390 and 1440 in the walk).
     expect(code()).toHaveClass('whitespace-pre-wrap', 'break-all');

@@ -41,7 +41,7 @@ export class LlmError extends Error {
 export const OPENCODE_GO_BASE = 'https://opencode.ai/zen/go/v1';
 /** Fallback order; the stored pick goes in front of it. */
 export const TEXT_CHAIN = TEXT_MODELS.slice(0, 3);
-const USER_AGENT = 'nirmalab-creator/1.0 (+https://nirmalab.com)';
+const USER_AGENT = 'shotweave-studio/1.0 (+https://github.com/josephvoxone/shotweave-studio)';
 const ALNUM = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
 
 /** `ses_<12 hex><14 alnum>`, new for every request. */

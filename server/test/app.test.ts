@@ -29,7 +29,7 @@ describe('buildApp', () => {
     const server = await app();
     const res = await server.inject('/api/health');
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toMatchObject({ ok: true, app: 'nirmalab-creator' });
+    expect(res.json()).toMatchObject({ ok: true, app: 'shotweave-studio' });
   });
 
   it('auth lives under /api/auth and protects the modules', async () => {

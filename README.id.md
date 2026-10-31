@@ -8,9 +8,10 @@ film.
 
 Self-hosted, satu container, key dan folder data milikmu sendiri.
 
-> Nama variabel environment dan path di disk masih memakai awalan versi pertama
-> (`OPENCREATOR_*`, `~/Documents/nirmalab/...`). Mengganti namanya akan memutus deployment
-> yang sedang jalan, jadi untuk sementara dibiarkan.
+> Sebagian nama runtime masih memakai awalan versi pertama: variabel `OPENCREATOR_*`, folder
+> data default, header bridge Flow, dan callback OAuth platform. Menggantinya akan memutus
+> deployment yang sedang jalan dan redirect URI yang sudah terdaftar, jadi dibiarkan. Nama
+> publik, respons health, skema resource MCP, dan snippet client memakai `shotweave`.
 
 ## Isinya
 
