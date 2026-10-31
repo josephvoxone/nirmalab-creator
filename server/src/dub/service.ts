@@ -58,6 +58,10 @@ export class DubService {
   private readonly mutexes = new Map<string, Promise<unknown>>();
   private readonly pending = new Map<string, Set<Promise<unknown>>>();
   private readonly aborts = new Map<string, AbortController>();
+  /** One render decision (estimate, check, mark) at a time per story: two overlapping clicks cannot both pass the check. */
+  private readonly decisions = new Map<string, Promise<unknown>>();
+  /** `<story>/<shot>` -> hash being made right now by this process (a duplicate request for it is never paid for). */
+  private readonly inflight = new Map<string, string>();
 
   constructor(private readonly deps: DubDeps) {}
 
@@ -183,6 +187,10 @@ export class DubService {
   // ------------------------------------------------------------------ plan / render
 
   async plan(id: string, scope: DubScope, options: { force?: boolean } = {}): Promise<DubPlan> {
+    return (await this.planWithHashes(id, scope, options)).plan;
+  }
+
+  private async planWithHashes(id: string, scope: DubScope, options: { force?: boolean } = {}): Promise<{ plan: DubPlan; hashes: Map<string, string> }> {
     const [doc, board] = await Promise.all([this.read(id), this.deps.board(id)]);
     let ids: string[];
     if (scope.kind === 'all') ids = board.shots.map(s => s.id);
@@ -198,42 +206,58 @@ export class DubService {
     const byId = new Map(board.shots.map(s => [s.id, s]));
     const chosen: string[] = [];
     const texts: string[] = [];
+    const hashes = new Map<string, string>();
     for (const sid of ids) {
       const shot = byId.get(sid)!;
       const e = this.effective(doc, shot);
       if (!e.text) continue;
       if (e.text.length > MAX_TEXT_CHARS) throw new DubError('INVALID', `Teks ${sid} terlalu panjang (${e.text.length} > ${MAX_TEXT_CHARS} karakter).`);
       if (!e.voiceId) throw new DubError('INVALID', 'Pilih suara dulu (suara cerita atau suara shot).');
+      if (this.inflight.get(`${id}/${sid}`) === e.hash) continue; // already being made right now: a second request is not paid for
       const status = this.statusOf(doc, shot);
-      if (options.force || status === 'none' || status === 'stale' || status === 'failed') { chosen.push(sid); texts.push(e.text); }
+      if (options.force || status === 'none' || status === 'stale' || status === 'failed') { chosen.push(sid); texts.push(e.text); hashes.set(sid, e.hash); }
     }
-    return { shotIds: chosen, chars: texts.reduce((n, t) => n + t.length, 0), credits: estimateCredits(texts, doc.settings.modelId), modelId: doc.settings.modelId };
+    return { plan: { shotIds: chosen, chars: texts.reduce((n, t) => n + t.length, 0), credits: estimateCredits(texts, doc.settings.modelId), modelId: doc.settings.modelId }, hashes };
+  }
+
+  /** Runs `fn` after every earlier decision of the same story has finished. */
+  private exclusive<T>(id: string, fn: () => Promise<T>): Promise<T> {
+    const prev = this.decisions.get(id) ?? Promise.resolve();
+    const next = prev.catch(() => undefined).then(fn);
+    this.decisions.set(id, next);
+    void next.finally(() => { if (this.decisions.get(id) === next) this.decisions.delete(id); }).catch(() => undefined);
+    return next;
   }
 
   async render(id: string, scope: DubScope, opts: { owner: string; confirmCredits?: number; force?: boolean }): Promise<DubState> {
-    const plan = await this.plan(id, scope, opts.force ? { force: true } : {});
-    if (!plan.shotIds.length) return this.state(id);
-    if (!this.deps.client.configured()) throw new DubError('NOT_CONFIGURED', 'API key ElevenLabs belum diisi. Isi di Pengaturan › Provider › ElevenLabs.');
-    if (typeof opts.confirmCredits !== 'number' || Math.abs(opts.confirmCredits - plan.credits) > 0.01) {
-      throw new DubError('CONFIRM_REQUIRED', `Dubbing ${plan.shotIds.length} shot memakai ±${plan.credits} kredit ElevenLabs (${plan.chars} karakter, model ${plan.modelId}). Konfirmasi dulu.`);
-    }
-    await this.mutate(id, doc => { for (const sid of plan.shotIds) { const e = (doc.shots[sid] ??= {}); e.status = 'queued'; delete e.error; } });
-    this.enqueue(id, plan.shotIds, opts.owner);
+    // Estimate, checks and the "queued" mark are ONE step per story: a second click waits for it and then sees the shots as taken.
+    const started = await this.exclusive(id, async () => {
+      const { plan, hashes } = await this.planWithHashes(id, scope, opts.force ? { force: true } : {});
+      if (!plan.shotIds.length) return undefined;
+      if (!this.deps.client.configured()) throw new DubError('NOT_CONFIGURED', 'API key ElevenLabs belum diisi. Isi di Pengaturan › Provider › ElevenLabs.');
+      if (typeof opts.confirmCredits !== 'number' || Math.abs(opts.confirmCredits - plan.credits) > 0.01) {
+        throw new DubError('CONFIRM_REQUIRED', `Dubbing ${plan.shotIds.length} shot memakai ±${plan.credits} kredit ElevenLabs (${plan.chars} karakter, model ${plan.modelId}). Konfirmasi dulu.`);
+      }
+      await this.mutate(id, doc => { for (const sid of plan.shotIds) { const e = (doc.shots[sid] ??= {}); e.status = 'queued'; delete e.error; } });
+      for (const sid of plan.shotIds) this.inflight.set(`${id}/${sid}`, hashes.get(sid)!);
+      return plan.shotIds;
+    });
+    if (started) this.enqueue(id, started, opts.owner, { force: opts.force === true });
     return this.state(id);
   }
 
-  private enqueue(id: string, shotIds: string[], owner: string): void {
+  private enqueue(id: string, shotIds: string[], owner: string, opts: { force?: boolean } = {}): void {
     let ctl = this.aborts.get(id);
     if (!ctl || ctl.signal.aborted) { ctl = new AbortController(); this.aborts.set(id, ctl); }
     const set = this.pending.get(id) ?? new Set<Promise<unknown>>();
     this.pending.set(id, set);
     for (const sid of shotIds) {
-      const p = this.deps.queue.run(owner, () => this.renderShot(id, sid), { signal: ctl.signal })
+      const p = this.deps.queue.run(owner, () => this.renderShot(id, sid, opts), { signal: ctl.signal })
         .catch(async error => {
           if ((error as Error)?.name === 'AbortError') await this.mutate(id, doc => { const e = doc.shots[sid]; if (e?.status === 'queued') delete e.status; }).catch(() => undefined);
           else await this.fail(id, sid, error);
         })
-        .finally(() => { set.delete(p); });
+        .finally(() => { set.delete(p); this.inflight.delete(`${id}/${sid}`); });
       set.add(p);
     }
   }
@@ -243,14 +267,14 @@ export class DubService {
     await this.mutate(id, doc => { const e = (doc.shots[shotId] ??= {}); e.status = 'failed'; e.error = message.slice(0, 300); }).catch(() => undefined);
   }
 
-  private async renderShot(id: string, shotId: string): Promise<void> {
+  private async renderShot(id: string, shotId: string, opts: { force?: boolean } = {}): Promise<void> {
     const [doc, board] = await Promise.all([this.read(id), this.deps.board(id)]);
     const index = board.shots.findIndex(s => s.id === shotId);
     if (index < 0) return;
     const shot = board.shots[index]!;
     const e = this.effective(doc, shot);
     const dir = join(this.deps.dir(id), 'dub');
-    if (e.entry.file && e.entry.hash === e.hash) { // already fresh (e.g. a resumed duplicate): spend nothing
+    if (!opts.force && e.entry.file && e.entry.hash === e.hash) { // already fresh (e.g. a resumed duplicate): spend nothing
       await this.mutate(id, d => { if (d.shots[shotId]) delete d.shots[shotId]!.status; });
       return;
     }
