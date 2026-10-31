@@ -79,10 +79,12 @@ describe('workspace role adaptor', () => {
     await removeMembership(dir, { workspaceId: personalWorkspaceId(owner), userId: 'u_other' });
     expect(await workspaceRole(dir, 'u_other', personalWorkspaceId(owner))).toBeUndefined();
     const extra = await createWorkspaceRecord(dir, { name: 'Tim Lentera', ownerId: owner });
-    expect(await workspaceRole(dir, owner, extra.id)).toBeUndefined(); // not a member until the store writes the row
-    await setMembership(dir, { workspaceId: extra.id, userId: owner, role: 'owner' });
-    expect(await makeWorkspaceAccess(dir).roleOf(owner, extra.id)).toBe('owner');
-    expect((await makeWorkspaceAccess(dir).workspacesFor(owner)).map(w => w.name).sort()).toEqual(['Ruang kerja pribadi', 'Tim Lentera']);
+    // Wave 4 merged the temporary adaptor into the real store: creating a workspace makes you its owner at once
+    // (that is what POST /api/workspaces does), and a personal workspace is named after its person, not a constant.
+    expect(await workspaceRole(dir, owner, extra.id)).toBe('owner');
+    const listed = await makeWorkspaceAccess(dir).workspacesFor(owner);
+    expect(listed.find(w => w.id === extra.id)).toMatchObject({ name: 'Tim Lentera', role: 'owner', personal: false });
+    expect(listed.find(w => w.personal)).toMatchObject({ id: personalWorkspaceId(owner), role: 'owner' });
   });
 });
 
@@ -224,7 +226,9 @@ describe('projects belong to workspaces', () => {
 
       const all = (await w.server.inject({ url: '/api/stories', headers: { cookie: w.a.cookie } })).json().stories as Array<{ id: string; workspace: { id: string; name: string; role: string } }>;
       expect(all.map(s => s.id).sort()).toEqual([personal.json().story.id, inTeam.json().story.id].sort());
-      expect(all.map(s => s.workspace.name).sort()).toEqual(['Ruang kerja pribadi', 'Tim Lentera']);
+      // A personal workspace is named after its person (`Ruang kerja <nama depan>`), not a constant (wave 4 merge).
+      expect(all.find(s => s.id === personal.json().story.id)!.workspace).toMatchObject({ id: personalWorkspaceId(w.a.id), role: 'owner' });
+      expect(all.find(s => s.id === inTeam.json().story.id)!.workspace.name).toBe('Tim Lentera');
       expect(all.find(s => s.id === inTeam.json().story.id)!.workspace.role).toBe('owner');
 
       const scoped = (await w.server.inject({ url: `/api/stories?workspace=${team.id}`, headers: { cookie: w.e.cookie } })).json().stories as Array<{ id: string }>;

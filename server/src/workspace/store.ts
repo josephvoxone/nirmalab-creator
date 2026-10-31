@@ -189,7 +189,9 @@ export class WorkspaceStore {
     return this.run(doc => {
       const existing = doc.workspaces.find(w => w.personal && w.ownerId === input.userId);
       if (existing) return { workspace: existing, created: false };
-      const workspace: Workspace = { id: `ws_${newAuthToken(12)}`, name: wanted, ownerId: input.userId, createdAtMs: this.now(), personal: true };
+      // Canonical personal id (`ws_personal_<userId>`): the access layer resolves legacy projects and every
+      // project created without an explicit workspace to this id, so it must be the one that exists on disk.
+      const workspace: Workspace = { id: `ws_personal_${input.userId}`, name: wanted, ownerId: input.userId, createdAtMs: this.now(), personal: true };
       doc.workspaces.push(workspace);
       doc.memberships.push({ workspaceId: workspace.id, userId: input.userId, role: 'owner', joinedAtMs: workspace.createdAtMs });
       return { workspace, created: true };

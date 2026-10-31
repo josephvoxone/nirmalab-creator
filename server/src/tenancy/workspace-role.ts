@@ -1,5 +1,4 @@
-import { join } from 'node:path';
-import { readPrivateJsonFile, writePrivateJsonFile } from '../lib/private-json-file.js';
+import { WorkspaceStore, type Role } from '../workspace/store.js';
 
 /**
  * WAVE 4 / access — workspace-scoped ownership (thin adaptor).
@@ -67,34 +66,21 @@ export const VIEWER_READ_ONLY_BODY = {
 } as const;
 export const VIEWER_READ_ONLY_MESSAGE = VIEWER_READ_ONLY_BODY.error.message;
 
-// ------------------------------------------------------------------ the files (ws area owns the real shapes)
+// ------------------------------------------------------------------ backed by the real store (wave 4 / ws)
 
-const workspacesFile = (dataDir: string) => join(dataDir, 'workspace', 'workspaces.json');
-const membersFile = (dataDir: string) => join(dataDir, 'workspace', 'memberships.json');
+/*
+ * ONE store, ONE file: `<data>/workspace/workspaces.json` holds workspaces, memberships and invites (wave 4 / ws). This
+ * module used to keep a second `memberships.json`; that split was merged away, so a role is always read from the same
+ * document the workspace routes write. Nothing here writes a project: a role is the only thing it answers.
+ */
 
-/** One serialised writer per process, per file: two requests changing the member list must not lose each other. */
-const queues = new Map<string, Promise<unknown>>();
-function serial<T>(key: string, fn: () => Promise<T>): Promise<T> {
-  const previous = queues.get(key) ?? Promise.resolve();
-  const run = previous.then(fn, fn);
-  queues.set(key, run.catch(() => undefined));
-  return run;
-}
-
-const asArray = <T>(value: unknown): T[] => (Array.isArray(value) ? value as T[] : []);
-
-async function readWorkspaces(dataDir: string): Promise<Workspace[]> {
-  return asArray<Workspace>(await readPrivateJsonFile(workspacesFile(dataDir)).catch(() => undefined));
-}
-
-async function readMembers(dataDir: string): Promise<Membership[]> {
-  const rows = asArray<Membership>(await readPrivateJsonFile(membersFile(dataDir)).catch(() => undefined));
-  return rows.filter(m => typeof m?.workspaceId === 'string' && typeof m?.userId === 'string' && WORKSPACE_ROLES.includes(m.role));
-}
-
-/** The workspace records on disk plus the implicit personal one, created on first use (which is what makes a role resolvable). */
-function personalWorkspace(userId: string): Workspace {
-  return { id: personalWorkspaceId(userId), name: 'Ruang kerja pribadi', ownerId: userId, createdAtMs: 0, personal: true };
+const stores = new Map<string, WorkspaceStore>();
+export function workspaceStoreFor(dataDir: string): WorkspaceStore {
+  const found = stores.get(dataDir);
+  if (found) return found;
+  const store = new WorkspaceStore(dataDir);
+  stores.set(dataDir, store);
+  return store;
 }
 
 export type WorkspaceAccess = {
@@ -106,51 +92,43 @@ export type WorkspaceAccess = {
   roleIn(userId: string, workspaceId: string | undefined): Promise<WorkspaceRole | undefined>;
 };
 
+const PERSONAL_NAME = 'Ruang kerja pribadi';
+
 export function makeWorkspaceAccess(dataDir: string): WorkspaceAccess {
+  const store = workspaceStoreFor(dataDir);
+
   const roleOf = async (userId: string, workspaceId: string): Promise<WorkspaceRole | undefined> => {
     if (!userId || !workspaceId || !WORKSPACE_ID.test(workspaceId)) return undefined;
-    const rows = await readMembers(dataDir);
-    const found = rows.find(m => m.workspaceId === workspaceId && m.userId === userId);
-    if (found) return found.role;
-    // The personal workspace is owned by its user even before it was written to disk (nobody else ever gets a role in it).
+    const found = store.roleOf(userId, workspaceId);
+    if (found) return found;
+    // The personal workspace belongs to its user even before it was written to disk (nobody else gets a role in it).
     if (workspaceId === personalWorkspaceId(userId)) return 'owner';
     return undefined;
   };
 
   const workspacesFor = async (userId: string): Promise<WorkspaceRef[]> => {
     if (!userId) return [];
-    const [records, rows] = await Promise.all([readWorkspaces(dataDir), readMembers(dataDir)]);
     const out = new Map<string, WorkspaceRef>();
-    const personal = personalWorkspace(userId);
-    out.set(personal.id, { id: personal.id, name: personal.name, role: 'owner', personal: true });
-    for (const record of records) {
-      if (record.ownerId === userId) {
-        out.set(record.id, { id: record.id, name: record.name, role: 'owner', personal: record.personal === true });
-        continue;
-      }
-      const membership = rows.find(m => m.workspaceId === record.id && m.userId === userId);
-      if (membership) out.set(record.id, { id: record.id, name: record.name, role: membership.role, personal: record.personal === true });
+    for (const row of store.listForUser(userId)) {
+      out.set(row.workspace.id, { id: row.workspace.id, name: row.workspace.name, role: row.role, personal: row.workspace.personal === true });
     }
-    // A membership row without its workspace record still resolves (a partially written store must not hide a project).
-    for (const membership of rows) {
-      if (membership.userId !== userId || out.has(membership.workspaceId)) continue;
-      if (!WORKSPACE_ID.test(membership.workspaceId)) continue;
-      out.set(membership.workspaceId, { id: membership.workspaceId, name: 'Workspace', role: membership.role, personal: isPersonalWorkspaceId(membership.workspaceId) });
+    const personalId = personalWorkspaceId(userId);
+    if (!out.has(personalId)) {
+      const personal = store.list().find(w => w.personal && w.ownerId === userId);
+      if (personal) out.set(personal.id, { id: personal.id, name: personal.name, role: 'owner', personal: true });
+      else out.set(personalId, { id: personalId, name: PERSONAL_NAME, role: 'owner', personal: true });
     }
     return [...out.values()];
   };
 
   const nameOf = async (workspaceId: string): Promise<string | undefined> => {
     if (!WORKSPACE_ID.test(workspaceId)) return undefined;
-    const records = await readWorkspaces(dataDir);
-    return records.find(w => w.id === workspaceId)?.name
-      ?? (isPersonalWorkspaceId(workspaceId) ? 'Ruang kerja pribadi' : undefined);
+    return store.get(workspaceId)?.name ?? (isPersonalWorkspaceId(workspaceId) ? PERSONAL_NAME : undefined);
   };
 
   const ownerOf = async (workspaceId: string): Promise<string | undefined> => {
     if (!WORKSPACE_ID.test(workspaceId)) return undefined;
-    const records = await readWorkspaces(dataDir);
-    const record = records.find(w => w.id === workspaceId);
+    const record = store.get(workspaceId);
     if (record) return record.ownerId;
     return isPersonalWorkspaceId(workspaceId) ? workspaceId.slice('ws_personal_'.length) : undefined;
   };
@@ -161,53 +139,59 @@ export function makeWorkspaceAccess(dataDir: string): WorkspaceAccess {
   return { roleOf, workspacesFor, nameOf, ownerOf, roleIn };
 }
 
-// ------------------------------------------------------------------ writes (ws area replaces these with its store; tests seed through them)
+// ------------------------------------------------------------------ test seeding helpers (same store, same file)
 
+/** Create a workspace record; `personal: true` resolves to the canonical personal workspace of `ownerId`. */
 export async function createWorkspaceRecord(
   dataDir: string,
   input: { name: string; ownerId: string; id?: string; personal?: boolean }
 ): Promise<Workspace> {
-  return serial(workspacesFile(dataDir), async () => {
-    const records = await readWorkspaces(dataDir);
-    const id = input.id ?? `ws_${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36)}`;
-    if (!WORKSPACE_ID.test(id)) throw new Error('Invalid workspace id');
-    if (records.some(w => w.id === id)) throw new Error('Workspace sudah ada');
-    const record: Workspace = {
-      id, name: input.name.trim() || 'Workspace', ownerId: input.ownerId,
-      createdAtMs: Date.now(), personal: input.personal === true
-    };
-    await writePrivateJsonFile(workspacesFile(dataDir), [...records, record]);
-    return record;
-  });
+  const store = workspaceStoreFor(dataDir);
+  if (input.personal === true) {
+    const { workspace } = await store.ensurePersonal({ userId: input.ownerId, name: input.name });
+    return workspace;
+  }
+  return store.create({ name: input.name, ownerId: input.ownerId });
+}
+
+async function addMemberAs(dataDir: string, workspaceId: string, userId: string, role: WorkspaceRole, invitedBy?: string): Promise<Membership> {
+  const store = workspaceStoreFor(dataDir);
+  const workspace = store.get(workspaceId);
+  if (!workspace) {
+    // Seeding a personal workspace that does not exist yet: materialise it, then add the row.
+    if (!isPersonalWorkspaceId(workspaceId)) throw new Error('Workspace tidak ditemukan');
+    const owner = workspaceId.slice('ws_personal_'.length);
+    await store.ensurePersonal({ userId: owner });
+  }
+  const current = store.get(workspaceId)!;
+  // Upsert: seeding a member who is already there (the owner of a workspace they just created) must not throw.
+  const existing = store.roleOf(userId, workspaceId);
+  if (existing) return store.setRole({ workspaceId, userId, role, byUserId: current.ownerId });
+  return store.addMember({ workspaceId, userId, role, byUserId: current.ownerId, ...(invitedBy ? { invitedBy } : {}) });
 }
 
 export async function setMembership(
   dataDir: string,
   input: { workspaceId: string; userId: string; role: WorkspaceRole; invitedBy?: string }
 ): Promise<Membership> {
-  if (!WORKSPACE_ID.test(input.workspaceId)) throw new Error('Invalid workspace id');
   if (!WORKSPACE_ROLES.includes(input.role)) throw new Error('Invalid role');
-  return serial(membersFile(dataDir), async () => {
-    const rows = await readMembers(dataDir);
-    const existing = rows.find(m => m.workspaceId === input.workspaceId && m.userId === input.userId);
-    const membership: Membership = existing
-      ? { ...existing, role: input.role, ...(input.invitedBy ? { invitedBy: input.invitedBy } : {}) }
-      : { workspaceId: input.workspaceId, userId: input.userId, role: input.role, joinedAtMs: Date.now(), ...(input.invitedBy ? { invitedBy: input.invitedBy } : {}) };
-    const next = existing ? rows.map(m => (m === existing ? membership : m)) : [...rows, membership];
-    await writePrivateJsonFile(membersFile(dataDir), next);
-    return membership;
-  });
+  return addMemberAs(dataDir, input.workspaceId, input.userId, input.role, input.invitedBy);
 }
 
 /** Removing a member deletes only the row: every project of the workspace stays exactly where it is. */
 export async function removeMembership(dataDir: string, input: { workspaceId: string; userId: string }): Promise<boolean> {
-  return serial(membersFile(dataDir), async () => {
-    const rows = await readMembers(dataDir);
-    const next = rows.filter(m => !(m.workspaceId === input.workspaceId && m.userId === input.userId));
-    if (next.length === rows.length) return false;
-    await writePrivateJsonFile(membersFile(dataDir), next);
-    return true;
-  });
+  const store = workspaceStoreFor(dataDir);
+  const workspace = store.get(input.workspaceId);
+  if (!workspace) {
+    if (!isPersonalWorkspaceId(input.workspaceId)) return false;
+    const owner = input.workspaceId.slice('ws_personal_'.length);
+    await store.ensurePersonal({ userId: owner });
+  }
+  const current = store.get(input.workspaceId)!;
+  const before = store.roleOf(input.userId, input.workspaceId);
+  if (!before) return false;
+  await store.removeMember({ workspaceId: input.workspaceId, userId: input.userId, byUserId: current.ownerId });
+  return true;
 }
 
 /** The role of one person in one workspace (the pinned `workspaceRole(userId, workspaceId)` of WAVE4-BRIEF). */
