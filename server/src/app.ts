@@ -99,6 +99,9 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
     reply.header('x-content-type-options', 'nosniff');
     reply.header('x-frame-options', 'DENY');
     reply.header('referrer-policy', 'same-origin');
+    // Only the directives that restrict nothing the SPA, media or previews load: no framing (same as X-Frame-Options,
+    // but honoured where XFO is not), no <base> hijack, no plugins. A full script/style CSP is a separate, tested step.
+    if (!reply.hasHeader('content-security-policy')) reply.header('content-security-policy', "frame-ancestors 'none'; base-uri 'self'; object-src 'none'");
     return payload;
   });
 
