@@ -60,6 +60,7 @@ import { ensureOwners, resolvePrimaryOwner } from './tenancy/migrate.js';
 import { WorkspaceService } from './workspace/service.js';
 import { WorkspaceStore } from './workspace/store.js';
 import { registerWorkspaceRoutes } from './workspace/routes.js';
+import { ensureWorkspaces } from './workspace/migrate.js';
 import { StorageMeter } from './media/storage-meter.js';
 import { createOpenCodeModel, type TextModel } from './llm/opencode.js';
 
@@ -250,6 +251,23 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
     } catch (error) {
       if (env.TENANCY_ENFORCE === '1') throw error;
       server.log.error({ err: error }, 'tenancy: penetapan pemilik gagal (server tetap jalan; TENANCY_ENFORCE=1 menghentikan boot)');
+    }
+  }
+  // WAVE 4 (ws): personal workspaces for every account, `workspaceId` on every project whose owner is alive (an orphan stays
+  // without one: admin metadata only), and the ledger's entries mapped to their owner's workspace. Backup + manifest + rollback
+  // (workspace/migrate.ts); same switches as above: TENANCY_MIGRATE=0 skips, TENANCY_DRY_RUN=1 only reports.
+  if (env.TENANCY_MIGRATE !== '0') {
+    try {
+      const migrated = await ensureWorkspaces({
+        dataDir: options.dataDir, users: userAuthStore.listUsers(), store: workspaceStore,
+        dryRun: env.TENANCY_DRY_RUN === '1', lock: stories.lockStory.bind(stories)
+      });
+      // The ledger file was rewritten on disk: drop the cache so the first operation reads the mapped entries.
+      if (migrated.ledgerMapped > 0) quotaLedger.reload();
+      server.log.info({ tenancy: { workspaces: { dryRun: migrated.dryRun, personal: migrated.personalWorkspaces.length, projects: migrated.projectsAssigned, already: migrated.projectsAlreadyAssigned, orphans: migrated.orphanProjects, ledger: migrated.ledgerMapped, unreadable: migrated.unreadable.length, manifest: migrated.manifest } } }, 'tenancy: workspace pribadi dan proyek');
+    } catch (error) {
+      if (env.TENANCY_ENFORCE === '1') throw error;
+      server.log.error({ err: error }, 'tenancy: migrasi workspace gagal (server tetap jalan; proyek tetap terbaca seperti sebelumnya)');
     }
   }
   // T4 (jobs): files Studio made before per-user storage (free-generate/{tts,images,clips}) go to the main owner, with backup +

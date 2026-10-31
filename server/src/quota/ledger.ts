@@ -53,6 +53,12 @@ export class SpendLedger {
     this.now = options.now ?? Date.now;
   }
 
+  /**
+   * Forget the cached document: a migration (workspace bootstrap) rewrote ledger.json behind this store, and the next operation
+   * must read the mapped file rather than overwrite it with a stale copy.
+   */
+  reload(): void { this.state = undefined; }
+
   // ------------------------------------------------------------------ storage
 
   private async load(): Promise<Stored> {
