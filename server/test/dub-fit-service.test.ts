@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { Storyboard } from '../src/stories/storyboard.js';
 import { creditsFor, ID, makeHarness, type Harness } from './dub-harness.js';
@@ -106,5 +108,42 @@ describe('S7: render refuses TOO_LONG unless the writer accepts it', () => {
     await h.svc.idle(ID);
     await h.svc.render(ID, both, { owner: 'u', confirmCredits: 0 });
     expect(h.calls).toHaveLength(2);
+  });
+});
+
+describe('S7 + S8 end to end on the real Lentera texts (21 shots, 1,426 characters)', () => {
+  const fx = JSON.parse(readFileSync(join(import.meta.dirname, 'fixtures', 'lentera-dub.json'), 'utf8')) as { shots: Array<{ id: string; text: string; clipSeconds: number; trim?: { out?: number } }> };
+  const lentera = (): Storyboard => ({ title: 'Lentera', shots: fx.shots.map(s => ({ id: s.id, prompt: 'p', narration: s.text, ...(s.trim ? { trim: s.trim } : {}) })) } as unknown as Storyboard);
+
+  it('the dub state flags the lines the audit measured: 9 of 21 at warn or worse, only 20 blocks, only 21 holds; the plan holds back only 20', async () => {
+    h = makeHarness({ board: lentera(), clipSeconds: async () => Object.fromEntries(fx.shots.map(s => [s.id, s.clipSeconds])) });
+    await h.svc.updateSettings(ID, { voiceId: 'V1' });
+    const st = await h.svc.state(ID);
+    expect(st.totals.chars).toBe(1426);
+    const by = (level: string) => st.shots.filter(s => s.fit?.level === level).map(s => s.shotId.slice(0, 2));
+    expect(by('block')).toEqual(['20']);
+    expect(by('hold')).toEqual(['21']);
+    expect(by('warn')).toEqual(['02', '07', '13', '14', '15', '16', '17']);
+    const plan = await h.svc.plan(ID, { kind: 'all' });
+    expect(plan.chars).toBe(1426);
+    expect(plan.blocked).toEqual(['20-keping-perak']);
+  });
+
+  it('charges the 1,426 characters once: a second click, a double-space edit and a revert cost nothing more', async () => {
+    h = makeHarness({ board: lentera(), clipSeconds: async () => Object.fromEntries(fx.shots.map(s => [s.id, s.clipSeconds])) });
+    await h.svc.updateSettings(ID, { voiceId: 'V1' });
+    const all = { kind: 'all' } as const;
+    const confirmCredits = (await h.svc.plan(ID, all)).credits;
+    await Promise.all([1, 2].map(() => h.svc.render(ID, all, { owner: 'u', confirmCredits, acceptTooLong: true })));
+    await h.svc.idle(ID);
+    expect(h.calls).toHaveLength(21);
+    expect(h.calls.reduce((n, c) => n + c.text.length, 0)).toBe(1426);
+    await h.svc.setShot(ID, '02-aku-mau', { text: `  ${fx.shots[1]!.text.replace(' ', '   ')}  ` });
+    expect((await h.svc.plan(ID, all)).credits).toBe(0);
+    await h.svc.setShot(ID, '02-aku-mau', { text: 'Teks lain sama sekali.' });
+    expect((await h.svc.plan(ID, all)).credits).toBe('Teks lain sama sekali.'.length);
+    await h.svc.setShot(ID, '02-aku-mau', { text: null });
+    expect((await h.svc.plan(ID, all)).credits).toBe(0); // back to the narration: restored from the archive, no call
+    expect(h.calls).toHaveLength(21);
   });
 });

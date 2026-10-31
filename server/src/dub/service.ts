@@ -36,6 +36,8 @@ export type ShotView = {
   /** Does the line fit the shot (free estimate, or the real length of a finished dub)? Absent for a shot without text. */
   fit?: FitView;
 };
+/** Name used by the cross-area contract (PIN): `DubShotView.fit`. */
+export type DubShotView = ShotView;
 export type DubState = {
   configured: boolean; settings: DubSettings; models: DubModel[];
   shots: ShotView[];
