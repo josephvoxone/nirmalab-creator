@@ -43,6 +43,7 @@ import { TextRoutingStore, createRoutedModel, limitedModel } from './llm/router.
 import { requireAdmin } from './auth/routes.js';
 import { parseTrustProxyHops, trustProxyFor, useCloudflareRanges } from './auth/proxy.js';
 import { registerCrossSiteGuard } from './auth/csrf.js';
+import { installPolicyGuard } from './tenancy/policy.js';
 import { StorageMeter } from './media/storage-meter.js';
 import { createOpenCodeModel, type TextModel } from './llm/opencode.js';
 
@@ -78,6 +79,10 @@ export type AppOptions = {
     /** Replaces the OpenCode Go model entirely (tests). */
     model?: TextModel;
   };
+  /** Called for every route Fastify registers (test seam: the tenancy policy test reads the live route set from here). */
+  onRoute?: (route: { method: string | string[]; url: string; config?: unknown }) => void;
+  /** Tenancy foundation (tests): a replacement route-policy registry, to prove the boot guard refuses what it does not list. */
+  tenancy?: { policyRegistry?: import('./tenancy/policy.js').PolicyRegistry; report?: (finding: { key: string; policy: string; status: number }) => void };
   media?: {
     /** ffmpeg used for thumbnails/posters (tests inject a counting runner). */
     ffmpeg?: FfmpegRunner;
@@ -92,6 +97,12 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   const trustProxyHops = options.trustProxyHops ?? parseTrustProxyHops(env.TRUST_PROXY_HOPS);
   useCloudflareRanges(env.CLOUDFLARE_IP_RANGES?.split(','));
   const server = Fastify({ logger: options.logger ?? false, bodyLimit: 210 * 1024 * 1024, trustProxy: trustProxyFor(trustProxyHops) });
+
+  // Test seam: sees every route registered below (registered first, so nothing is missed).
+  if (options.onRoute) server.addHook('onRoute', options.onRoute);
+
+  // T0 tenancy: a route with no policy entry stops the boot (fail-closed); behaviour is only reported, never changed.
+  installPolicyGuard(server, { ...(options.tenancy?.policyRegistry ? { registry: options.tenancy.policyRegistry } : {}), ...(options.tenancy?.report ? { report: options.tenancy.report } : {}) });
 
   // CSRF second layer: a cookie-carrying mutation that claims another site is refused (auth/csrf.ts).
   registerCrossSiteGuard(server, env.ALLOWED_ORIGINS);
