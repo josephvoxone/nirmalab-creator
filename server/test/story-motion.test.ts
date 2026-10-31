@@ -422,5 +422,5 @@ describe.skipIf(!hasTools)('the whole chain with real clips: collect → clipqc.
     await t.service.approveShot(story.id, '01-laras', { by: 'u_admin' });
     await t.service.assemble(story.id);
     expect((await t.service.get(story.id))!.status).toBe('done');
-  });
+  }, 60_000);   // two ffmpeg encodes + two python analyses: ~2 s alone, slower on a busy machine
 });

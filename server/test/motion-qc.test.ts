@@ -115,5 +115,5 @@ describe('createMotionQc (real process)', () => {
     expect(v).toBeDefined();
     expect(v!.status).not.toBe('ok');
     expect(v!.reasons.join(' ')).toMatch(/gambar diam|membeku/);
-  });
+  }, 60_000);
 });
