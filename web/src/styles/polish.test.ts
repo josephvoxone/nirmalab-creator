@@ -42,10 +42,11 @@ describe('Polish dasar (make-interfaces-feel-better)', () => {
 
   it('presses to exactly 0.96 and gives icon buttons a 40/44 px target', () => {
     expect(css).toContain('scale: 0.96');
-    // Measured in the browser: our icon-only button is 30 px wide, so the pseudo-element needs 5 px each side
-    // for the 40 px mouse minimum and 7 px for the 44 px touch target (inset -4 gave only 36 px = below spec).
-    expect(css).toContain('inset: -5px');   // 30 px icon + 5 px each side = 40 px
-    expect(css).toContain('inset: -7px');   // touch: 30 + 14 = 44 px
+    // Measured in the browser: the icon-only button's CONTENT box is 28 px (30 px with borders), so the
+    // pseudo-element needs 6 px each side for the 40 px mouse minimum and 8 px for 44 px on touch.
+    // (inset -4 measured 36 px and -5 measured 38 px: both below spec, which is why this is pinned by measurement.)
+    expect(css).toContain('inset: -6px');   // 28 + 12 = 40 px
+    expect(css).toContain('inset: -8px');   // touch: 28 + 16 = 44 px
     expect(css).toContain('@media (prefers-reduced-motion: reduce)');
   });
 });

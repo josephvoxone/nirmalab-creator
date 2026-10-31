@@ -87,9 +87,9 @@ html.dark[data-theme="dark"] {
   }
   [data-slot="button"]:active:not(:disabled, [aria-disabled="true"]) { scale: 0.96; }
   /* Icon-only buttons keep the compact look but own a 40 px (mouse) / 44 px (touch) target. */
-  [data-slot="button"]:has(> svg:only-child)::after { content: ""; position: absolute; inset: -5px; border-radius: inherit; }
+  [data-slot="button"]:has(> svg:only-child)::after { content: ""; position: absolute; inset: -6px; border-radius: inherit; }
   [data-slot="badge"] { transition-property: color, background-color, border-color, opacity; transition-duration: 150ms; }
-  @media (pointer: coarse) { [data-slot="button"]:has(> svg:only-child)::after { inset: -7px; } }
+  @media (pointer: coarse) { [data-slot="button"]:has(> svg:only-child)::after { inset: -8px; } }
   @media (prefers-reduced-motion: reduce) {
     [data-slot="button"]:active:not(:disabled) { scale: none; }
     [data-slot="button"], [data-slot="badge"] { transition-duration: 0ms; }
