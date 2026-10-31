@@ -46,24 +46,26 @@ describe('App shell', () => {
     await waitFor(() => expect(screen.queryByText(admin.email)).not.toBeInTheDocument());
   });
 
-  it('accepts an invite on /join/<token> and lands signed in', async () => {
+  it('accepts a workspace invite on /join/<token> and lands signed in', async () => {
+    // Wave 4: the invite is a WORKSPACE invite (GET/POST /api/join/:token) with a role; the old platform-invite
+    // endpoints are gone from this page, so the shell proves the same outcome through the new contract.
     let signedIn = false;
     const token = 'tok_abcdefghijklmnopqrstuvwxyz';
     const fetchImpl = fakeFetch((url, init) => {
       if (url === '/api/auth/me') return signedIn ? { status: 200, body: { user: { ...admin, isAdmin: false } } } : { status: 401, body: {} };
-      if (url.startsWith('/api/auth/invites/peek')) return { status: 200, body: { valid: true, email: 'baru@example.com' } };
-      if (url === '/api/auth/invites/accept' && init?.method === 'POST') {
-        expect(JSON.parse(String(init.body))).toMatchObject({ token, email: 'baru@example.com' });
+      if (url === `/api/join/${token}` && !init?.method) return { status: 200, body: { workspace: { name: 'Tim Contoh' }, role: 'editor', email: 'baru@example.com', needsAccount: true } };
+      if (url === `/api/join/${token}` && init?.method === 'POST') {
+        expect(JSON.parse(String(init.body))).toMatchObject({ password: 'secret-pass-1' });
         signedIn = true;
-        return { status: 200, body: { user: admin } };
+        return { status: 200, body: { user: { ...admin, isAdmin: false } } };
       }
       return { status: 200, body: { stories: [] } };
     });
     render(<App fetchImpl={fetchImpl} initialPath={`/join/${token}`} />);
-    expect(await screen.findByRole('heading', { name: /gabung/i })).toBeInTheDocument();
-    await waitFor(() => expect(screen.getByLabelText(/email/i)).toHaveValue('baru@example.com'));
-    await userEvent.type(screen.getByLabelText(/password/i), 'secret-pass-1');
-    await userEvent.click(screen.getByRole('button', { name: /buat akun/i }));
+    expect(await screen.findByRole('heading', { name: /gabung ke tim contoh/i })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole('textbox', { name: /email undangan/i })).toHaveValue('baru@example.com'));
+    await userEvent.type(screen.getByLabelText(/kata sandi/i), 'secret-pass-1');
+    await userEvent.click(screen.getByRole('button', { name: /buat akun|bergabung/i }));
     expect(await screen.findByRole('heading', { name: /mau bikin video apa/i })).toBeInTheDocument();
   });
 

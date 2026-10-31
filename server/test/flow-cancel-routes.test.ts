@@ -65,7 +65,8 @@ describe('S2: POST /api/flow/jobs/:id/cancel', () => {
     const t = await setup();
     const job = await t.store.createJob({ prompt: 'q', kind: 'video' });
     expect((await cancel(job.id)).statusCode).toBe(401);
-    expect((await cancel(job.id, t.member.cookie)).statusCode).toBe(403);
+    // Wave 4: a non-member (even an admin) gets 404 on a job they cannot see, so its existence does not leak.
+    expect((await cancel(job.id, t.member.cookie)).statusCode).toBe(404);
     expect((await t.store.getJob(job.id))?.status).toBe('queued');
   });
 

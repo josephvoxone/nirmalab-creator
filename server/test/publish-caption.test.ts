@@ -84,7 +84,7 @@ async function setup(resolveStoryPreview?: (id: string) => Promise<{ title: stri
   const member = await userAuthStore.createUser({ email: 'member@x.io', password: 'member-pass-1', isAdmin: false });
   const service = { publish: vi.fn(), handleCallback: vi.fn() } as unknown as PublisherService;
   const server = Fastify();
-  await registerPublisherRoutes(server, { service, userAuthStore, env: {}, resolveStoryPreview, canAccessStory: async () => true });
+  await registerPublisherRoutes(server, { service, userAuthStore, env: {}, resolveStoryPreview, canAccessStory: async () => 'owner' });
   await server.ready();
   const cookie = (id: string) => `oc_session=${userAuthStore.createSession(id).token}`;
   return { server, adminCookie: cookie(admin.id), memberCookie: cookie(member.id) };

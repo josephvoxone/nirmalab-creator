@@ -74,7 +74,11 @@ describe('T3 no path around the gate (static)', () => {
       'app.ts', 'auth/routes.ts', 'auth/store.ts', 'flow/backfill.ts', 'flow/job-access.ts', 'flow/routes.ts', 'flow/store.ts',
       'mcp/server.ts', 'providers/axcel.ts', 'publisher/owner.ts', 'quota/gates.ts',
       'stories/routes.ts', 'stories/service.ts', 'tenancy/admin-routes.ts', 'tenancy/migrate.ts', 'tenancy/project-meta.ts',
-      'tenancy/ownership.ts', 'tenancy/workspace-role.ts', 'trends/routes.ts'
+      'tenancy/ownership.ts', 'tenancy/workspace-role.ts', 'trends/routes.ts',
+      // wave 4: workspace/migrate maps old projects by their creator (the boot migration), workspace/store records WHO
+      // INVITED a member, workspace/routes passes that id through, workspace/service names the inviter. Attribution only:
+      // no project access decision compares it (the assertions below hold).
+      'workspace/migrate.ts', 'workspace/store.ts', 'workspace/routes.ts', 'workspace/service.ts'
     ].map(r => join(...r.split('/')));
     const users: string[] = [];
     for (const file of files(SRC)) {
@@ -98,7 +102,9 @@ describe('T3 no path around the gate (static)', () => {
     // Why each is allowed: snapshots = undo, under the service lock and reachable only through StoryService;
     // project-meta / admin-routes = the SYSTEM admin's metadata whitelist (never content); storage = sizes on disk;
     // migrate = the boot migration that gives old projects their owner/workspace.
-    const ALLOWED = ['stories/snapshots.ts', 'tenancy/project-meta.ts', 'tenancy/admin-routes.ts', 'media/storage.ts', 'tenancy/migrate.ts'];
+    // workspace/migrate.ts = the boot migration that gives every project its workspace;
+    // workspace/service.ts = project COUNTS per workspace, reading only `workspaceId` (never a title or any content).
+    const ALLOWED = ['stories/snapshots.ts', 'tenancy/project-meta.ts', 'tenancy/admin-routes.ts', 'media/storage.ts', 'tenancy/migrate.ts', 'workspace/migrate.ts', 'workspace/service.ts'];
     const readers: string[] = [];
     for (const file of files(SRC)) {
       const rel = relative(SRC, file);

@@ -56,7 +56,8 @@ export type WorldOptions = {
   /** Who owns which story (story id -> user email). Anything missing is "story without createdBy". */
   storyOwners?: Record<string, string | undefined>;
   /** Replaces the story-ownership decision wired into the routes. */
-  canAccessStory?: (storyId: string, user: { id: string; email: string; isAdmin: boolean }) => Promise<boolean>;
+  /** Wave 4: the gate answers a workspace ROLE (owner/editor write, viewer is read-only), not a boolean. */
+  canAccessStory?: (storyId: string, user: { id: string; email: string; isAdmin: boolean }) => Promise<'owner' | 'editor' | 'viewer' | undefined>;
   dataDir?: string;
 };
 
@@ -79,7 +80,7 @@ export async function publisherWorld(options: WorldOptions = {}) {
     env: publisherEnv,
     resolveStoryVideo: async () => video,
     resolveStoryPreview: async id => ({ title: `Judul ${id}`, caption: 'caption' }),
-    canAccessStory: options.canAccessStory ?? (async () => true)
+    canAccessStory: options.canAccessStory ?? (async () => 'owner')
   } as never);
   await server.ready();
   const cookieOf = (id: string) => `oc_session=${userAuthStore.createSession(id).token}`;
