@@ -16,7 +16,7 @@ Konsekuensinya container butuh Xvfb, dan Chrome di dalamnya memakai software ren
 | RAM satu Chrome + bridge | 1,0–1,2 GB + 99 MB (diukur di Mac) |
 | Resolusi per klip Flow | 10 kredit; akun contoh: 53 kredit → 5 klip |
 | VPS sekarang | 4 vCPU, 16 GB (11,6 GB available), load 0,17 |
-| IP VPS | 187.53.137.24 — AS47583 Hostinger, Kuala Lumpur (datacenter) |
+| IP VPS | `<your-vps-ip>` |
 | flow.google.com dari IP itu | 200, halaman normal (belum diblok) |
 | accounts.google.com dari IP itu | 200, sign-in normal |
 

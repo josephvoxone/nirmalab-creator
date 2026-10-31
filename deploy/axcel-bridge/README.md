@@ -66,7 +66,7 @@ Cek: `GET /api/providers` harus menampilkan `axcel.configured: true` + `health.a
 ```sh
 docker exec axcel-bridge sh -c 'curl -s -H "Authorization: Bearer $AXCEL_BRIDGE_TOKEN" \
   http://127.0.0.1:8899/diagnose'
-# {"egress":{"ip":"187.53.137.24","org":"AS47583 Hostinger International Limited","country":"MY"},
+# {"egress":{"ip":"<your-vps-ip>","org":"...","country":"..."},
 #  "login":"ok","turnstileGenerate":"ditolak",
 #  "verdict":"generate akan ditolak — ganti egress (proxy residensial/mobile)"}
 ```
