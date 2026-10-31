@@ -818,7 +818,12 @@ export class StoryService {
         state.jobStartedAtMs = job.startedAtMs ?? job.createdAtMs;
       }
       if (job.status === 'failed') {
-        if (OUTAGE.test(job.error ?? '')) {
+        if (job.cancelled) {
+          // An operator stopped this job: final, no attempt burnt, no new take.
+          state.status = 'failed';
+          state.error = job.error;
+          state.lastError = job.error;
+        } else if (OUTAGE.test(job.error ?? '')) {
           // The model is down: more takes, or the other clips of this run, would only hit the same wall.
           state.attempts += 1;
           state.status = 'failed';
@@ -1244,6 +1249,10 @@ export class StoryService {
   private async collectTake(take: TakeState, target: string, qc: (file: string) => Promise<string | undefined>, requeue: () => Promise<void>): Promise<boolean> {
     if (take.status !== 'queued' || !take.jobId) return false;
     const job = await this.deps.flow.getJob(take.jobId);
+    if (job?.cancelled) {
+      Object.assign(take, { status: 'failed', error: job.error, lastError: job.error });
+      return true;
+    }
     if (!job || job.status === 'failed') {
       if ((await this.rejectTake(take, job?.error ?? 'Job Flow hilang')) === 'requeue') await requeue();
       return true;

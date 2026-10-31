@@ -169,6 +169,7 @@ describe('StoryService consistent pipeline', () => {
 
   it('a failed character sheet is retried, and after 3 takes the story fails with the reason', async () => {
     const t = setup();
+    await t.flow.addAccount({ label: 'A', email: 'a@x' }); // failJob only moves a running job: claimJob needs an account
     const story = await t.service.create({ ...board, shots: [board.shots[2]!] });
     await t.service.prepare(story.id);
     for (let i = 0; i < 3; i++) {

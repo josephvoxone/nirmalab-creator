@@ -131,6 +131,8 @@ export type FlowJob = {
   /** OpenRouter generation id of a submitted video (resumed after a restart). */
   remoteId?: string;
   error?: string;
+  /** Stopped by an operator (`cancelJob`): final, never re-taken by a story. */
+  cancelled?: true;
   /** User id that queued the job (directly or through a story). */
   createdBy?: string;
 };
@@ -710,6 +712,11 @@ export class FlowStore {
       const state = await this.read();
       const job = state.jobs.find(j => j.id === id);
       if (!job) return undefined;
+      // Only the party that owns a transition may make it: a late or duplicate failure report must never
+      // revive a finished job (done → queued was a hidden re-render) or burn attempts of a job nobody runs.
+      // The one exception is a `final` stop of a still-queued job (a story halting the rest of its run).
+      if (job.status === 'done' || job.status === 'failed') return job;
+      if (job.status === 'queued' && !options.final) return job;
       const account = job.accountId ? state.accounts.find(a => a.id === job.accountId) : undefined;
       if (!options.final && account && jobCredits(job.kind) > 0 && REFUSED_FOR_CREDITS.test(error)
         && account.credits !== undefined && account.credits < 2 * jobCredits(job.kind)) {
@@ -741,6 +748,37 @@ export class FlowStore {
       }
       await this.write(state);
       return job;
+    });
+  }
+
+  /**
+   * Operator stop (`POST /api/flow/jobs/:id/cancel`): a queued job becomes a final failure that a story
+   * does not retry. A running job needs `force` (the Flow render may already be under way) and gives
+   * back the credits charged at claim. Attempts are never touched.
+   */
+  async cancelJob(id: string, by: string, options: { force?: boolean } = {}): Promise<
+    { ok: true; job: FlowJob } | { ok: false; code: 'NOT_FOUND' | 'INVALID_STATE'; job?: FlowJob }
+  > {
+    return this.serialize(async () => {
+      const state = await this.read();
+      const job = state.jobs.find(j => j.id === id);
+      if (!job) return { ok: false as const, code: 'NOT_FOUND' as const };
+      if (job.status === 'done' || job.status === 'failed' || (job.status === 'running' && !options.force)) {
+        return { ok: false as const, code: 'INVALID_STATE' as const, job };
+      }
+      if (job.status === 'running') {
+        const account = job.accountId ? state.accounts.find(a => a.id === job.accountId) : undefined;
+        if (account && jobCredits(job.kind) > 0 && account.dayStamp === today()) {
+          account.creditsUsedToday = Math.max(0, account.creditsUsedToday - jobCredits(job.kind));
+        }
+      }
+      job.status = 'failed';
+      job.cancelled = true;
+      job.error = `Dibatalkan oleh ${by}`.slice(0, 500);
+      job.finishedAtMs = Date.now();
+      job.remoteId = undefined;
+      await this.write(state);
+      return { ok: true as const, job };
     });
   }
 }

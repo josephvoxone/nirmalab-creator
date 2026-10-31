@@ -385,6 +385,7 @@ describe('StoryService scenes', () => {
 
   it('a take of the run that fails after max takes fails the story; other scenes stay pending', async () => {
     const t = setup();
+    await t.flow.addAccount({ label: 'A', email: 'a@x' }); // failJob only moves a running job: claimJob needs an account
     const story = await t.service.create(cepat);
     await t.service.render(story.id, { scene: 'hutan' });
     for (let i = 0; i < 3; i++) {

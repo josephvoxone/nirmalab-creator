@@ -34,6 +34,15 @@ export function isDeadClientError(error) {
   return /not connected|connection closed|transport closed|target crashed|target closed|has been closed|\bEPIPE\b/i.test(text);
 }
 
+/**
+ * The server answers 409 INVALID_STATE to a `/fail` or `/complete` for a job that is no longer running (an operator
+ * cancelled it, or its lease expired and another claim took over). That is "already settled", not a bridge fault.
+ */
+export function isStaleStateError(error) {
+  const text = String(error?.message ?? error ?? '');
+  return /HTTP 409\b/.test(text) && /INVALID_STATE/.test(text);
+}
+
 export function classifyError(message) {
   const m = String(message ?? '').toLowerCase();
   if (/not enough credits|insufficient credits|out of credits|exceeds max_credits|quota/.test(m)) {
@@ -78,13 +87,17 @@ export function projectTitleFor(job, fallback) {
 export async function processJob(claim, rawDeps) {
   const { job, account } = claim;
   let chromeBroken = false;
+  // A report for a job the server no longer considers running (cancelled, re-claimed) answers 409: swallow it.
+  const settle = async (id, reason, cooldownMs) => {
+    try { return await rawDeps.fail(id, reason, cooldownMs); } catch (error) { if (!isStaleStateError(error)) throw error; }
+  };
   // A Chrome fault never burns an attempt: hand the job back (the bridge restarts Chrome and the
   // server re-queues a job its own bridge abandoned) when the bridge can release.
-  const deps = !rawDeps.release ? rawDeps : {
+  const deps = {
     ...rawDeps,
     fail: async (id, reason, cooldownMs) => {
-      if (classifyError(reason).kind === 'chrome') { chromeBroken = true; return rawDeps.release(id, reason); }
-      return rawDeps.fail(id, reason, cooldownMs);
+      if (rawDeps.release && classifyError(reason).kind === 'chrome') { chromeBroken = true; return rawDeps.release(id, reason); }
+      return settle(id, reason, cooldownMs);
     }
   };
   const result = await runJob(job, account, deps);

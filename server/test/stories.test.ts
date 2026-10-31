@@ -119,6 +119,7 @@ describe('StoryService', () => {
 
   it('a Flow job that exhausts its own retries is requeued as a new take', async () => {
     const t = setup();
+    await t.flow.addAccount({ label: 'A', email: 'a@x' }); // failJob only moves a running job: claimJob needs an account
     const story = await t.service.create({ ...board, shots: [board.shots[1]!] });
     await t.service.render(story.id);
     const first = (await t.service.get(story.id))!.shots[0]!.jobId!;

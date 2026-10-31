@@ -218,6 +218,16 @@ export async function registerFlowRoutes(server: FastifyInstance, options: FlowR
     }
   );
 
+  server.post<{ Params: { id: string }; Body: { force?: unknown } | undefined }>('/api/flow/jobs/:id/cancel', async (request, reply) => {
+    const user = requireAdmin(auth, request, reply);
+    if (!user) return undefined;
+    if (!JOB_ID.test(request.params.id)) return bad(reply, 404, 'NOT_FOUND', 'Job not found');
+    const outcome = await store.cancelJob(request.params.id, user.email, { force: request.body?.force === true });
+    if (outcome.ok) return { job: outcome.job };
+    if (outcome.code === 'NOT_FOUND') return bad(reply, 404, 'NOT_FOUND', 'Job not found');
+    return bad(reply, 409, 'INVALID_STATE', 'Job tidak bisa dibatalkan: sudah selesai, atau sedang berjalan (pakai force)');
+  });
+
   server.get<{ Params: { id: string } }>('/api/flow/jobs/:id/file', async (request, reply) => {
     if (!requireAdmin(auth, request, reply)) return undefined;
     if (!JOB_ID.test(request.params.id)) return bad(reply, 404, 'NOT_FOUND', 'Job not found');
@@ -323,8 +333,11 @@ export async function registerFlowRoutes(server: FastifyInstance, options: FlowR
       '/api/flow/bridge/jobs/:id/fail',
       async (request, reply) => {
         if (!requireBridge(request, reply)) return undefined;
+        if (!JOB_ID.test(request.params.id)) return bad(reply, 404, 'NOT_FOUND', 'Job not found');
         const job = await store.getJob(request.params.id);
         if (!job) return bad(reply, 404, 'NOT_FOUND', 'Job not found');
+        // A late or duplicate report must not move a finished/queued job (the bridge swallows this 409).
+        if (job.status !== 'running') return bad(reply, 409, 'INVALID_STATE', 'Job is not running');
         const error = typeof request.body?.error === 'string' ? request.body.error : 'Bridge failure';
         const cooldownMs = typeof request.body?.cooldownMs === 'number' ? request.body.cooldownMs : 0;
         if (job.accountId && cooldownMs > 0) {
