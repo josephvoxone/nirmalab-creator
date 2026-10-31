@@ -1,7 +1,7 @@
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { FlowStore } from '../src/flow/store.js';
 
 // Wave 1 / area A: a job's status is only ever moved by the party that owns that transition.
@@ -114,5 +114,77 @@ describe('S2: cancelJob', () => {
     expect(read(dir).accounts.find((x: any) => x.id === a.id).creditsUsedToday).toBe(10);
     await store.cancelJob(clip.id, 'u', { force: true });
     expect(read(dir).accounts.find((x: any) => x.id === a.id).creditsUsedToday).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------
+describe('S3: creditsUsedToday counts a clip once, however often its claim is taken back', () => {
+  afterEach(() => { vi.useRealTimers(); });
+  const used = (dir: string, id: string) => read(dir).accounts.find((a: any) => a.id === id).creditsUsedToday;
+
+  it('lease expiry → re-claim: 10, not 20', async () => {
+    const { store, dir } = makeStore();
+    const a = await store.addAccount({ label: 'A', email: 'a@x' });
+    const clip = await store.createJob({ prompt: 'clip', kind: 'video' });
+    expect((await store.claimJob('br1'))?.id).toBe(clip.id);
+    expect(used(dir, a.id)).toBe(10);
+    patchState(dir, s => { s.jobs[0].startedAtMs = Date.now() - 26 * 60_000; });
+    const again = await store.claimJob('br2');
+    expect(again?.id).toBe(clip.id);
+    expect(again?.attempts).toBe(1);
+    expect(used(dir, a.id)).toBe(10);
+  });
+
+  it('orphan re-claim by the same bridge (it restarted): 10, no attempt burnt', async () => {
+    const { store, dir } = makeStore();
+    const a = await store.addAccount({ label: 'A', email: 'a@x' });
+    const clip = await store.createJob({ prompt: 'clip', kind: 'video' });
+    await store.claimJob('br1');
+    const again = await store.claimJob('br1');
+    expect(again?.id).toBe(clip.id);
+    expect(again?.attempts).toBe(0);
+    expect(used(dir, a.id)).toBe(10);
+  });
+
+  it('a lease that expires into a final failure gives the credits back; attempts never pass maxAttempts', async () => {
+    const { store, dir } = makeStore();
+    const a = await store.addAccount({ label: 'A', email: 'a@x' });
+    const clip = await store.createJob({ prompt: 'clip', kind: 'video', maxAttempts: 2 });
+    for (let i = 0; i < 2; i += 1) {
+      await store.claimJob(`br${i}`);
+      patchState(dir, s => { s.jobs[0].startedAtMs = Date.now() - 26 * 60_000; });
+    }
+    expect(await store.claimJob('br9')).toBeUndefined();
+    expect(await store.getJob(clip.id)).toMatchObject({ status: 'failed', attempts: 2 });
+    expect(used(dir, a.id)).toBe(0);
+  });
+
+  it('across Asia/Makassar midnight: yesterday\'s claim expiring after today\'s claim does not erase today\'s count (never negative)', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-11-01T15:50:00Z')); // 23:50 WITA, 1 Nov
+    const { store, dir } = makeStore();
+    const a = await store.addAccount({ label: 'A', email: 'a@x' });
+    const early = await store.createJob({ prompt: 'a', kind: 'video' });
+    expect((await store.claimJob('br1'))?.id).toBe(early.id);
+    vi.setSystemTime(new Date('2026-11-01T16:10:00Z')); // 00:10 WITA, 2 Nov
+    const late = await store.createJob({ prompt: 'b', kind: 'video' });
+    expect((await store.claimJob('br2'))?.id).toBe(late.id);
+    expect(used(dir, a.id)).toBe(10);
+    vi.setSystemTime(new Date('2026-11-01T16:20:00Z')); // 00:20: the 23:50 lease (25 min) is over
+    const reclaimed = await store.claimJob('br3');
+    expect(reclaimed?.id).toBe(early.id);
+    // today = the 00:10 clip + the re-run of the 23:50 clip; the 23:50 claim itself belonged to yesterday
+    expect(used(dir, a.id)).toBe(20);
+    expect(used(dir, a.id)).toBeGreaterThanOrEqual(0);
+  });
+
+  it('non-paid jobs (keyframes) never move the counter', async () => {
+    const { store, dir } = makeStore();
+    const a = await store.addAccount({ label: 'A', email: 'a@x' });
+    await store.createJob({ prompt: 'still', kind: 'image' });
+    await store.claimJob('br1');
+    patchState(dir, s => { s.jobs[0].startedAtMs = Date.now() - 26 * 60_000; });
+    await store.claimJob('br2');
+    expect(used(dir, a.id)).toBe(0);
   });
 });

@@ -187,6 +187,18 @@ function today(): string {
   return flowDay(Date.now());
 }
 
+/**
+ * Give back the credits charged when `job` was claimed (the claim is being undone: failure, lease expiry, orphan).
+ * Only when that claim was charged TODAY (Asia/Makassar): after midnight the counter already restarted, and
+ * subtracting yesterday's charge would erase today's work (or go negative).
+ */
+function refundClaim(account: FlowAccount | undefined, job: FlowJob): void {
+  const cost = jobCredits(job.kind);
+  if (!account || cost <= 0 || account.dayStamp !== today()) return;
+  if (job.startedAtMs !== undefined && flowDay(job.startedAtMs) !== today()) return;
+  account.creditsUsedToday = Math.max(0, account.creditsUsedToday - cost);
+}
+
 function loadAccount(raw: FlowAccount): FlowAccount {
   const account: FlowAccount = {
     ...raw,
@@ -493,6 +505,8 @@ export class FlowStore {
       // A bridge that died mid-job never reports back: expire its lease so the job is retried.
       for (const stale of state.jobs) {
         if (stale.status === 'running' && now - (stale.startedAtMs ?? now) > JOB_LEASE_MS) {
+          // The claim charged the account; the clip never reported back, so it is charged again when re-claimed.
+          refundClaim(stale.accountId ? state.accounts.find(a => a.id === stale.accountId) : undefined, stale);
           stale.attempts += 1;
           stale.error = 'Bridge lease expired (no result reported)';
           stale.status = stale.attempts >= stale.maxAttempts ? 'failed' : 'queued';
@@ -506,6 +520,7 @@ export class FlowStore {
       // orphaned by a restart. Put it back (no attempt burnt) instead of waiting out the lease.
       for (const orphan of state.jobs) {
         if (provider === 'flow' && ofProvider(orphan) && orphan.status === 'running' && orphan.bridgeId === bridgeId) {
+          refundClaim(orphan.accountId ? state.accounts.find(a => a.id === orphan.accountId) : undefined, orphan);
           orphan.status = 'queued';
           orphan.bridgeId = undefined;
           orphan.accountId = undefined;
@@ -724,7 +739,7 @@ export class FlowStore {
         // park the account until it refills and put the clip back without burning a take.
         account.exhaustedAtMs = Date.now();
         account.lastError = error.slice(0, 300);
-        if (account.dayStamp === today()) account.creditsUsedToday = Math.max(0, account.creditsUsedToday - jobCredits(job.kind));
+        refundClaim(account, job);
         job.error = `Menunggu kredit: ${account.label} habis`;
         job.status = 'queued';
         job.bridgeId = undefined;
@@ -734,9 +749,7 @@ export class FlowStore {
         return job;
       }
       // Flow re-credits a failed generation: take it back off today's count.
-      if (account && jobCredits(job.kind) > 0 && account.dayStamp === today()) {
-        account.creditsUsedToday = Math.max(0, account.creditsUsedToday - jobCredits(job.kind));
-      }
+      refundClaim(account, job);
       job.attempts += 1;
       job.error = error.slice(0, 500);
       job.finishedAtMs = Date.now();
@@ -767,10 +780,7 @@ export class FlowStore {
         return { ok: false as const, code: 'INVALID_STATE' as const, job };
       }
       if (job.status === 'running') {
-        const account = job.accountId ? state.accounts.find(a => a.id === job.accountId) : undefined;
-        if (account && jobCredits(job.kind) > 0 && account.dayStamp === today()) {
-          account.creditsUsedToday = Math.max(0, account.creditsUsedToday - jobCredits(job.kind));
-        }
+        refundClaim(job.accountId ? state.accounts.find(a => a.id === job.accountId) : undefined, job);
       }
       job.status = 'failed';
       job.cancelled = true;
