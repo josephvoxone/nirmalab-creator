@@ -43,6 +43,26 @@ export function isStaleStateError(error) {
   return /HTTP 409\b/.test(text) && /INVALID_STATE/.test(text);
 }
 
+const CLIENT_DEAD = /^\s*(?:(?:[\w$.]+|mcp error -?\d+): *)*(?:target crashed|not connected|connection closed)\b/;
+export const CLIENT_DEAD_COOLDOWN_MS = 30_000;
+
+/**
+ * Consecutive dead-client strikes. While `canRelease()` the bridge hands the job back untouched; 3 strikes inside
+ * `windowMs`, or `maxTotal` in a row however slowly, mean this job keeps killing the client: fail it the normal way.
+ */
+export function createStrikes({ max = 3, windowMs = 120_000, maxTotal = 6, now = Date.now } = {}) {
+  let times = [];
+  return {
+    hit() { times.push(now()); },
+    reset() { times = []; },
+    count() { return times.length; },
+    canRelease() {
+      const recent = times.filter(t => now() - t < windowMs).length;
+      return recent < max && times.length < maxTotal;
+    }
+  };
+}
+
 export function classifyError(message) {
   const m = String(message ?? '').toLowerCase();
   if (/not enough credits|insufficient credits|out of credits|exceeds max_credits|quota/.test(m)) {
@@ -59,6 +79,11 @@ export function classifyError(message) {
   if (/connectovercdp|browser context management is not supported|setdownloadbehavior|econnrefused 127\.0\.0\.1:93\d\d/.test(m)) {
     return { kind: 'chrome', cooldownMs: 0 };
   }
+  // The Chrome tab or the MCP child died ("page.waitForFunction: Target crashed", "Not connected", "MCP error -32000:
+  // Connection closed"). The job and the account are fine: the bridge releases the job (no attempt burnt) and waits.
+  // Anchored to the start of the message (after "scope.method: " prefixes) so Flow reply text that merely contains
+  // the words — "Flow agent did not create the video (… not connected …)" — is never taken for a dead client.
+  if (CLIENT_DEAD.test(m)) return { kind: 'client-dead', cooldownMs: CLIENT_DEAD_COOLDOWN_MS };
   if (/timeout|timed out|net::|econnreset|socket hang up|target closed|browser has been closed/.test(m)) {
     return { kind: 'transient', cooldownMs: 5 * MIN };
   }
@@ -87,6 +112,7 @@ export function projectTitleFor(job, fallback) {
 export async function processJob(claim, rawDeps) {
   const { job, account } = claim;
   let chromeBroken = false;
+  let clientDead = false;
   // A report for a job the server no longer considers running (cancelled, re-claimed) answers 409: swallow it.
   const settle = async (id, reason, cooldownMs) => {
     try { return await rawDeps.fail(id, reason, cooldownMs); } catch (error) { if (!isStaleStateError(error)) throw error; }
@@ -96,11 +122,14 @@ export async function processJob(claim, rawDeps) {
   const deps = {
     ...rawDeps,
     fail: async (id, reason, cooldownMs) => {
-      if (rawDeps.release && classifyError(reason).kind === 'chrome') { chromeBroken = true; return rawDeps.release(id, reason); }
+      const kind = rawDeps.release ? classifyError(reason).kind : undefined;
+      if (kind === 'chrome') { chromeBroken = true; return rawDeps.release(id, reason); }
+      if (kind === 'client-dead') { clientDead = true; return rawDeps.release(id, reason); }
       return settle(id, reason, cooldownMs);
     }
   };
   const result = await runJob(job, account, deps);
+  if (clientDead && !chromeBroken) return { status: 'client-dead', error: result.error, cooldownMs: CLIENT_DEAD_COOLDOWN_MS };
   return chromeBroken ? { status: 'chrome-broken', error: result.error } : result;
 }
 

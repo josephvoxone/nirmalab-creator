@@ -18,7 +18,7 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { homedir, hostname } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { accountsToProbe, cdpReady, preflightUrl, cdpUrlForAccount, cdpUrlFromActivePort, ensureProject, whileAlive, isChromeAccount, parseToolResult, processJob, resultHeaders, isDeadClientError } from './src/core.mjs';
+import { accountsToProbe, createStrikes, cdpReady, preflightUrl, cdpUrlForAccount, cdpUrlFromActivePort, ensureProject, whileAlive, isChromeAccount, parseToolResult, processJob, resultHeaders, isDeadClientError } from './src/core.mjs';
 
 const env = process.env;
 const CREATOR_URL = (env.CREATOR_URL || 'https://creator.nirmalab.com').replace(/\/$/, '');
@@ -172,13 +172,15 @@ async function handle(claim) {
     fail: (id, error, cooldownMs) => postJson(`/api/flow/bridge/jobs/${id}/fail`, { error, cooldownMs }),
     // Chrome fault: leave the job running under this bridge id; the next claim re-queues it
     // without burning an attempt. After 3 strikes in a row, give up on it the normal way.
-    ...(chromeStrikes < 3 ? { release: async (id, error) => log(`job ${id} released (Chrome fault): ${error.slice(0, 120)}`) } : {})
+    ...(chromeStrikes < 3 && deadStrikes.canRelease() ? { release: async (id, error) => log(`job ${id} released (Chrome fault): ${error.slice(0, 120)}`) } : {})
   });
   log(`job ${job.id} -> ${result.status}`, result.error ?? `${result.bytes} bytes, quote ${result.quotedCredits}`);
   return result;
 }
 
 let chromeStrikes = 0;
+/** Dead Chrome tab / MCP child ("Target crashed", "Not connected"): released, never failed, until it keeps happening. */
+const deadStrikes = createStrikes();
 
 /** Restart the dedicated Flow Chrome (only a process started with our flow profile + this port). */
 async function restartFlowChrome(cdp) {
@@ -228,8 +230,15 @@ async function loop(once) {
       if (result.status === 'chrome-broken') {
         chromeStrikes++;
         if (cdp) await restartFlowChrome(cdp);
-      } else if (result.status === 'done') chromeStrikes = 0;
+      } else if (result.status === 'client-dead') {
+        // The job went back untouched (no attempt burnt); the client is rebuilt by the heartbeat below.
+        // Wait before the next claim so a flapping tab does not eat the queue.
+        deadStrikes.hit();
+        log(`client dead (${deadStrikes.count()} in a row): waiting ${Math.round(result.cooldownMs / 1000)} s before the next claim`);
+        await new Promise(resolve => setTimeout(resolve, result.cooldownMs));
+      } else if (result.status === 'done') { chromeStrikes = 0; deadStrikes.reset(); }
       if (chromeStrikes >= 3 && result.status === 'failed') chromeStrikes = 0;
+      if (!deadStrikes.canRelease() && result.status === 'failed') deadStrikes.reset();
       await heartbeat();
       if (once) return result;
     } else if (once) {
