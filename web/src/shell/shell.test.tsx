@@ -66,7 +66,7 @@ describe('ChatGPT-style shell', () => {
     app();
     await userEvent.click(await screen.findByRole('button', { name: /akun/i }));
     const menu = await screen.findByRole('menu');
-    for (const item of [/^pengaturan$/i, /anggota/i, /penggunaan/i, /akun flow/i, /keluar/i]) expect(within(menu).getByRole('menuitem', { name: item })).toBeInTheDocument();
+    for (const item of [/^pengaturan$/i, /^anggota workspace$/i, /^anggota & undangan$/i, /penggunaan/i, /akun flow/i, /keluar/i]) expect(within(menu).getByRole('menuitem', { name: item })).toBeInTheDocument();
   });
 
   it('hides workspace items from members', async () => {

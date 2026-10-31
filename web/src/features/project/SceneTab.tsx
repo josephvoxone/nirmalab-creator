@@ -13,6 +13,7 @@ import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle
 } from '@/components/ui/alert-dialog';
 import { useSession } from '../../lib/session.js';
+import { useReadOnly } from './readonly.js';
 import { useCatalog } from '../stories/catalog.js';
 import { STATUS_LABEL, isActive, storiesApi } from '../stories/storiesClient.js';
 import { addScene, addShot, duplicateShot, intentSkeleton, moveScene, moveShot, removeScene, removeShot, sceneOf, splitSceneAfter, type Board, type SceneGoal } from './model.js';
@@ -59,7 +60,8 @@ export function SceneTab() {
   const scenes = board.scenes ?? [];
   const index = Math.max(0, scenes.findIndex(s => s.id === selected));
   const scene = scenes[index]!;
-  const locked = isActive(story);
+  const readOnly = useReadOnly();
+  const locked = isActive(story) || readOnly;
   const save = (next: Board) => void p.save(next);
 
   const openShot = (id: string) => { setPicked(id); setSheet(id); };

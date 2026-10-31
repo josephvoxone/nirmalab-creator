@@ -4,6 +4,8 @@ import type { ReactNode } from 'react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { vi } from 'vitest';
 import { SessionContext } from '../../lib/session.js';
+import { WorkspaceProvider } from '../../lib/workspace.js';
+import type { Role } from '../../lib/workspaces.js';
 import type { Story } from '../stories/storiesClient.js';
 import { normalizeScenes, type Board } from './model.js';
 import { CATALOG } from '../stories/testCatalog.js';
@@ -84,6 +86,8 @@ export type ExtraRoute = (call: Call, json: (status: number, body: unknown) => R
 export function fakeProjectApi(opts: {
   board?: Board; story?: Story; fail?: Partial<Record<'get' | 'put' | 'render' | 'prepare' | 'assemble', { status: number; message: string; code?: string }>>;
   extra?: ExtraRoute;
+  /** Workspace role answered by GET /api/workspaces (wave 4); absent = no workspace API. */
+  role?: Role;
 } = {}) {
   let board = opts.board ?? BOARD;
   let story = opts.story ?? storyFor(board);
@@ -101,6 +105,9 @@ export function fakeProjectApi(opts: {
     const own = await opts.extra?.(call, json);
     if (own) return own;
     if (url === '/api/stories/catalog') return json(200, { catalog: CATALOG, covers: {} });
+    if (url === '/api/workspaces' && opts.role) {
+      return json(200, { workspaces: [{ id: 'w1', name: 'Ruang kerja A', role: opts.role, personal: true, projects: 1, members: 2 }] });
+    }
     if (url === '/api/stories') return json(200, { stories: [story] });
     if (url === `/api/stories/${ID}` && method === 'GET') return failWith('get') ?? json(200, { story, storyboard: board });
     if (url === `/api/stories/${ID}` && method === 'PUT') {
@@ -147,16 +154,19 @@ export function fakeProjectApi(opts: {
   };
 }
 
-export function mountProject(ui: ReactNode, fetchImpl: ReturnType<typeof fakeProjectApi>['fetchImpl'], opts: { path?: string; isAdmin?: boolean } = {}) {
+export function mountProject(ui: ReactNode, fetchImpl: ReturnType<typeof fakeProjectApi>['fetchImpl'], opts: { path?: string; isAdmin?: boolean; role?: Role } = {}) {
+  const routes = (
+    <MemoryRouter initialEntries={[opts.path ?? `/cerita/${ID}`]}>
+      <Routes>
+        <Route path="/cerita/:id" element={ui} />
+        <Route path="/cerita" element={<p>daftar proyek</p>} />
+        <Route path="/publish" element={<p>halaman publish</p>} />
+      </Routes>
+    </MemoryRouter>
+  );
   return render(
     <SessionContext.Provider value={{ user: { id: 'u1', email: 'a@x.io', isAdmin: opts.isAdmin ?? true }, fetchImpl, signOut: async () => undefined }}>
-      <MemoryRouter initialEntries={[opts.path ?? `/cerita/${ID}`]}>
-        <Routes>
-          <Route path="/cerita/:id" element={ui} />
-          <Route path="/cerita" element={<p>daftar proyek</p>} />
-          <Route path="/publish" element={<p>halaman publish</p>} />
-        </Routes>
-      </MemoryRouter>
+      {opts.role ? <WorkspaceProvider>{routes}</WorkspaceProvider> : routes}
     </SessionContext.Provider>
   );
 }

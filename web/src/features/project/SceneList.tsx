@@ -9,12 +9,14 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import type { Story } from '../stories/storiesClient.js';
 import { sceneProgress, type Board, type Scene, fmtDuration } from './model.js';
 import { TONE_DOT, dragId, parseDragId, sceneTone } from './SceneHelpers.js';
+import { useReadOnly } from './readonly.js';
 
 function SceneRow(props: {
   scene: Scene; index: number; count: number; board: Board; story: Story; selected: boolean; locked: boolean;
   onSelect: () => void; onMove: (to: number) => void;
 }) {
   const { scene, index, board, story } = props;
+  const readOnly = useReadOnly();
   const { setNodeRef, setActivatorNodeRef, attributes, listeners, transform, transition, isDragging, isOver, active } = useSortable({ id: dragId.scene(scene.id), disabled: props.locked });
   const shotOver = isOver && parseDragId(active?.id)?.kind === 'shot';
   const p = sceneProgress(story, board, scene.id);
@@ -25,10 +27,12 @@ function SceneRow(props: {
       style={{ transform: CSS.Translate.toString(transform), transition }} onPointerDown={listeners?.onPointerDown as PointerEventHandler | undefined}
       className={cn('group relative flex items-start gap-0.5 rounded-md py-1.5 pr-1 pl-0.5 transition-colors hover:bg-accent/60',
         props.selected && 'glass-chosen hover:bg-transparent', isDragging && 'z-10 opacity-60', shotOver && 'ring-1 ring-(--brand) bg-(--brand-muted)')}>
-      <button type="button" ref={setActivatorNodeRef} {...attributes} onKeyDown={listeners?.onKeyDown as KeyboardEventHandler | undefined} aria-label={`Seret scene ${scene.title}`} disabled={props.locked}
-        className="mt-0.5 flex h-5 w-4 shrink-0 cursor-grab items-center justify-center rounded text-muted-foreground/60 outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring/60 disabled:cursor-default disabled:opacity-40">
-        <GripVertical className="size-3.5" />
-      </button>
+      {!readOnly && (
+        <button type="button" ref={setActivatorNodeRef} {...attributes} onKeyDown={listeners?.onKeyDown as KeyboardEventHandler | undefined} aria-label={`Seret scene ${scene.title}`} disabled={props.locked}
+          className="mt-0.5 flex h-5 w-4 shrink-0 cursor-grab items-center justify-center rounded text-muted-foreground/60 outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring/60 disabled:cursor-default disabled:opacity-40">
+          <GripVertical className="size-3.5" />
+        </button>
+      )}
       <button type="button" aria-label={`Pilih ${scene.title}`} onClick={props.onSelect}
         className="flex min-w-0 flex-1 flex-col gap-0.5 rounded text-left outline-none focus-visible:ring-1 focus-visible:ring-ring/60">
         <span className="flex min-w-0 items-center gap-1.5 text-[13px]">
@@ -66,6 +70,7 @@ export function SceneList(props: {
   /** Bible boards: a new scene needs a goal, so "Tambah scene" opens the form instead of the inline title field. */
   onAddForm?: () => void;
 }) {
+  const readOnly = useReadOnly();
   const scenes = props.board.scenes ?? [];
   const [adding, setAdding] = useState(false);
   const [title, setTitle] = useState('');
@@ -95,7 +100,7 @@ export function SceneList(props: {
           onBlur={() => { if (title.trim()) commit(); else setAdding(false); }}
           className="h-7 rounded-md border border-input bg-(--field) px-2 text-[13px] outline-none placeholder:text-muted-foreground focus-visible:border-ring" />
       ) : (
-        <Button type="button" size="sm" variant="ghost" aria-label="Tambah scene" disabled={props.locked} onClick={() => (props.onAddForm ? props.onAddForm() : setAdding(true))} className="justify-start text-muted-foreground">
+        !readOnly && <Button type="button" size="sm" variant="ghost" aria-label="Tambah scene" disabled={props.locked} onClick={() => (props.onAddForm ? props.onAddForm() : setAdding(true))} className="justify-start text-muted-foreground">
           <Plus /> Scene
         </Button>
       )}

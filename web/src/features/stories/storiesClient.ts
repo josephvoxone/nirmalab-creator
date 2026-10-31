@@ -61,6 +61,8 @@ export type Story = {
   events: Array<{ atMs: number; message: string }>;
   /** Storyboard revision (+1 per change). Sent back with PUT; a mismatch answers 409 STALE. */
   rev?: number;
+  /** Workspace the project lives in (wave 4 tenancy); absent on records from before the migration. */
+  workspaceId?: string;
 };
 
 /** POST compile-shot: the prompts the server would send for this shot (nothing saved). */

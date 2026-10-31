@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { ArrowDown, ArrowUp, Check, Clapperboard, Images, MoreHorizontal, Play, Plus, Sparkles, Trash2, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { useReadOnly } from './readonly.js';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Choice } from '../../ui/controls.js';
 import type { Story } from '../stories/storiesClient.js';
@@ -77,14 +78,17 @@ function Header(props: { board: Board; scene: Scene; index: number; locked: bool
 
 /** An empty scene: say why, offer the one action, and the drag alternative (drop a shot on this scene in the list). */
 function EmptyShots(props: { scene: Scene; locked: boolean; onAdd: () => void; onBreakdown?: () => void }) {
+  const readOnly = useReadOnly();
   return (
     <div className="flex flex-col items-center gap-1.5 rounded-md border border-dashed px-4 py-6 text-center">
       <p className="text-[13px] font-medium">Scene ini belum punya shot</p>
-      <div className="flex flex-wrap justify-center gap-1.5">
-        <Button type="button" size="sm" variant="glass" aria-label="Tambah shot" disabled={props.locked} onClick={props.onAdd}><Plus /> Shot</Button>
-        {props.onBreakdown && <Button type="button" size="sm" variant="ghost" disabled={props.locked} onClick={props.onBreakdown}><Sparkles /> Pecah jadi shot (AI)</Button>}
-      </div>
-      <p className="text-[12px] text-muted-foreground">atau seret shot dari scene lain ke “{props.scene.title}” di daftar scene</p>
+      {!readOnly && (
+        <div className="flex flex-wrap justify-center gap-1.5">
+          <Button type="button" size="sm" variant="glass" aria-label="Tambah shot" disabled={props.locked} onClick={props.onAdd}><Plus /> Shot</Button>
+          {props.onBreakdown && <Button type="button" size="sm" variant="ghost" disabled={props.locked} onClick={props.onBreakdown}><Sparkles /> Pecah jadi shot (AI)</Button>}
+        </div>
+      )}
+      <p className="text-[12px] text-muted-foreground">{readOnly ? 'Scene ini masih kosong.' : `atau seret shot dari scene lain ke “${props.scene.title}” di daftar scene`}</p>
     </div>
   );
 }
@@ -93,6 +97,7 @@ export function SceneBoard(props: {
   projectId: string; board: Board; story: Story; scene: Scene; index: number; locked: boolean; busy: boolean; picked?: string; actions: SceneActions;
 }) {
   const { board, story, scene, actions } = props;
+  const readOnly = useReadOnly();
   const [preview, setPreview] = useState(false);
   const [splitting, setSplitting] = useState(false);
   const [split, setSplit] = useState<BreakdownDone>();
@@ -113,20 +118,20 @@ export function SceneBoard(props: {
       <div className="flex flex-wrap items-center gap-2">
         <SceneCastChips projectId={props.projectId} story={story} cast={cast} label="Pemeran di scene ini" className="min-w-40 flex-1" />
         <div className="flex flex-wrap items-center gap-1.5">
-          {konsisten && framesTodo > 0 && (
+          {!readOnly && konsisten && framesTodo > 0 && (
             <Button type="button" size="sm" variant="glass" disabled={!idle || !scene.shots.length} onClick={actions.prepare}>
               <Images /> Buat keyframe scene · gratis
             </Button>
           )}
           {cost.todo === 0 && scene.shots.length > 0 ? (
             <span className="flex items-center gap-1 text-[12px] text-muted-foreground"><Check className="size-3.5 text-(--success)" /> Semua klip scene ini siap</span>
-          ) : (
+          ) : !readOnly && (
             <Button type="button" size="sm" disabled={!idle || cost.todo === 0} onClick={actions.render} title={`${cost.todo} shot belum dirender`}>
               <Clapperboard /> Render scene · {clipCost((board.engine as EngineSet | undefined)?.video, cost.todo)}
             </Button>
           )}
           <Button type="button" size="sm" variant="ghost" aria-pressed={preview} onClick={() => setPreview(v => !v)}><Play /> Preview scene</Button>
-          <DropdownMenu>
+          {!readOnly && <DropdownMenu>
             <DropdownMenuTrigger disabled={props.locked} aria-label="Aksi scene" render={<Button type="button" size="icon-sm" variant="ghost" />}>
               <MoreHorizontal />
             </DropdownMenuTrigger>
@@ -142,7 +147,7 @@ export function SceneBoard(props: {
               <DropdownMenuSeparator />
               <DropdownMenuItem variant="destructive" disabled={count <= 1} onClick={actions.removeScene}><Trash2 /> Hapus scene</DropdownMenuItem>
             </DropdownMenuContent>
-          </DropdownMenu>
+          </DropdownMenu>}
         </div>
       </div>
       {preview && (
@@ -154,7 +159,7 @@ export function SceneBoard(props: {
       {split && <BreakdownResult done={split} onClose={clearSplit} />}
       <div className="flex items-center justify-between text-[12px] text-muted-foreground">
         <span>{scene.shots.length} shot · ±{fmtDuration(sceneProgress(story, board, scene.id).seconds)}</span>
-        {scene.shots.length > 0 && (
+        {scene.shots.length > 0 && !readOnly && (
           <Button type="button" size="sm" variant="ghost" aria-label="Tambah shot" disabled={props.locked} onClick={actions.addShot}><Plus /> Shot</Button>
         )}
       </div>

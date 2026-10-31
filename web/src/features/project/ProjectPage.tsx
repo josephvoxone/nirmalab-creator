@@ -17,6 +17,10 @@ import { TimelineTab } from './TimelineTab.js';
 import { DubTab } from './DubTab.js';
 import { ResultTab } from './ResultTab.js';
 import { useSession } from '../../lib/session.js';
+import { useWorkspaceState } from '../../lib/workspace.js';
+import { ReadOnlyProvider } from './readonly.js';
+import type { Role } from '../../lib/workspaces.js';
+import { RoleBadge } from '../../ui/RoleBadge.js';
 import { AssistantColumn, AssistantSheet, AssistantToggle, useAssistantDock, useDockedInShell } from '../assistant/AssistantDock.js';
 
 const TABS = [
@@ -71,7 +75,7 @@ function PrimaryAction(props: { p: Project }) {
   return <Button size="sm" onClick={onClick} disabled={!!busy}><Icon /> {step.label}</Button>;
 }
 
-function Title(props: { p: Project }) {
+function Title(props: { p: Project; role?: Role; readOnly?: boolean }) {
   const { board } = props.p;
   const [editing, setEditing] = useState(false);
   const [text, setText] = useState(board?.title ?? '');
@@ -87,13 +91,14 @@ function Title(props: { p: Project }) {
       className="h-8 min-w-0 flex-1 rounded-md border border-input bg-(--field) px-2 text-[17px] font-medium outline-none focus-visible:border-ring" />
   ) : (
     <div className="flex min-w-0 items-center gap-1">
-      <h2 className="truncate text-[17px] font-medium">{board.title}</h2>
-      <Button size="icon-xs" variant="ghost" aria-label="Ubah judul" onClick={() => setEditing(true)}><Pencil /></Button>
+      <h2 className="truncate text-[17px] font-medium text-balance">{board.title}</h2>
+      {props.role && <RoleBadge role={props.role} />}
+      {!props.readOnly && <Button size="icon-xs" variant="ghost" aria-label="Ubah judul" onClick={() => setEditing(true)}><Pencil /></Button>}
     </div>
   );
 }
 
-function Banners(props: { p: Project }) {
+function Banners(props: { p: Project; readOnly?: boolean }) {
   const { error, budget, stale, story, notice } = props.p;
   return (
     <>
@@ -105,8 +110,8 @@ function Banners(props: { p: Project }) {
       {budget && (
         <div role="alert" className="flex flex-wrap items-center gap-2 rounded-md bg-(--brand-muted) px-3 py-2 text-[12.5px]">
           <span className="min-w-0 flex-1">Kredit Flow tidak cukup: {budget.message}</span>
-          <Button size="sm" variant="glass" onClick={() => void props.p.render(budget.scope, true)}>Render tetap</Button>
-          <Button size="sm" variant="ghost" onClick={props.p.dismiss}>Batal</Button>
+          {!props.readOnly && <Button size="sm" variant="glass" onClick={() => void props.p.render(budget.scope, true)}>Render tetap</Button>}
+          <Button size="sm" variant="ghost" onClick={props.p.dismiss}>{props.readOnly ? 'Tutup' : 'Batal'}</Button>
         </div>
       )}
       {error && (
@@ -152,6 +157,11 @@ export function ProjectPage(props: { pollMs?: number }) {
   const tab = (TABS.find(t => t.id === params.get('tab'))?.id ?? 'scene') as TabId;
   const choose = (t: TabId) => setParams(prev => { const n = new URLSearchParams(prev); n.set('tab', t); return n; }, { replace: true });
   const dock = useAssistantDock();
+  const workspace = useWorkspaceState();
+  const role = workspace.roleFor(p.story?.workspaceId);
+  // A viewer reads the project: the write affordances are hidden and one line says why (the
+  // server still answers 403 VIEWER_READ_ONLY to any write that slips through).
+  const viewer = role === 'viewer';
   // The assistant (chat, MCP, uploads) is admin-only on the server: members get no panel at all.
   const assistant = useSession().user.isAdmin;
   // In the app shell the column docks beside `main` (full height); the page keeps its own width.
@@ -183,23 +193,29 @@ export function ProjectPage(props: { pollMs?: number }) {
   const columnShown = assistant && dock.wide && dock.open && !docked;
   return (
     <ProjectProvider value={p}>
+      <ReadOnlyProvider value={viewer}>
       {/* With the assistant column beside them the tabs keep about the same ~1100 px (the shell's
           .content widens to match through `data-assistant-column`, see app.css). */}
       <div data-assistant-column={columnShown || undefined} className={cn('mx-auto flex w-full items-start gap-4', columnShown ? 'max-w-[1520px]' : 'max-w-[1200px]')}>
         <div className="flex min-w-0 flex-1 flex-col gap-3">
           <div className="flex flex-wrap items-start gap-3">
             <div className="flex min-w-[min(100%,14rem)] flex-1 flex-col gap-0.5">
-              <Title p={p} />
+              <Title p={p} role={role} readOnly={viewer} />
               {p.board.logline && <p className="text-[12.5px] text-muted-foreground">{p.board.logline}</p>}
             </div>
-            <PrimaryAction p={p} />
+            {!viewer && <PrimaryAction p={p} />}
             {assistant && <AssistantToggle dock={dock} />}
           </div>
           <div className="flex flex-wrap items-center gap-3 border-b pb-2">
             <StageBar p={p} />
             <span className="ml-auto flex items-center gap-1 text-[11.5px] text-muted-foreground"><Sparkles className="size-3" /> {p.story.mode === 'konsisten' ? 'Mode konsisten' : 'Mode cepat'} · {p.board.aspect ?? '9:16'}</span>
           </div>
-          <Banners p={p} />
+          {viewer && (
+            <p role="status" className="rounded-md bg-muted px-3 py-2 text-[12.5px] text-muted-foreground text-pretty">
+              Kamu Penonton di workspace ini — proyek bisa dibaca dan diputar, tapi tidak bisa diubah, dirakit, atau dirender. Minta Pemilik menaikkan peranmu untuk mengubah.
+            </p>
+          )}
+          <Banners p={p} readOnly={viewer} />
           <div role="tablist" aria-label="Bagian proyek" className="flex gap-1 overflow-x-auto [scrollbar-width:none]">
             {TABS.map(t => (
               <button key={t.id} type="button" role="tab" id={`ptab-${t.id}`} aria-controls={`ppanel-${t.id}`} aria-selected={tab === t.id} onClick={() => choose(t.id)}
@@ -222,6 +238,7 @@ export function ProjectPage(props: { pollMs?: number }) {
         {assistant && <AssistantColumn dock={dock} story={p.story} board={p.board} onChanged={p.reload} />}
       </div>
       {assistant && <AssistantSheet dock={dock} story={p.story} board={p.board} onChanged={p.reload} />}
+      </ReadOnlyProvider>
     </ProjectProvider>
   );
 }

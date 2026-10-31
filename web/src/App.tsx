@@ -2,6 +2,7 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useState, type ReactNo
 import { BrowserRouter, MemoryRouter, Navigate, Route, Routes, useLocation, useNavigate, useParams, type Location } from 'react-router-dom';
 import { authApi, type FetchLike, type User } from './lib/api.js';
 import { SessionContext, type Session } from './lib/session.js';
+import { WorkspaceProvider } from './lib/workspace.js';
 import { LoginPage } from './features/auth/LoginPage.js';
 import { JoinPage } from './features/auth/JoinPage.js';
 import { Layout } from './shell/Layout.js';
@@ -115,7 +116,9 @@ function Routed(props: { fetchImpl: FetchLike }) {
       ) : (
         <Route path="*" element={
           <SessionContext.Provider value={session}>
-            <Shell fetchImpl={fetchImpl} pending={!session} />
+            <WorkspaceProvider>
+              <Shell fetchImpl={fetchImpl} pending={!session} />
+            </WorkspaceProvider>
           </SessionContext.Provider>
         } />
       )}

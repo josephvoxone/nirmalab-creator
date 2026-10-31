@@ -14,6 +14,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { useSession } from '../lib/session.js';
 import { useHistory } from './history.js';
 import { SidebarQuota } from './Quota.js';
+import { WorkspaceSwitch } from './WorkspaceSwitch.js';
 import { STATUS_LABEL, isActive, type Story } from '../features/stories/storiesClient.js';
 
 type NavItem = { to: string; label: string; hint?: string; icon: LucideIcon };
@@ -116,6 +117,7 @@ function AccountMenu() {
         </DropdownMenuGroup>
         <DropdownMenuSeparator />
         <DropdownMenuItem onClick={() => open('umum')}><Settings /> Pengaturan</DropdownMenuItem>
+        <DropdownMenuItem onClick={() => open('anggota-workspace')}><Users /> Anggota workspace</DropdownMenuItem>
         {user.isAdmin && (
           <>
             <DropdownMenuSeparator />
@@ -202,6 +204,7 @@ export function Layout(props: { title: string; actions?: ReactNode; children: Re
             <span className="text-sm font-medium">Creator</span>
             <IconButton label="Tutup sidebar" className="ml-auto" onClick={() => setOpen(false)}><PanelLeft /></IconButton>
           </div>
+          <WorkspaceSwitch />
           <nav aria-label="Menu utama" className="flex min-h-0 flex-1 flex-col">
             <div className="flex flex-col gap-px px-1.5">
               <SideLink to="/" end icon={SquarePen} hint="Tulis prompt, jadi film pendek" onPick={pick}>Buat baru</SideLink>

@@ -15,6 +15,7 @@ import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle
 } from '@/components/ui/alert-dialog';
 import { useSession } from '../../lib/session.js';
+import { useReadOnly } from './readonly.js';
 import { sized } from '../../lib/media.js';
 import { Choice, inputClass, textareaClass } from '../../ui/controls.js';
 import { CREDITS_PER_SHOT, storiesApi } from '../stories/storiesClient.js';
@@ -201,7 +202,8 @@ export function BreakdownTab() {
   const engines = useEngines(fetchImpl);
   const { board, story } = p;
   if (!board || !story) return null;
-  const locked = ['casting', 'framing', 'rendering', 'assembling'].includes(story.status);
+  const readOnly = useReadOnly();
+  const locked = readOnly || ['casting', 'framing', 'rendering', 'assembling'].includes(story.status);
   const castState = new Map((story.cast ?? []).map(c => [c.token, c]));
 
   const bible = !!board.bible;
@@ -276,7 +278,7 @@ export function BreakdownTab() {
       </p>
       <div className="grid gap-3 lg:grid-cols-2">
         <Section id="bd-cast" title="Karakter" hint="Satu lembar referensi per karakter menjaga wajah dan kostum sama di semua shot."
-          action={<Button size="sm" variant="glass" disabled={locked || adding === 'karakter'} onClick={() => setAdding('karakter')}><Plus /> Tambah karakter</Button>}>
+          action={readOnly ? undefined : <Button size="sm" variant="glass" disabled={locked || adding === 'karakter'} onClick={() => setAdding('karakter')}><Plus /> Tambah karakter</Button>}>
           {adding === 'karakter' && <AddForm kind="karakter" anchors={bible} onAdd={bible ? addCard : addCharacter} onCancel={() => setAdding(undefined)} />}
           {bible ? bibleCast : characters.length === 0 ? (
             <p className="text-[12.5px] text-muted-foreground">Belum ada karakter. Cerita faceless boleh tanpa karakter; untuk tokoh berulang, tambahkan di sini lalu tulis TOKEN-nya (mis. <code>BU_SARI</code>) di prompt shot.</p>
@@ -301,7 +303,7 @@ export function BreakdownTab() {
         </Section>
 
         <Section id="bd-loc" title="Lokasi" hint="Setting yang sama untuk semua shot dalam scene yang memakainya."
-          action={<Button size="sm" variant="glass" disabled={locked || adding === 'lokasi'} onClick={() => setAdding('lokasi')}><Plus /> Tambah lokasi</Button>}>
+          action={readOnly ? undefined : <Button size="sm" variant="glass" disabled={locked || adding === 'lokasi'} onClick={() => setAdding('lokasi')}><Plus /> Tambah lokasi</Button>}>
           {adding === 'lokasi' && <AddForm kind="lokasi" onAdd={addLocation} onCancel={() => setAdding(undefined)} />}
           {locations.length === 0 ? (
             <p className="text-[12.5px] text-muted-foreground">Belum ada lokasi. Tambahkan lalu pilih lokasinya di tiap scene supaya latar tidak berubah-ubah.</p>

@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { requestJson } from '../lib/api.js';
 import { SessionContext } from '../lib/session.js';
+import { useWorkspaceState } from '../lib/workspace.js';
 import type { Story } from '../features/stories/storiesClient.js';
 
 /** The sidebar's history, like a chat list: every page can ask it to refresh after creating a story. */
@@ -11,6 +12,7 @@ const HistoryContext = createContext<History>({ reload: () => undefined });
 export function HistoryProvider(props: { children: ReactNode; pollMs?: number }) {
   // No session yet (the shell renders while /api/auth/me is pending): stay in the loading state.
   const fetchImpl = useContext(SessionContext)?.fetchImpl;
+  const workspaceId = useWorkspaceState().current?.id;
   const [stories, setStories] = useState<Story[]>();
   const [error, setError] = useState<unknown>();
   const [tick, setTick] = useState(0);
@@ -19,12 +21,12 @@ export function HistoryProvider(props: { children: ReactNode; pollMs?: number })
   useEffect(() => {
     if (!fetchImpl) return;
     let alive = true;
-    requestJson<{ stories: Story[] }>(fetchImpl, '/api/stories').then(
+    requestJson<{ stories: Story[] }>(fetchImpl, workspaceId ? `/api/stories?workspace=${encodeURIComponent(workspaceId)}` : '/api/stories').then(
       r => { if (alive) { setStories([...(Array.isArray(r?.stories) ? r.stories : [])].sort((a, b) => b.updatedAtMs - a.updatedAtMs)); setError(undefined); } },
       e => alive && setError(e)
     );
     return () => { alive = false; };
-  }, [fetchImpl, tick]);
+  }, [fetchImpl, tick, workspaceId]);
 
   useEffect(() => {
     const ms = props.pollMs ?? 20_000;

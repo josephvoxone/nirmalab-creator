@@ -23,6 +23,7 @@ import { SecondsField, Segmented, fmtSeconds, textareaClass } from '../../ui/con
 import { Slider } from '@/components/ui/slider';
 import { Switch } from '@/components/ui/switch';
 import { useSession } from '../../lib/session.js';
+import { useReadOnly } from './readonly.js';
 import { storiesApi } from '../stories/storiesClient.js';
 import { fmtDuration, moveShot, type Board } from './model.js';
 import { media, useProject } from './useProject.js';
@@ -347,6 +348,7 @@ export function TimelineTab() {
   const { id, story, board } = p;
   const { fetchImpl } = useSession();
   const api = useMemo(() => storiesApi(fetchImpl), [fetchImpl]);
+  const readOnly = useReadOnly();
   const [zoom, setZoom] = useState<Zoom>('100');
   // A trim being dragged/keyed: shown live, saved once (COMMIT_MS after the last key, or on release).
   const [draft, setDraft] = useState<{ shotId: string; trim: Trim }>();
@@ -456,7 +458,7 @@ export function TimelineTab() {
       </div>
 
       <div className="glass-panel flex min-w-0 flex-col rounded-lg">
-        <div className="flex flex-wrap items-center gap-2 border-b border-border/60 px-2.5 py-1.5">
+        <div className={cn('flex flex-wrap items-center gap-2 border-b border-border/60 px-2.5 py-1.5', readOnly && 'hidden')}>
           <Clapperboard className="size-3.5 text-muted-foreground" />
           <span className="text-[12px] text-muted-foreground tabular-nums">{layout.scenes.length} scene · {layout.clips.length} shot · {formatSeconds(layout.total)}</span>
           <span className="hidden text-[11px] text-muted-foreground sm:inline">· Drag klip untuk urutan, tepinya untuk trim</span>

@@ -4,6 +4,7 @@ import { LimitsDialog, RemoveMemberDialog, StorageTab } from './AdminPanels.js';
 import { ConnectionsPanel } from './ConnectionsPanel.js';
 import { IntegrationsPanel } from './IntegrationsPanel.js';
 import { ProviderPanel } from './ProviderPanel.js';
+import { WorkspaceMembersPanel } from './WorkspaceMembers.js';
 import { cn } from '@/lib/utils';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -18,11 +19,12 @@ import {
 } from './settingsClient.js';
 
 type Api = ReturnType<typeof settingsApi>;
-export type SettingsTab = 'umum' | 'akun' | 'anggota' | 'penggunaan' | 'penyimpanan' | 'flow' | 'provider' | 'integrasi' | 'koneksi';
+export type SettingsTab = 'umum' | 'akun' | 'anggota-workspace' | 'anggota' | 'penggunaan' | 'penyimpanan' | 'flow' | 'provider' | 'integrasi' | 'koneksi';
 
 export const TABS: Array<{ id: SettingsTab; label: string; icon: typeof Users; admin?: boolean }> = [
   { id: 'umum', label: 'Umum', icon: Settings2 },
   { id: 'akun', label: 'Akun', icon: UserRound },
+  { id: 'anggota-workspace', label: 'Anggota workspace', icon: Users },
   { id: 'anggota', label: 'Anggota', icon: Users, admin: true },
   { id: 'penggunaan', label: 'Penggunaan', icon: Gauge, admin: true },
   { id: 'penyimpanan', label: 'Penyimpanan', icon: HardDrive, admin: true },
@@ -685,6 +687,7 @@ export default function SettingsPage(props: { tab?: SettingsTab; onTab?: (tab: S
       <div role="tabpanel" id={`panel-${own}`} aria-labelledby={`tab-${own}`} className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto p-4 md:p-5 [scrollbar-width:thin]">
         {own === 'umum' && <GeneralTab />}
         {own === 'akun' && <AccountTab api={api} />}
+        {own === 'anggota-workspace' && <WorkspaceMembersPanel />}
         {own === 'anggota' && <><MembersCard api={api} /><InvitesCard api={api} /></>}
         {own === 'penggunaan' && <UsageTab api={api} />}
         {own === 'penyimpanan' && <StorageTab api={api} />}

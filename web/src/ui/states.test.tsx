@@ -35,7 +35,8 @@ describe('shared states', () => {
   it('describeError maps causes to human Indonesian with the next step', () => {
     expect(describeError(new TypeError('Failed to fetch'))).toMatch(/koneksi/i);
     expect(describeError(new ApiError(401, 'Unauthorized', 'UNAUTHORIZED'))).toMatch(/masuk lagi/i);
-    expect(describeError(new ApiError(403, 'Forbidden', 'FORBIDDEN'))).toMatch(/admin/i);
+    expect(describeError(new ApiError(403, 'Forbidden', 'FORBIDDEN'))).toMatch(/izin/i);
+    expect(describeError(new ApiError(403, 'Penonton tidak bisa mengubah', 'VIEWER_READ_ONLY'))).toMatch(/Penonton/i);
     expect(describeError(new ApiError(404, 'Story not found', 'NOT_FOUND'))).toMatch(/tidak ditemukan/i);
     expect(describeError(new ApiError(503, 'Pollinations down', 'STORY_FAILED'))).toMatch(/Pollinations down/);
   });

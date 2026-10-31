@@ -11,6 +11,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useSession } from '../../lib/session.js';
+import { useReadOnly } from './readonly.js';
 import { Choice, Segmented, inputClass } from '../../ui/controls.js';
 import { EmptyState, ErrorState, LoadingState, describeError } from '../../ui/states.js';
 import { dubApi, fmtCredits, fmtRatio, STATUS_TEXT, type DubPlan, type DubScope, type DubShot, type DubState, type Voice } from './dubClient.js';
@@ -88,7 +89,8 @@ export function DubTab() {
   const voiceOptions = [...(voices ?? []).map(v => ({ value: v.id, label: v.name, hint: [v.gender, v.age, v.category].filter(Boolean).join(' · ') || undefined })),
     ...(dub.settings.voiceId && !(voices ?? []).some(v => v.id === dub.settings.voiceId) ? [{ value: dub.settings.voiceId, label: dub.settings.voiceId, hint: undefined }] : [])];
   const t = dub.totals;
-  const lock = !canEdit;
+  const readOnly = useReadOnly();
+  const lock = !canEdit || readOnly;
   // Text without a fresh dub, in a project that already has dubs: those shots are silent in the video.
   const hasDubs = dub.shots.some(s => !s.skipped && (s.status === 'done' || s.status === 'stale'));
   const silent = hasDubs && t.active === 0 ? dub.shots.filter(s => !s.skipped && (s.status === 'none' || s.status === 'stale' || s.status === 'failed')) : [];
@@ -166,10 +168,12 @@ export function DubTab() {
       <section aria-label="Ringkasan" className="flex flex-wrap items-center gap-3 rounded-md bg-muted/50 px-3 py-2">
         <p className="text-[13px] text-foreground tabular-nums">{t.done}/{t.dubbable} shot sudah di-dub{t.stale ? ` · ${t.stale} perlu diulang` : ''}{t.failed ? ` · ${t.failed} gagal` : ''} · {t.chars.toLocaleString('id-ID')} karakter</p>
         {t.active > 0 && <p role="status" className="text-[12.5px] text-muted-foreground tabular-nums">{t.active} shot sedang diproses…</p>}
-        <span className="ml-auto flex items-center gap-2">
-          {t.active > 0 && !lock && <Button size="sm" variant="ghost" disabled={busy === 'cancel'} onClick={() => void run('cancel', () => api.cancel(p.id))}>Batalkan antrean</Button>}
-          {!lock && <Button size="sm" variant="glass" data-strong="" disabled={busy !== undefined || !dub.configured || !dub.settings.voiceId} onClick={() => void ask({ kind: 'all' }, 'semua')}><AudioLines /> Dub semua yang belum</Button>}
-        </span>
+        {!readOnly && (
+          <span className="ml-auto flex items-center gap-2">
+            {t.active > 0 && !lock && <Button size="sm" variant="ghost" disabled={busy === 'cancel'} onClick={() => void run('cancel', () => api.cancel(p.id))}>Batalkan antrean</Button>}
+            {!lock && <Button size="sm" variant="glass" data-strong="" disabled={busy !== undefined || !dub.configured || !dub.settings.voiceId} onClick={() => void ask({ kind: 'all' }, 'semua')}><AudioLines /> Dub semua yang belum</Button>}
+          </span>
+        )}
       </section>
       {silent.length > 0 && <p role="status" className="rounded-md bg-muted px-3 py-2 text-[12.5px] text-foreground">Shot {silent.map(s => s.shotId).join(', ')} punya teks tapi belum punya dub terbaru: di video, shot itu akan sunyi sampai di-dub.</p>}
       {p.story?.videoStale && t.done > 0 && <p role="status" className="text-[12.5px] text-muted-foreground">Dubbing berubah. Rakit ulang video di tab Hasil agar suaranya ikut.</p>}

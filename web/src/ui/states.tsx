@@ -11,8 +11,9 @@ import './states.css';
 export function describeError(error: unknown): string {
   if (error instanceof ApiError) {
     if (error.status === 401) return 'Sesi berakhir. Silakan masuk lagi.';
-    if (error.status === 403) return 'Hanya admin yang bisa melakukan ini.';
-    if (error.status === 404) return 'Data tidak ditemukan. Mungkin sudah dihapus.';
+    if (error.code === 'VIEWER_READ_ONLY') return 'Kamu Penonton di workspace ini, jadi tidak bisa mengubah proyek. Minta Pemilik menaikkan peranmu ke Editor.';
+    if (error.status === 403) return 'Kamu tidak punya izin untuk tindakan ini di workspace ini.';
+    if (error.status === 404) return 'Tidak ditemukan. Mungkin sudah dihapus, atau kamu bukan anggota workspace ini.';
     if (error.status === 409) return error.message;
     if (error.status >= 500) return `Server sedang bermasalah: ${error.message}. Coba lagi sebentar.`;
     return error.message;
