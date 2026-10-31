@@ -44,7 +44,8 @@ class EndToEnd(unittest.TestCase):
         d = tempfile.mkdtemp(prefix='asm-hold-')
         try:
             final, log = self.build(d, 6.5)             # window 3.5 s; 6.5 s / 1.25 = 5.2 s -> hold 2.05 s
-            self.assertAlmostEqual(self.duration(final), 4.0 + 2.05, delta=0.15)
+            # the voice ends 0.2 s before the picture does: the closing fade (0.6 s) needs 0.55 s more after it
+            self.assertAlmostEqual(self.duration(final), 4.0 + 2.05 + 0.55, delta=0.15)
             f, m = spectrum(final, 4.6, 5.3)            # past the end of the 4 s clip: the voice must still be speaking
             self.assertGreater(level(f, m, 880), 5.0, 'the end of the closing line was cut')
         finally:

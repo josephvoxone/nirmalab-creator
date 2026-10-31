@@ -291,9 +291,29 @@ def tail_hold(seconds, window, max_tempo=MAX_DUB_TEMPO, breath=0.35):
     return round(seconds / max_tempo - window + breath, 2)
 
 
+FADE_OUT = 1.2        # the closing fade to black, when nothing is being said
+FADE_OUT_MIN = 0.6    # the shortest closing fade that still reads as a fade
+CLOSING_PAD = 0.15    # quiet between the last word of the closing line and the start of the fade
+
+
+def closing_fade(total, voice_end=None):
+    """(start, length, extra hold) of the closing fade on the output clock.
+
+    Without a closing voice it is the last FADE_OUT seconds, as it always was.  With one (`voice_end`: when the closing
+    dub stops, on the same clock) the fade never starts before CLOSING_PAD after it, and the timeline grows by `extra`
+    when that leaves less than FADE_OUT_MIN: audio and video fade together and the last word keeps its level.
+    """
+    start = round(total - FADE_OUT, 3)
+    if voice_end is None:
+        return start, FADE_OUT, 0.0
+    start = round(max(start, voice_end + CLOSING_PAD), 3)
+    extra = round(max(0.0, start + FADE_OUT_MIN - total), 3)
+    return start, round(min(FADE_OUT, total + extra - start), 3), extra
+
+
 def filter_graph(durations, xf, transitions=None, title_input=None, total=None,
                  clip_volume=None, music_input=None, music=None, subtitles=None, fonts_dir=None, zooms=None,
-                 streams='av', zoom_ys=None, dubs=None, tail_hold=0.0):
+                 streams='av', zoom_ys=None, dubs=None, tail_hold=0.0, voice_end=None):
     """One ffmpeg filter graph.  streams: 'av' (both), 'v' (video chain only) or 'a' (audio chain only).
 
     Production renders 'v' and 'a' in two ffmpeg runs: in one graph, ffmpeg 5.1 reads every clip to feed the
@@ -350,7 +370,8 @@ def filter_graph(durations, xf, transitions=None, title_input=None, total=None,
         if subtitles:
             video += f"subtitles=filename={subtitles}:fontsdir={fonts_dir or DEJAVU_DIR},"
         if total:
-            video += f'fade=t=in:st=0:d=0.8,fade=t=out:st={round(total - 1.2, 3)}:d=1.2,'
+            fo_st, fo_d, _ = closing_fade(total, voice_end)
+            video += f'fade=t=in:st=0:d=0.8,fade=t=out:st={fo_st}:d={fo_d},'
         parts.append(video.rstrip(',') + '[vout]' if video not in (f'[{vprev}]', '[vt]') else video + 'null[vout]')
     if not want_a:
         return ';'.join(parts)
@@ -379,7 +400,8 @@ def filter_graph(durations, xf, transitions=None, title_input=None, total=None,
             parts.append('[clipa][mus]amix=inputs=2:duration=first:normalize=0[mixa]')
         audio = '[mixa]'
     if total:
-        audio += f'afade=t=in:st=0:d=0.6,afade=t=out:st={round(total - 1.2, 3)}:d=1.2,'
+        fo_st, fo_d, _ = closing_fade(total, voice_end)
+        audio += f'afade=t=in:st=0:d=0.6,afade=t=out:st={fo_st}:d={fo_d},'
     audio += 'loudnorm=I=-14:TP=-1.5:LRA=11:linear=true,alimiter=limit=0.794:level=disabled,aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo'
     parts.append(audio + '[aout]')
     return ';'.join(parts)
@@ -464,6 +486,7 @@ def main(arg):
     else:
         music = None
     dubs, warnings, last_hold = [], [], 0.0
+    closing = None   # (dub seconds, tempo, window) of the closing line: the closing fade waits for its last word
     karaoke = {}   # shot index -> (tempo, words, window when the dub is cut)
     for i, shot in enumerate(story['shots']):
         d = shot.get('dub')
@@ -490,12 +513,22 @@ def main(arg):
             warnings.append(f"{shot['id']}: dub {seconds:.1f}s does not fit the {window:.1f}s window even at {tempo}x: the end is cut")
         elif tempo > 1.0:
             warnings.append(f"{shot['id']}: dub {seconds:.1f}s sped up {tempo:.2f}x to fit the {window:.1f}s window")
+        if i == len(durations) - 1:
+            closing = (seconds, tempo, window)
         if d.get('words'):
             karaoke[i] = (tempo, d['words'], window if cut else None)
         idx = sum(1 for a in inputs if a == '-i')
         inputs += ['-i', dub_file]
         dubs.append({'input': idx, 'tempo': round(tempo, 3), 'lead': DUB_LEAD, 'cut': cut,
                      **({'keep': DUB_AMBIENT} if edit.get('dubKeepAmbient') else {})})
+    voice_end = None
+    if closing:
+        seconds, tempo, window = closing
+        voice_end = shot_starts(durations, xf)[-1] + DUB_LEAD + min(seconds / tempo, window)
+        extra = closing_fade(round(sum(durations) - xf * (len(durations) - 1), 3), voice_end)[2]
+        if extra:   # the fade would otherwise have to start inside the last word: the picture waits a moment longer
+            last_hold = round(last_hold + extra, 3)
+            durations[-1] = round(durations[-1] + extra, 3)
     subs_dir, subs = None, None
     if edit.get('subtitles'):
         texts = [s.get('narration', '') or '' for s in story['shots']]
@@ -515,7 +548,7 @@ def main(arg):
                                                                 size=edit.get('subtitleSize'), y=edit.get('subtitleY')))
     total = round(sum(durations) - xf * (len(durations) - 1), 3)
     graph_args = dict(title_input=title_input, total=total, clip_volume=edit.get('clipVolume'),
-                      music_input=music_input, music=music, subtitles=subs, tail_hold=last_hold,
+                      music_input=music_input, music=music, subtitles=subs, tail_hold=last_hold, voice_end=voice_end,
                       fonts_dir=FONTS_DIR if edit.get('subtitleStyle') == HANDWRITTEN else None, zooms=zooms, zoom_ys=zoom_ys, dubs=dubs)
     vgraph = filter_graph(durations, xf, transitions[1:], streams='v', **graph_args)
     agraph = filter_graph(durations, xf, transitions[1:], streams='a', **graph_args)
