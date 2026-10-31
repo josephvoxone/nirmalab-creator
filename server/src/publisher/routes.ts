@@ -19,6 +19,11 @@ export type PublisherRouteOptions = {
    * `stories/caption.ts` writes the hook formula). Read-only; publishing stays admin.
    */
   resolveStoryPreview?: (id: string) => Promise<{ title: string; caption: string } | undefined>;
+  /**
+   * Is this user the owner of the story? Asked BEFORE anything about the story is resolved or any token is read;
+   * `false` answers exactly like a story that does not exist (404). Required: there is no "allow everyone" default.
+   */
+  canAccessStory: (storyId: string, user: { id: string; email: string; isAdmin: boolean }) => Promise<boolean>;
 };
 
 const STORY_ID = /^story_[a-f0-9]{16}$/;
@@ -32,6 +37,8 @@ export function callbackErrorMessage(platform: PublisherPlatform, error: unknown
   const name = PLATFORM_NAME[platform];
   const code = error instanceof PublisherError ? error.code : '';
   if (code === 'OAUTH_DENIED') return `Izin akses ditolak di ${name}. Coba hubungkan lagi dan setujui izinnya.`;
+  if (code === 'STATE_NOT_YOURS') return `Tautan ini dimulai dari akun lain. Masuk dengan akun yang menghubungkan ${name}, lalu coba lagi.`;
+  if (code === 'LOGIN_REQUIRED') return `Kamu belum masuk. Masuk ke Nirmalab Creator dulu, lalu hubungkan ${name} lagi.`;
   if (code === 'INVALID_STATE' || code === 'INVALID_INPUT') return `Sesi login ${name} kedaluwarsa atau tidak lengkap. Coba hubungkan lagi.`;
   if (code === 'NOT_CONFIGURED') return `Aplikasi developer ${name} belum diatur di server.`;
   if (code === 'OAUTH_FAILED' && error instanceof Error && /no Page/i.test(error.message)) {
@@ -69,27 +76,29 @@ export async function registerPublisherRoutes(server: FastifyInstance, options: 
   server.get('/api/publish/status', async (request, reply) => {
     const user = sessionUser(userAuthStore, request);
     if (!user) return reply.code(401).send({ error: { code: 'UNAUTHORIZED', message: 'Unauthorized' } });
-    return { publishers: await service.statuses() };
+    return { publishers: await service.statuses(user.id) };
   });
 
   // The publish preview: title + a caption generated from the story's own facts. Read-only and
-  // available to members; the publish call itself stays admin-only.
+  // available to the story's owner only (anyone else gets the same 404 as for a missing story); the publish call itself stays admin-only.
   server.get<{ Params: { storyId: string } }>('/api/publish/preview/:storyId', async (request, reply) => {
     const user = sessionUser(userAuthStore, request);
     if (!user) return reply.code(401).send({ error: { code: 'UNAUTHORIZED', message: 'Unauthorized' } });
     const storyId = request.params.storyId;
     if (!STORY_ID.test(storyId)) return reply.code(400).send({ error: { code: 'INVALID_INPUT', message: 'Invalid storyId' } });
+    if (!(await options.canAccessStory(storyId, user))) return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Video cerita belum selesai' } });
     const preview = options.resolveStoryPreview ? await options.resolveStoryPreview(storyId) : undefined;
     if (!preview) return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Video cerita belum selesai' } });
     return { title: preview.title, caption: preview.caption };
   });
 
   server.post<{ Params: { platform: string } }>('/api/publish/:platform/connect', async (request, reply) => {
-    if (!requireAdmin(userAuthStore, request, reply)) return undefined;
+    const user = requireAdmin(userAuthStore, request, reply);
+    if (!user) return undefined;
     const platform = request.params.platform as PublisherPlatform;
     if (!PLATFORMS.includes(platform)) return reply.code(404).send({ error: { code: 'UNKNOWN_PLATFORM', message: 'Unknown platform' } });
     try {
-      return service.connectUrl(platform);
+      return service.connectUrl(user.id, platform);
     } catch (error) {
       return sendPublisherError(reply, error);
     }
@@ -104,7 +113,8 @@ export async function registerPublisherRoutes(server: FastifyInstance, options: 
       };
       if (!PLATFORMS.includes(platform)) return reply.code(404).send({ error: { code: 'UNKNOWN_PLATFORM', message: 'Unknown platform' } });
       try {
-        await service.handleCallback(platform, request.query);
+        // Public route (the provider redirects the browser): the session cookie must belong to the user who started the flow.
+        await service.handleCallback(platform, request.query, sessionUser(userAuthStore, request)?.id);
         done(new URLSearchParams({ connected: platform }));
       } catch (error) {
         done(new URLSearchParams({ platform, error: callbackErrorMessage(platform, error) }));
@@ -116,7 +126,8 @@ export async function registerPublisherRoutes(server: FastifyInstance, options: 
     '/api/publish/:platform/publish',
     async (request, reply) => {
       // Admin only: a raw filePath is never accepted from non-admin callers.
-      if (!requireAdmin(userAuthStore, request, reply)) return undefined;
+      const user = requireAdmin(userAuthStore, request, reply);
+      if (!user) return undefined;
       const platform = request.params.platform as PublisherPlatform;
       if (!PLATFORMS.includes(platform)) return reply.code(404).send({ error: { code: 'UNKNOWN_PLATFORM', message: 'Unknown platform' } });
       const schedule = parsePublishAt(platform, request.body?.publishAt, Date.now());
@@ -127,6 +138,7 @@ export async function registerPublisherRoutes(server: FastifyInstance, options: 
         if (typeof storyId !== 'string' || !STORY_ID.test(storyId)) {
           return reply.code(400).send({ error: { code: 'INVALID_INPUT', message: 'Invalid storyId' } });
         }
+        if (!(await options.canAccessStory(storyId, user))) return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Video cerita belum selesai' } });
         const resolved = options.resolveStoryVideo ? await options.resolveStoryVideo(storyId) : undefined;
         if (!resolved) return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Video cerita belum selesai' } });
         filePath = resolved;
@@ -141,7 +153,7 @@ export async function registerPublisherRoutes(server: FastifyInstance, options: 
         return reply.code(400).send({ error: { code: 'INVALID_INPUT', message: 'storyId (or filePath) and title are required' } });
       }
       try {
-        return await service.publish(platform, {
+        return await service.publish(user.id, platform, {
           filePath, title, description, visibility,
           ...(schedule.publishAt ? { publishAt: schedule.publishAt } : {})
         });
@@ -152,10 +164,11 @@ export async function registerPublisherRoutes(server: FastifyInstance, options: 
   );
 
   server.post<{ Params: { platform: string } }>('/api/publish/:platform/disconnect', async (request, reply) => {
-    if (!requireAdmin(userAuthStore, request, reply)) return undefined;
+    const user = requireAdmin(userAuthStore, request, reply);
+    if (!user) return undefined;
     const platform = request.params.platform as PublisherPlatform;
     if (!PLATFORMS.includes(platform)) return reply.code(404).send({ error: { code: 'UNKNOWN_PLATFORM', message: 'Unknown platform' } });
-    await service.disconnect(platform);
+    await service.disconnect(user.id, platform);
     return { ok: true };
   });
 }

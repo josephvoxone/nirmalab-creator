@@ -7,7 +7,7 @@ import { registerAuthRoutes } from './auth/routes.js';
 import { UserAuthStore } from './auth/store.js';
 import { registerFlowRoutes } from './flow/routes.js';
 import { registerFreeGenerateRoutes } from './generate/routes.js';
-import { PublisherService, registerPublisherRoutes } from './publisher/index.js';
+import { PublisherService, isStoryOwner, migratePublisherTokensAtBoot, registerPublisherRoutes, resolveMainOwner } from './publisher/index.js';
 import { FlowStore } from './flow/store.js';
 import { pollinationsText } from './generate/pollinations.js';
 import type { TextGenerator } from './stories/draft.js';
@@ -218,10 +218,19 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
       server.log.error({ err: error }, 'tenancy: penetapan pemilik gagal (server tetap jalan; TENANCY_ENFORCE=1 menghentikan boot)');
     }
   }
+  // T7 (publisher): tokens saved before per-user storage were one global file per platform. Hand them to the main
+  // owner (backup + manifest + rollback; no-op once done) BEFORE the routes can answer a status request.
+  await migratePublisherTokensAtBoot({ dataDir: options.dataDir, users: userAuthStore.listUsers(), env, log: server.log });
+  // Hoisted so the member-removal flow can call `publisherService.revokeAllFor(userId)`.
+  const publisherService = new PublisherService({ dataDir: options.dataDir, env });
   await registerPublisherRoutes(server, {
-    service: new PublisherService({ dataDir: options.dataDir, env }),
+    service: publisherService,
     userAuthStore,
     env,
+    // T7: only the project's owner may preview/publish it (isStoryOwner is the small replaceable decision; the
+    // formal ownership helper of the tenancy area can take its place here).
+    canAccessStory: async (id, user) =>
+      isStoryOwner(await stories.get(id), user.id, resolveMainOwner(userAuthStore.listUsers(), env).owner?.user.id),
     resolveStoryVideo: async id => ((await stories.get(id))?.status === 'done' ? stories.videoPath(id) : undefined),
     // P4: the preview caption comes from the story's own facts, never from a blank field.
     resolveStoryPreview: async id => {

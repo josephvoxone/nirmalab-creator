@@ -140,4 +140,68 @@ describe('ConnectionsPanel (Settings → Koneksi)', () => {
     expect(notice).toHaveTextContent('TikTok gagal terhubung');
     expect(notice).toHaveTextContent(message);
   });
+
+  // ---- T7.6: every user connects their own accounts -------------------------------------------------------------
+
+  it('says the connections are the user\'s own: other people neither see nor use them', async () => {
+    const fetchImpl = fakeFetch(url => url === '/api/publish/status' ? { status: 200, body: statuses({}) } : { status: 404, body: {} });
+    renderPanel(fetchImpl);
+    await within(section()).findByRole('listitem', { name: 'YouTube' });
+    expect(within(section()).getByText(/koneksi ini milikmu sendiri/i)).toHaveTextContent(/pengguna lain tidak (bisa )?(melihat|memakai)/i);
+  });
+
+  it('empty state: with nothing connected it says so and points at Hubungkan (plain Indonesian)', async () => {
+    const fetchImpl = fakeFetch(url => url === '/api/publish/status' ? { status: 200, body: statuses({}) } : { status: 404, body: {} });
+    renderPanel(fetchImpl);
+    await within(section()).findByRole('listitem', { name: 'YouTube' });
+    expect(within(section()).getByText(/belum ada akun yang kamu hubungkan/i)).toBeInTheDocument();
+  });
+
+  it('the empty note disappears as soon as one platform is connected', async () => {
+    const fetchImpl = fakeFetch(url => url === '/api/publish/status' ? { status: 200, body: statuses({ tiktok: true }) } : { status: 404, body: {} });
+    renderPanel(fetchImpl);
+    await within(section()).findByRole('listitem', { name: 'TikTok' });
+    expect(within(section()).queryByText(/belum ada akun yang kamu hubungkan/i)).toBeNull();
+  });
+
+  it('two admins, two sessions: each panel shows only the account that user connected', async () => {
+    const mine = fakeFetch(url => url === '/api/publish/status' ? { status: 200, body: statuses({ youtube: true }) } : { status: 404, body: {} });
+    const other = fakeFetch(url => url === '/api/publish/status' ? { status: 200, body: statuses({}) } : { status: 404, body: {} });
+    const first = renderPanel(mine);
+    expect(await within(section()).findByRole('listitem', { name: 'YouTube' })).toHaveTextContent('Terhubung sebagai youtube-channel');
+    first.unmount();
+    renderPanel(other, { user: { id: 'u2', email: 'bina@nirmalab.com', isAdmin: true } });
+    const yt = await within(section()).findByRole('listitem', { name: 'YouTube' });
+    expect(yt).toHaveTextContent('Belum terhubung');
+    expect(section()).not.toHaveTextContent('youtube-channel');
+    expect(within(yt).getByRole('button', { name: /hubungkan/i })).toBeEnabled();
+    // each panel only ever asks for its own list: no user id or platform-wide query goes out
+    expect(other.mock.calls.map(call => call[0])).toEqual(['/api/publish/status']);
+  });
+
+  it('a callback refused because the link belongs to another account shows that plain message', async () => {
+    const message = 'Tautan ini dimulai dari akun lain. Masuk dengan akun yang menghubungkan YouTube, lalu coba lagi.';
+    const fetchImpl = fakeFetch(url => url === '/api/publish/status' ? { status: 200, body: statuses({}) } : { status: 404, body: {} });
+    renderPanel(fetchImpl, { url: `/pengaturan/koneksi?platform=youtube&error=${encodeURIComponent(message)}` });
+    const notice = await within(section()).findByRole('alert', { name: /hasil koneksi/i });
+    expect(notice).toHaveTextContent('YouTube gagal terhubung');
+    expect(notice).toHaveTextContent(message);
+  });
+
+  it('a member sees plain words for a platform the server has no app for, not env var names', async () => {
+    const fetchImpl = fakeFetch(url => url === '/api/publish/status' ? { status: 200, body: statuses({}) } : { status: 404, body: {} });
+    renderPanel(fetchImpl, { user: { ...admin, isAdmin: false } });
+    const meta = await within(section()).findByRole('listitem', { name: 'Meta' });
+    expect(meta).toHaveTextContent(/belum disiapkan di server/i);
+    expect(meta).toHaveTextContent(/minta admin/i);
+    expect(meta.textContent).not.toMatch(/OPENCREATOR_/);
+  });
+
+  it('the disconnect dialog says it only affects your own connection', async () => {
+    const fetchImpl = fakeFetch(url => url === '/api/publish/status' ? { status: 200, body: statuses({ youtube: true }) } : { status: 404, body: {} });
+    renderPanel(fetchImpl);
+    const yt = await within(section()).findByRole('listitem', { name: 'YouTube' });
+    await userEvent.click(within(yt).getByRole('button', { name: /putuskan/i }));
+    expect(await screen.findByRole('alertdialog')).toHaveTextContent(/koneksi pengguna lain tidak terpengaruh/i);
+  });
 });

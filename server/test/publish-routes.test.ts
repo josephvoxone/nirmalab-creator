@@ -9,7 +9,7 @@ import { buildApp } from '../src/app.js';
 
 const DONE_ID = 'story_0123456789abcdef';
 
-async function setup(resolveStoryVideo?: (id: string) => Promise<string | undefined>) {
+async function setup(resolveStoryVideo?: (id: string) => Promise<string | undefined>, canAccessStory: (id: string, user: { id: string }) => Promise<boolean> = async () => true) {
   const dataDir = mkdtempSync(join(tmpdir(), 'nc-pub-'));
   const userAuthStore = new UserAuthStore(dataDir);
   const admin = await userAuthStore.createUser({ email: 'admin@x.io', password: 'admin-pass-1', isAdmin: true });
@@ -24,10 +24,10 @@ async function setup(resolveStoryVideo?: (id: string) => Promise<string | undefi
   });
   const service = { publish, handleCallback } as unknown as PublisherService;
   const server = Fastify();
-  await registerPublisherRoutes(server, { service, userAuthStore, env: {}, resolveStoryVideo });
+  await registerPublisherRoutes(server, { service, userAuthStore, env: {}, resolveStoryVideo, canAccessStory });
   await server.ready();
   const cookie = (id: string) => `oc_session=${userAuthStore.createSession(id).token}`;
-  return { server, publish, adminCookie: cookie(admin.id), memberCookie: cookie(member.id) };
+  return { server, publish, handleCallback, adminId: admin.id, adminCookie: cookie(admin.id), memberCookie: cookie(member.id) };
 }
 
 const body = { title: 'Kucing Hilang', description: 'desc', visibility: 'public' };
@@ -35,11 +35,11 @@ const body = { title: 'Kucing Hilang', description: 'desc', visibility: 'public'
 describe('publish route with storyId', () => {
   it('publishes a done story by resolving its final video path', async () => {
     const resolve = vi.fn(async (id: string) => (id === DONE_ID ? '/data/stories/story_0123456789abcdef/final.mp4' : undefined));
-    const { server, publish, adminCookie } = await setup(resolve);
+    const { server, publish, adminCookie, adminId } = await setup(resolve);
     const res = await server.inject({ method: 'POST', url: '/api/publish/youtube/publish', headers: { cookie: adminCookie }, payload: { ...body, storyId: DONE_ID } });
     expect(res.statusCode).toBe(200);
     expect(resolve).toHaveBeenCalledWith(DONE_ID);
-    expect(publish).toHaveBeenCalledWith('youtube', {
+    expect(publish).toHaveBeenCalledWith(adminId, 'youtube', {
       filePath: '/data/stories/story_0123456789abcdef/final.mp4',
       title: 'Kucing Hilang',
       description: 'desc',
@@ -67,7 +67,7 @@ describe('publish route with storyId', () => {
   it('ignores a browser filePath when a storyId is given', async () => {
     const { server, publish, adminCookie } = await setup(async () => '/data/final.mp4');
     await server.inject({ method: 'POST', url: '/api/publish/youtube/publish', headers: { cookie: adminCookie }, payload: { ...body, storyId: DONE_ID, filePath: '/etc/passwd' } });
-    expect(publish.mock.calls[0]?.[1]).toMatchObject({ filePath: '/data/final.mp4' });
+    expect(publish.mock.calls[0]?.[2]).toMatchObject({ filePath: '/data/final.mp4' });
   });
 
   it('refuses a raw filePath from a non-admin caller', async () => {
@@ -92,6 +92,14 @@ describe('publish route with storyId', () => {
     expect(res.headers.location).toBe('https://creator.nirmalab.com/pengaturan/koneksi?connected=tiktok');
   });
 
+  it('the public callback hands the service the user of the SESSION cookie (undefined when anonymous)', async () => {
+    const { server, handleCallback, adminCookie, adminId } = await setup(undefined);
+    await server.inject({ url: '/api/publish/youtube/callback?code=c&state=s', headers: { cookie: adminCookie } });
+    await server.inject({ url: '/api/publish/youtube/callback?code=c&state=s' });
+    await server.inject({ url: '/api/publish/youtube/callback?code=c&state=s', headers: { cookie: 'oc_session=not-a-real-session-token-xxxxxxxx' } });
+    expect(handleCallback.mock.calls.map(call => call[2])).toEqual([adminId, undefined, undefined]);
+  });
+
   it('OAuth callback failure returns to Settings → Koneksi with a plain ?error message', async () => {
     const { server } = await setup(undefined);
     const res = await server.inject({ url: '/api/publish/youtube/callback?error=access_denied&state=x' });
@@ -109,13 +117,13 @@ describe('publish route with storyId', () => {
     const at = new Date(Date.now() + 3 * 86_400_000);
     const res = await server.inject({ method: 'POST', url: '/api/publish/youtube/publish', headers: { cookie: adminCookie }, payload: { ...body, storyId: DONE_ID, publishAt: at.toISOString() } });
     expect(res.statusCode).toBe(200);
-    expect(publish.mock.calls[0]?.[1]).toMatchObject({ publishAt: at.toISOString() });
+    expect(publish.mock.calls[0]?.[2]).toMatchObject({ publishAt: at.toISOString() });
   });
 
   it('omits publishAt when none is sent', async () => {
     const { server, publish, adminCookie } = await setup(async () => '/data/final.mp4');
     await server.inject({ method: 'POST', url: '/api/publish/youtube/publish', headers: { cookie: adminCookie }, payload: { ...body, storyId: DONE_ID } });
-    expect(publish.mock.calls[0]?.[1]).not.toHaveProperty('publishAt');
+    expect(publish.mock.calls[0]?.[2]).not.toHaveProperty('publishAt');
   });
 
   it('rejects a publishAt in the past or unparseable with 400', async () => {
@@ -136,6 +144,18 @@ describe('publish route with storyId', () => {
       expect(res.statusCode).toBe(400);
       expect(res.json().error.message).toMatch(/youtube/i);
     }
+    expect(publish).not.toHaveBeenCalled();
+  });
+
+  it('answers 404 and does not publish when the caller does not own the story (ownership is asked before the video is resolved)', async () => {
+    const resolve = vi.fn(async () => '/data/final.mp4');
+    const canAccess = vi.fn(async () => false);
+    const { server, publish, adminCookie } = await setup(resolve, canAccess);
+    const res = await server.inject({ method: 'POST', url: '/api/publish/youtube/publish', headers: { cookie: adminCookie }, payload: { ...body, storyId: DONE_ID } });
+    expect(res.statusCode).toBe(404);
+    expect(res.json().error.code).toBe('NOT_FOUND');
+    expect(canAccess).toHaveBeenCalledWith(DONE_ID, expect.objectContaining({ isAdmin: true }));
+    expect(resolve).not.toHaveBeenCalled();
     expect(publish).not.toHaveBeenCalled();
   });
 

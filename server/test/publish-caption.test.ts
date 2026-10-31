@@ -84,7 +84,7 @@ async function setup(resolveStoryPreview?: (id: string) => Promise<{ title: stri
   const member = await userAuthStore.createUser({ email: 'member@x.io', password: 'member-pass-1', isAdmin: false });
   const service = { publish: vi.fn(), handleCallback: vi.fn() } as unknown as PublisherService;
   const server = Fastify();
-  await registerPublisherRoutes(server, { service, userAuthStore, env: {}, resolveStoryPreview });
+  await registerPublisherRoutes(server, { service, userAuthStore, env: {}, resolveStoryPreview, canAccessStory: async () => true });
   await server.ready();
   const cookie = (id: string) => `oc_session=${userAuthStore.createSession(id).token}`;
   return { server, adminCookie: cookie(admin.id), memberCookie: cookie(member.id) };
@@ -110,7 +110,7 @@ describe('GET /api/publish/preview/:storyId', () => {
     expect((await server.inject({ url: '/api/publish/preview/story_0123456789abcdef' })).statusCode).toBe(401);
   });
 
-  it('is readable by a member (preview only, publishing stays admin)', async () => {
+  it('is readable by a member who owns the story (preview only, publishing stays admin)', async () => {
     const { server, memberCookie } = await setup(async () => ({ title: 't', caption: 'c' }));
     expect((await server.inject({ url: '/api/publish/preview/story_0123456789abcdef', headers: { cookie: memberCookie } })).statusCode).toBe(200);
   });
