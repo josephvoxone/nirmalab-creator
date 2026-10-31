@@ -38,7 +38,7 @@ function TextBox(props: { label: string; value: string; onChange: (v: string) =>
 function Length(props: { text: string }) {
   const secs = estimateSeconds(props.text);
   return (
-    <span className={cn(secs > 60 && 'text-(--warning,#e5a50a)')}>
+    <span className={cn('tabular-nums', secs > 60 && 'text-(--warning,#e5a50a)')}>
       ± {secs} dtk dibacakan · {wordCount(props.text)} kata{secs > 60 ? ' · lebih dari 60 dtk, potong agar muat di video pendek' : ''}
     </span>
   );

@@ -221,7 +221,7 @@ export function ProjectPage(props: { pollMs?: number }) {
               <button key={t.id} type="button" role="tab" id={`ptab-${t.id}`} aria-controls={`ppanel-${t.id}`} aria-selected={tab === t.id} onClick={() => choose(t.id)}
                 className={cn('flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2.5 text-[12.5px] text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring/60',
                   tab === t.id && 'glass-chosen text-foreground')}>
-                {t.label}{counts[t.id] !== undefined && <span className="text-[11px] text-muted-foreground">{counts[t.id]}</span>}
+                {t.label}{counts[t.id] !== undefined && <span className="text-[11px] tabular-nums text-muted-foreground">{counts[t.id]}</span>}
               </button>
             ))}
           </div>

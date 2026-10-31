@@ -65,7 +65,7 @@ export function Composer(props: ComposerProps) {
             {props.drafts.map((d, i) => {
               const hide = (e: { currentTarget: HTMLImageElement }) => { e.currentTarget.style.visibility = 'hidden'; };
               return (
-                <li key={d.key} className="group/att relative size-16 shrink-0 overflow-hidden rounded-lg border border-border/70 bg-muted">
+                <li key={d.key} className="group/att relative size-16 shrink-0 overflow-hidden rounded-lg bg-muted">
                   {d.preview && (
                     <img src={d.preview} alt="" width={64} height={64} decoding="async" onError={hide}
                       className={cn('absolute inset-0 size-16 object-cover text-transparent', d.status === 'uploading' && 'opacity-50')} />

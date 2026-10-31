@@ -235,7 +235,7 @@ describe('SettingsPage · member', () => {
     const fetchImpl = fakeFetch(() => ({ status: 403, body: {} }));
     renderPage(fetchImpl, { ...admin, isAdmin: false }, 'anggota');
     const tabs = screen.getByRole('tablist', { name: /pengaturan/i });
-    expect(within(tabs).getAllByRole('tab').map(t => t.textContent)).toEqual(['Umum', 'Akun', 'Koneksi']);
+    expect(within(tabs).getAllByRole('tab').map(t => t.textContent)).toEqual(['Umum', 'Akun', 'Anggota workspace', 'Koneksi']);
     expect(screen.getByRole('tab', { name: 'Umum' })).toHaveAttribute('aria-selected', 'true');
     expect(screen.queryByRole('region', { name: /undang anggota/i })).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole('tab', { name: 'Akun' }));

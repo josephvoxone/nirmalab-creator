@@ -444,7 +444,7 @@ export function AssistantPanel(props: AssistantPanelProps) {
           <Composer value={text} onChange={v => { setText(v); if (problem) setProblem(undefined); }} triggers={triggers} drafts={drafts}
             onRemove={removeDraft} onLoaded={thumbLoaded} onFiles={addFiles} problem={problem} streaming={streaming} onSend={() => void send()} onStop={stop} />
         ) : (
-          <p className="rounded-lg border border-border/70 px-3 py-2.5 text-[12.5px] text-muted-foreground">
+          <p className="rounded-lg bg-muted/40 px-3 py-2.5 text-[12.5px] text-muted-foreground">
             Asisten butuh model teks — atur di{' '}
             <Link to="/pengaturan/provider" state={settingsState} className="text-foreground underline underline-offset-2 hover:text-foreground/80">Pengaturan › Provider</Link>.
           </p>

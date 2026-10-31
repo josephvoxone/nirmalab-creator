@@ -75,7 +75,7 @@ export function JobList(props: {
           <div className="flex flex-1 flex-col gap-1.5 p-2.5">
             <div className="flex items-center gap-1.5">
               <Badge className={cn('h-4.5 px-1.5 text-[10.5px]', STATUS_CLASS[job.status] ?? 'bg-muted text-muted-foreground')}>{STATUS_LABEL[job.status] ?? job.status}</Badge>
-              <span className="text-[11.5px] text-muted-foreground">{job.aspect}{job.kind === 'image' ? ' · gambar' : ` · ${job.durationSec}s`}</span>
+              <span className="text-[11.5px] tabular-nums text-muted-foreground">{job.aspect}{job.kind === 'image' ? ' · gambar' : ` · ${job.durationSec}s`}</span>
               <span className="ml-auto text-[11.5px] text-muted-foreground">{relative(job.finishedAtMs ?? job.createdAtMs)}</span>
             </div>
             <p title={job.prompt} className="line-clamp-2 text-[12.5px] leading-snug">{job.prompt}</p>

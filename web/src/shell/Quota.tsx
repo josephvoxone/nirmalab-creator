@@ -51,7 +51,7 @@ export function formatBytes(n: number): string {
 const credits = (n: number) => new Intl.NumberFormat('id-ID').format(n);
 const usd = (n: number) => `$${n.toFixed(2)}`;
 
-const row = 'flex h-5 w-full items-center gap-1.5 text-left';
+const row = 'relative flex h-5 w-full items-center gap-1.5 text-left tabular-nums';
 
 function FlowRow(props: { q: Quota['flow']; onOpen?: () => void }) {
   const { q } = props;

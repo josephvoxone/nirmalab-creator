@@ -21,7 +21,7 @@ export function WorkspaceSwitch() {
   if (workspaces.length < 2 || !current) return null;
   return (
     <div className="mx-1.5 mb-1 flex flex-col gap-1 rounded-md border border-border/60 p-1.5">
-      <Choice label="Workspace" value={current.id} size="sm" className="w-full"
+      <Choice label="Workspace" value={current.id} size="sm" className="w-full rounded-[4px]"
         options={workspaces.map(w => ({ value: w.id, label: w.name, hint: ROLE_LABEL[w.role as Role] }))}
         onChange={select} />
       <div className="flex items-center gap-1.5 px-0.5">

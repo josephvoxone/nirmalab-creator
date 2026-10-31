@@ -69,5 +69,32 @@ html.dark[data-theme="dark"] {
   --brand-foreground: oklch(0.25 0.05 92);
   --brand-muted: oklch(0.86 0.17 92 / 16%);
 }
+/* Polish pass (wave 4): details that compound — crisp text at the root, balanced headings,
+   pretty paragraphs, a hairline on media, named transition properties (never `all`), a 0.96
+   press and a comfortable hit area on icon-only buttons. No token changes: every value below
+   is either a pure black/white alpha or a motion constant. */
+@layer base {
+  html { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; text-rendering: optimizeLegibility; }
+  h1, h2, h3 { text-wrap: balance; }
+  p, li, dd, figcaption { text-wrap: pretty; }
+  /* Media sits on the glass instead of floating: pure white at 10%, never a tinted neutral. */
+  img, video { outline: 1px solid oklch(1 0 0 / 0.1); outline-offset: -1px; }
+  [data-slot="button"] {
+    transition-property: color, background-color, border-color, box-shadow, scale, translate, opacity;
+    transition-duration: 150ms;
+    transition-timing-function: cubic-bezier(0.2, 0, 0, 1);
+    position: relative;
+  }
+  [data-slot="button"]:active:not(:disabled, [aria-disabled="true"]) { scale: 0.96; }
+  /* Icon-only buttons keep the compact look but own a 40 px (mouse) / 44 px (touch) target. */
+  [data-slot="button"]:has(> svg:only-child)::after { content: ""; position: absolute; inset: -4px; border-radius: inherit; }
+  [data-slot="badge"] { transition-property: color, background-color, border-color, opacity; transition-duration: 150ms; }
+  @media (pointer: coarse) { [data-slot="button"]:has(> svg:only-child)::after { inset: -6px; } }
+  @media (prefers-reduced-motion: reduce) {
+    [data-slot="button"]:active:not(:disabled) { scale: none; }
+    [data-slot="button"], [data-slot="badge"] { transition-duration: 0ms; }
+  }
+}
+
 body { font-family: var(--font-sans); }
 html[data-density="nyaman"] { font-size: 16px; }

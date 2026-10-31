@@ -183,7 +183,7 @@ export default function HomePage() {
           <Palette className="size-3 shrink-0" /> <span className="max-w-40 truncate whitespace-nowrap">{lookLabel(look)}</span>
         </button>
         <ComposerFooterEnd>
-          <span className="text-[12px] text-muted-foreground max-sm:hidden" title={engine.video.provider === 'openrouter' ? 'Perkiraan biaya klip OpenRouter: jumlah shot × harga per klip' : 'Gambar & keyframe gratis; hanya animasi video yang memakai kredit Flow'}>
+          <span className="text-[12px] tabular-nums text-muted-foreground max-sm:hidden" title={engine.video.provider === 'openrouter' ? 'Perkiraan biaya klip OpenRouter: jumlah shot × harga per klip' : 'Gambar & keyframe gratis; hanya animasi video yang memakai kredit Flow'}>
             {mode === 'konsisten' && engine.image.provider === 'flow' ? 'Keyframe gratis · ' : ''}{cost}
           </span>
         </ComposerFooterEnd>

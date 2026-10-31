@@ -53,7 +53,7 @@ function Attachments(props: { items: TurnAttachment[]; align?: 'end' | 'start' }
       <div className={cn('flex flex-wrap gap-1.5', props.align === 'end' && 'justify-end')}>
         {props.items.map((a, i) => (
           <button key={a.id} type="button" aria-label={`Lihat lampiran ${i + 1}`} onClick={() => setOpen(a)}
-            className="size-16 shrink-0 overflow-hidden rounded-lg border border-border/70 bg-muted outline-none focus-visible:ring-2 focus-visible:ring-ring/60">
+            className="size-16 shrink-0 overflow-hidden rounded-lg bg-muted outline-none focus-visible:ring-2 focus-visible:ring-ring/60">
             <img {...thumbProps(a.url)} alt={`Lampiran ${i + 1}`} width={64} height={64} loading="lazy" decoding="async" className="size-16 object-cover text-transparent" />
           </button>
         ))}
