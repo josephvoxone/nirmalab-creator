@@ -1,6 +1,7 @@
 /**
  * Settings → Koneksi: the accounts Publish can post to. One row per platform with its
- * status and the one action that changes it (admins only). The OAuth callback lands
+ * status and the one action that changes it (admins only). Connections are per user: the
+ * server answers with the signed-in user's own accounts only, so nobody sees or uses another's. The OAuth callback lands
  * back here with ?connected=PLATFORM or ?platform=PLATFORM&error=MESSAGE.
  */
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
@@ -62,7 +63,7 @@ function Row(props: { status: PublisherStatus; canEdit: boolean; busy: boolean; 
           <Badge variant="secondary" className={cn('h-4.5 px-1.5 text-[11px] font-normal', BADGE_TONE[state.kind])}>{state.label}</Badge>
         </div>
         <span className="text-[12px] text-muted-foreground">
-          {state.kind === 'unconfigured' ? missingAppText(s)
+          {state.kind === 'unconfigured' ? (props.canEdit ? missingAppText(s) : 'Platform ini belum disiapkan di server. Minta admin menyiapkannya.')
             : state.kind === 'reconnect' ? `Sesi ${label} habis. Hubungkan lagi agar Publish bisa mengirim.`
             : PLATFORM_HINT[s.platform]}
         </span>
@@ -106,7 +107,7 @@ export function ConnectionsPanel(props: { openUrl?: (url: string) => void }) {
     <section aria-labelledby="set-connections" className="flex flex-col gap-3 border-b pb-5 last:border-b-0 last:pb-0">
       <div className="flex min-w-0 flex-col gap-0.5">
         <h2 id="set-connections" className="text-[14px] font-medium text-foreground">Koneksi platform</h2>
-        <p className="text-[12.5px] text-muted-foreground">Akun tujuan Publish. Video hanya bisa dikirim ke platform yang terhubung di sini.</p>
+        <p className="text-[12.5px] text-muted-foreground">Akun tujuan Publish. Video hanya bisa dikirim ke platform yang terhubung di sini. Koneksi ini milikmu sendiri: pengguna lain tidak bisa melihat atau memakainya, dan kamu tidak melihat koneksi mereka.</p>
       </div>
 
       {callbackNotice && !noticeHidden && (
@@ -137,12 +138,17 @@ export function ConnectionsPanel(props: { openUrl?: (url: string) => void }) {
           {PLATFORMS.map(p => <Skeleton key={p} className="h-11 w-full rounded-md" />)}
         </LoadingState>
       ) : (
+        <>
+        {!statuses.some(s => s.connected || s.needsReconnect) && statuses.some(s => s.configured) && (
+          <p className="text-[12.5px] text-muted-foreground">Belum ada akun yang kamu hubungkan. Pilih Hubungkan di platform yang ingin kamu pakai.</p>
+        )}
         <ul aria-label="Platform" className="flex flex-col">
           {statuses.map(s => (
             <Row key={s.platform} status={s} canEdit={user.isAdmin} busy={busy === s.platform}
               onConnect={() => void connect(s.platform)} onDisconnect={() => setConfirm(s)} />
           ))}
         </ul>
+        </>
       )}
 
       <AlertDialog open={!!confirm} onOpenChange={open => { if (!open) setConfirm(undefined); }}>
@@ -151,7 +157,7 @@ export function ConnectionsPanel(props: { openUrl?: (url: string) => void }) {
             <AlertDialogTitle>Putuskan {confirm ? PLATFORM_LABEL[confirm.platform] : ''}?</AlertDialogTitle>
             <AlertDialogDescription>
               {confirm?.accountLabel ? `Akun ${confirm.accountLabel} dilepas dari Nirmalab Creator. ` : ''}
-              Publish tidak bisa mengirim ke platform ini sampai dihubungkan lagi. Video yang sudah terkirim tidak terhapus.
+              Publish tidak bisa mengirim ke platform ini sampai dihubungkan lagi. Video yang sudah terkirim tidak terhapus, dan koneksi pengguna lain tidak terpengaruh.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
