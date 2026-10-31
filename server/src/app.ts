@@ -166,8 +166,10 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   // T7 (publisher): tokens saved before per-user storage were one global file per platform. Hand them to the main
   // owner (backup + manifest + rollback; no-op once done) BEFORE the routes can answer a status request.
   await migratePublisherTokensAtBoot({ dataDir: options.dataDir, users: userAuthStore.listUsers(), env, log: server.log });
+  // Hoisted so the member-removal flow can call `publisherService.revokeAllFor(userId)`.
+  const publisherService = new PublisherService({ dataDir: options.dataDir, env });
   await registerPublisherRoutes(server, {
-    service: new PublisherService({ dataDir: options.dataDir, env }),
+    service: publisherService,
     userAuthStore,
     env,
     // T7: only the project's owner may preview/publish it (isStoryOwner is the small replaceable decision; the

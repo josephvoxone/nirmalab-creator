@@ -46,6 +46,8 @@ export type PublisherServiceOptions = {
 export class PublisherService {
   private readonly tokens: PublisherTokenStore;
   private readonly states = new OAuthStateStore();
+  /** userId -> when their connections were last revoked: an OAuth exchange already in flight must not resurrect them. */
+  private readonly revokedAtMs = new Map<string, number>();
   private readonly env: NodeJS.ProcessEnv;
   private readonly fetchImpl: FetchLike;
 
@@ -147,6 +149,7 @@ export class PublisherService {
       throw new PublisherError('INVALID_STATE', 'Unknown or expired OAuth state');
     }
     const record = consumed.record;
+    const startedAtMs = Date.now();
     if (platform === 'youtube') {
       const env = youtubeEnv(this.env);
       if (!env.clientId || !env.clientSecret) throw new PublisherError('NOT_CONFIGURED', 'YouTube client id/secret missing');
@@ -157,6 +160,7 @@ export class PublisherService {
         code: query.code
       });
       const accountLabel = await youtubeChannelTitle(this.fetchImpl, tokens.accessToken).catch(() => undefined);
+      this.assertNotRevoked(record.userId, startedAtMs);
       await this.tokens.save(record.userId, 'youtube', { ...tokens, scopes: 'youtube.upload', accountLabel });
       return { accountLabel };
     }
@@ -171,6 +175,7 @@ export class PublisherService {
       });
       const info = await tiktokCreatorInfo(this.fetchImpl, tokens.accessToken).catch(() => undefined);
       const accountLabel = info?.nickname || info?.username;
+      this.assertNotRevoked(record.userId, startedAtMs);
       await this.tokens.save(record.userId, 'tiktok', {
         accessToken: tokens.accessToken,
         refreshToken: tokens.refreshToken,
@@ -199,6 +204,7 @@ export class PublisherService {
       const page = pages[0];
       if (!page) throw new PublisherError('OAUTH_FAILED', 'Meta account has no Page to publish to');
       const igId = await metaInstagramAccountId(this.fetchImpl, { pageId: page.id, pageAccessToken: page.accessToken }).catch(() => undefined);
+      this.assertNotRevoked(record.userId, startedAtMs);
       await this.tokens.save(record.userId, 'meta', {
         accessToken: long.accessToken,
         expiresAtMs: long.expiresAtMs,
@@ -310,6 +316,23 @@ export class PublisherService {
       extra: fresh.openId ? { openId: fresh.openId } : undefined
     });
     return fresh.accessToken;
+  }
+
+  private assertNotRevoked(userId: string, startedAtMs: number): void {
+    const revoked = this.revokedAtMs.get(userId);
+    if (revoked !== undefined && revoked >= startedAtMs) throw new PublisherError('INVALID_STATE', 'Connections of this user were revoked during the OAuth exchange');
+  }
+
+  /**
+   * Removes everything this user connected (called when an account is removed — the member-removal flow of the
+   * tenancy admin console calls this): every stored token and every half-finished connection. Local only; revoking
+   * at the provider (Google/TikTok/Meta) is a separate, network step. Idempotent.
+   */
+  async revokeAllFor(userId: string): Promise<{ platforms: PublisherPlatform[]; pendingConnections: number }> {
+    const pendingConnections = this.states.revokeAllFor(userId);
+    this.revokedAtMs.set(userId, Date.now());
+    const platforms = await this.tokens.revokeAllFor(userId);
+    return { platforms, pendingConnections };
   }
 
   async disconnect(userId: string, platform: PublisherPlatform): Promise<void> {
