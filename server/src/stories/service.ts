@@ -974,6 +974,8 @@ export class StoryService {
       })),
       edit: board.edit || dubbed?.keepAmbient ? {
         ...(board.edit?.clipVolume !== undefined ? { clipVolume: board.edit.clipVolume } : {}),
+        ...(board.edit?.fadeIn !== undefined ? { fadeIn: board.edit.fadeIn } : {}),
+        ...(board.edit?.beatCuts ? { beatCuts: board.edit.beatCuts.zoom !== undefined ? { zoom: board.edit.beatCuts.zoom } : {} } : {}),
         ...(board.edit?.subtitles ? { subtitles: true } : {}),
         ...(board.edit?.subtitles && board.edit.subtitleStyle ? { subtitleStyle: board.edit.subtitleStyle } : {}),
         ...(board.edit?.subtitles && board.edit.subtitleSize !== undefined ? { subtitleSize: board.edit.subtitleSize } : {}),

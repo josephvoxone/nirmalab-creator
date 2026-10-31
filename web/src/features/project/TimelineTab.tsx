@@ -51,6 +51,9 @@ const COMMIT_MS = 600;
 const r1 = (n: number) => Math.round(n * 10) / 10;
 const r2 = (n: number) => Math.round(n * 100) / 100;
 const DEFAULT_MUSIC_VOLUME = 0.35;
+/** What an absent `edit.fadeIn` / `edit.beatCuts.zoom` mean in the assembler (bridge/py/assemble.py FADE_IN, BEAT_ZOOM). */
+const DEFAULT_FADE_IN = 0.8;
+const BEAT_ZOOM_NORMAL = 1.14;
 
 /** The trim a handle produces: In moves the start, Out the end; Out at the clip's end = no Out. */
 function trimFrom(clip: TimelineClip, side: 'in' | 'out', value: number): Trim {
@@ -403,6 +406,9 @@ export function TimelineTab() {
   const save = (next: Board) => void p.save(next);
   const edit = editOf(board);
   const music = edit.music;
+  const beatOn = typeof edit.beatCuts === 'object' && edit.beatCuts !== null;
+  const beatZoom = beatOn ? (edit.beatCuts as { zoom?: number }).zoom ?? BEAT_ZOOM_NORMAL : BEAT_ZOOM_NORMAL;
+  const beatStrength = beatZoom <= 1.11 ? '1.08' : beatZoom >= 1.18 ? '1.22' : '1.14';
 
   const commitTrim = (now: boolean) => {
     clearTimeout(trimTimer.current);
@@ -481,6 +487,20 @@ export function TimelineTab() {
               onChange={v => save(withEdit(board, { subtitleY: Number(v) }))}
               options={[{ value: '0.1', label: 'Atas', hint: 'Di langit atas' }, { value: '0.42', label: 'Tengah', hint: 'Tengah frame' }, { value: '0.78', label: 'Bawah', hint: 'Di bawah, seperti film' }]} />
           )}
+          <label className="flex items-center gap-1.5 text-[12px] text-muted-foreground" title="Gambar zoom-in sebentar di jeda suara lalu kembali, jadi video terasa lebih cepat. Gratis: klip tidak dirender ulang.">
+            <Switch size="sm" aria-label="Potong ritme" checked={beatOn} disabled={busy}
+              onCheckedChange={v => save(withEdit(board, { beatCuts: v ? {} : undefined }))} />
+            Potong ritme
+          </label>
+          {beatOn && (
+            <Segmented name="Kekuatan potong ritme" value={beatStrength} disabled={busy}
+              onChange={v => save(withEdit(board, { beatCuts: Number(v) === BEAT_ZOOM_NORMAL ? {} : { zoom: Number(v) } }))}
+              options={[{ value: '1.08', label: 'Halus', hint: 'Zoom-in tipis (8%)' }, { value: '1.14', label: 'Sedang', hint: 'Zoom-in 14%, bawaan' }, { value: '1.22', label: 'Kuat', hint: 'Zoom-in 22%' }]} />
+          )}
+          <Segmented name="Fade awal" value={String(edit.fadeIn ?? DEFAULT_FADE_IN)} disabled={busy}
+            onChange={v => save(withEdit(board, { fadeIn: Number(v) === DEFAULT_FADE_IN ? undefined : Number(v) }))}
+            options={[{ value: '0', label: 'Tanpa', hint: 'Langsung gambar, tanpa fade dari hitam' }, { value: '0.25', label: 'Cepat', hint: 'Fade dari hitam 0,25 detik' },
+              { value: '0.8', label: 'Normal', hint: 'Fade dari hitam 0,8 detik (bawaan)' }, { value: '1.2', label: 'Lambat', hint: 'Fade dari hitam 1,2 detik' }]} />
           <Segmented name="Zoom" value={zoom} onChange={setZoom}
             options={[{ value: '50', label: '50%' }, { value: '100', label: '100%' }, { value: '200', label: '200%' }]} />
           <input ref={musicInput} type="file" accept="audio/*,.mp3,.m4a,.wav,.ogg,.aac" aria-label="Pilih berkas musik" className="sr-only" tabIndex={-1}

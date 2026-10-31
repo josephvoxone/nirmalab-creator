@@ -93,6 +93,21 @@ def words_match_text(words, text):
 _SENTENCE_END = re.compile(r'[.!?;:][\"\u201d\u2019)]*$')
 
 
+# The shot-to-shot transitions a plan may name: ffmpeg's xfade names that Debian's ffmpeg 5.1 has as well. server/src/stories/storyboard.ts
+# validates against the same list (a test compares them); anything else is replaced by 'fade' before it can reach a filter graph.
+XFADE_TRANSITIONS = frozenset('''
+fade wipeleft wiperight wipeup wipedown slideleft slideright slideup slidedown circlecrop rectcrop distance
+fadeblack fadewhite radial smoothleft smoothright smoothup smoothdown circleopen circleclose vertopen vertclose
+horzopen horzclose dissolve pixelize diagtl diagtr diagbl diagbr hlslice hrslice vuslice vdslice hblur
+fadegrays wipetl wipetr wipebl wipebr squeezeh squeezev zoomin
+'''.split())
+
+
+def safe_transition(name):
+    """`name` when it is an allowed xfade transition, else 'fade' (a plan is raw JSON: never trust it inside a filter graph)."""
+    return name if isinstance(name, str) and name in XFADE_TRANSITIONS else 'fade'
+
+
 def _balanced(words, max_words, max_chars):
     """Cut a run of words into the fewest, evenly sized groups of at most max_words that also fit max_chars (4 -> 2+2, never 3+1)."""
     n = len(words)
@@ -291,9 +306,121 @@ def tail_hold(seconds, window, max_tempo=MAX_DUB_TEMPO, breath=0.35):
     return round(seconds / max_tempo - window + breath, 2)
 
 
+FADE_IN = 0.8         # the opening fade from black every plan had before `edit.fadeIn` existed
+FADE_IN_MAX = 1.2
+FADE_IN_DECLICK = 0.02   # with no opening fade the sound still ramps in this long, so it never starts on a click
+
+
+def fade_in_of(edit):
+    """The plan's `edit.fadeIn` as seconds in 0..FADE_IN_MAX, or None (absent or not a number: the old FADE_IN)."""
+    v = (edit or {}).get('fadeIn')
+    if isinstance(v, bool) or not isinstance(v, (int, float)) or v != v:
+        return None
+    return round(min(FADE_IN_MAX, max(0.0, float(v))), 3)
+
+
+FADE_OUT = 1.2        # the closing fade to black, when nothing is being said
+FADE_OUT_MIN = 0.6    # the shortest closing fade that still reads as a fade
+CLOSING_PAD = 0.15    # quiet between the last word of the closing line and the start of the fade
+
+
+def closing_fade(total, voice_end=None):
+    """(start, length, extra hold) of the closing fade on the output clock.
+
+    Without a closing voice it is the last FADE_OUT seconds, as it always was.  With one (`voice_end`: when the closing
+    dub stops, on the same clock) the fade never starts before CLOSING_PAD after it, and the timeline grows by `extra`
+    when that leaves less than FADE_OUT_MIN: audio and video fade together and the last word keeps its level.
+    """
+    start = round(total - FADE_OUT, 3)
+    if voice_end is None:
+        return start, FADE_OUT, 0.0
+    start = round(max(start, voice_end + CLOSING_PAD), 3)
+    extra = round(max(0.0, start + FADE_OUT_MIN - total), 3)
+    return start, round(min(FADE_OUT, total + extra - start), 3), extra
+
+
+BEAT_MIN_SEG = 1.8      # a piece between two cuts is never shorter than this ...
+BEAT_MAX_SEG = 3.6      # ... and a longer one is cut again, into pieces of about BEAT_TARGET
+BEAT_TARGET = 3.0
+BEAT_EDGE = 0.5         # no cut this close to a crossfade (the crossfade length is added to it)
+BEAT_TAIL = 1.4         # a cut leaves at least this much of the clip after it
+BEAT_ZOOM = 1.14        # the punch-in: this zoom, -0.04 for the first punch of a shot and +0.04 for the next
+BEAT_ZOOM_SWING = 0.04
+BEAT_ZOOM_MIN, BEAT_ZOOM_MAX = 1.05, 1.4
+BEAT_ANCHORS = (0.38, 0.62)   # where each punch-in sits vertically (0 top .. 1 bottom): they take turns
+
+
+def _beat_words(words, tempo, window):
+    """Timed words -> [(text, start, end)] that are well formed, in order and actually spoken."""
+    out = []
+    if isinstance(words, (list, tuple)):
+        for w in words:
+            try:
+                text, a, b = str(w[0]), float(w[1]), float(w[2])
+            except (TypeError, ValueError, IndexError, KeyError):
+                continue
+            if text.strip() and 0 <= a <= b:
+                out.append((text, a, b))
+    out.sort(key=lambda w: w[1])
+    if window is not None:
+        out = [w for w in out if w[1] / tempo < window]
+    return out
+
+
+def beat_cut_times(dur, words=None, tempo=1.0, lead=DUB_LEAD, xf=0.3, window=None):
+    """Where inside a clip (seconds on the clip's own clock) the picture cuts to a punch-in and back: "potong ritme".
+
+    Cuts fall in the pause after a phrase of the dub (a comma, a full stop or a pause of KARAOKE_GAP), at least BEAT_MIN_SEG
+    apart and clear of the crossfades; a piece still longer than BEAT_MAX_SEG (and any shot without words) is cut evenly into
+    pieces of about BEAT_TARGET.  `tempo`/`lead` place the dub on the clip, `window` is what survives when the dub is cut.
+    """
+    tempo = float(tempo) if isinstance(tempo, (int, float)) and not isinstance(tempo, bool) and tempo > 0 else 1.0
+    lo, hi = xf + BEAT_EDGE, dur - xf - BEAT_EDGE
+    ws = _beat_words(words, tempo, window)
+    cuts, prev = [], 0.0
+    for w, nxt in zip(ws, ws[1:]):
+        if not (_SENTENCE_END.search(w[0]) or w[0].endswith(',') or nxt[1] - w[2] > KARAOKE_GAP):
+            continue
+        c = round(lead + (w[2] + nxt[1]) / 2 / tempo, 3)
+        if lo <= c <= hi and c - prev >= BEAT_MIN_SEG - 1e-9 and dur - c >= BEAT_TAIL:
+            cuts.append(c)
+            prev = c
+    pts, out = [0.0] + cuts + [dur], []
+    for a, b in zip(pts, pts[1:]):
+        if b - a > BEAT_MAX_SEG:
+            n = -(-round(b - a, 6) // BEAT_TARGET)
+            out += [round(a + (b - a) * k / n, 3) for k in range(1, int(n))]
+        if b < dur:
+            out.append(b)
+    return out
+
+
+def beat_zoom_of(edit):
+    """The plan's `edit.beatCuts` as the base zoom of the punch-ins, or None when beat cuts are off (absent, false, or not an object)."""
+    bc = (edit or {}).get('beatCuts')
+    if not isinstance(bc, dict):
+        return None
+    z = bc.get('zoom')
+    if isinstance(z, bool) or not isinstance(z, (int, float)) or z != z:
+        return BEAT_ZOOM
+    return min(BEAT_ZOOM_MAX - BEAT_ZOOM_SWING, max(BEAT_ZOOM_MIN, float(z)))
+
+
+def beat_windows(cuts, dur, zoom=BEAT_ZOOM):
+    """Cut times -> [(from, to, zoom, anchor)] of the punched-in pieces: every second piece, alternating zoom and anchor."""
+    pts, wins = [0.0] + list(cuts) + [dur], []
+    for k, (a, b) in enumerate(zip(pts, pts[1:])):
+        if k % 2 == 1:
+            j = len(wins)
+            z = zoom - BEAT_ZOOM_SWING if j % 2 == 0 else zoom + BEAT_ZOOM_SWING
+            wins.append((round(a, 3), round(b, 3), round(min(BEAT_ZOOM_MAX, max(BEAT_ZOOM_MIN, z)), 2), BEAT_ANCHORS[j % 2]))
+    return wins
+
+
 def filter_graph(durations, xf, transitions=None, title_input=None, total=None,
                  clip_volume=None, music_input=None, music=None, subtitles=None, fonts_dir=None, zooms=None,
-                 streams='av', zoom_ys=None, dubs=None, tail_hold=0.0):
+                 streams='av', zoom_ys=None, dubs=None, tail_hold=0.0, voice_end=None, fade_in=None, beats=None):
+    # beats: per shot, None or [(from, to, zoom, anchor)] punch-in windows on the clip's own clock (see beat_windows)
     """One ffmpeg filter graph.  streams: 'av' (both), 'v' (video chain only) or 'a' (audio chain only).
 
     Production renders 'v' and 'a' in two ffmpeg runs: in one graph, ffmpeg 5.1 reads every clip to feed the
@@ -309,11 +436,23 @@ def filter_graph(durations, xf, transitions=None, title_input=None, total=None,
         crop = f'crop={W}:{H}' if zy == 0.5 else f'crop={W}:{H}:(iw-{W})/2:(ih-{H})*{zy}'
         zoom = f'scale=trunc(iw*{z}/2)*2:trunc(ih*{z}/2)*2,{crop},' if z and z > 1.0 else ''
         if want_v:
-            parts.append(
-                f'[{i}:v]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},{zoom}'
-                f'fps={FPS},setsar=1,format=yuv420p,settb=AVTB'
-                + (f',tpad=stop_mode=clone:stop_duration={tail_hold}' if tail_hold and i == n - 1 else '') + f'[v{i}]'
-            )
+            base = (f'[{i}:v]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},{zoom}'
+                    f'fps={FPS},setsar=1,format=yuv420p,settb=AVTB')
+            hold = f',tpad=stop_mode=clone:stop_duration={tail_hold}' if tail_hold and i == n - 1 else ''
+            punches = (beats or [])[i] if beats and i < len(beats) else None
+            if not punches:
+                parts.append(base + hold + f'[v{i}]')
+            else:
+                # Beat cuts: the same clip, punched in for a while.  One decode feeds the plain picture and one scaled-up copy
+                # per punch-in; overlay (enable=between) shows each copy in its window.  Both sides run frame for frame, so
+                # nothing is buffered, and nothing moves in time.
+                parts.append(base + f',split={1 + len(punches)}[vb{i}]' + ''.join(f'[vp{i}_{k}]' for k in range(len(punches))))
+                src = f'vb{i}'
+                for k, (a, b, z_, zy_) in enumerate(punches):
+                    parts.append(f'[vp{i}_{k}]scale=trunc({W}*{z_}/2)*2:trunc({H}*{z_}/2)*2,crop={W}:{H}:(iw-{W})/2:(ih-{H})*{zy_},setsar=1[vz{i}_{k}]')
+                    last = k == len(punches) - 1
+                    parts.append(f"[{src}][vz{i}_{k}]overlay=0:0:enable='between(t,{a},{b})'" + (f',settb=AVTB{hold}[v{i}]' if last else f'[vo{i}_{k}]'))
+                    src = f'vo{i}_{k}'
         dub = (dubs or [])[i] if dubs and i < len(dubs) else None
         if want_a and dub:
             lead_ms = int(round(float(dub.get('lead', DUB_LEAD)) * 1000))
@@ -335,7 +474,7 @@ def filter_graph(durations, xf, transitions=None, title_input=None, total=None,
     offsets = xfade_offsets(durations, xf)
     vprev, aprev = 'v0', 'a0'
     for i in range(1, n):
-        tr = (transitions or [])[i - 1] if transitions and i - 1 < len(transitions) else 'fade'
+        tr = safe_transition((transitions or [])[i - 1]) if transitions and i - 1 < len(transitions) else 'fade'
         if want_v:
             parts.append(f'[{vprev}][v{i}]xfade=transition={tr}:duration={xf}:offset={offsets[i - 1]}[vx{i}]')
         if want_a:
@@ -350,7 +489,9 @@ def filter_graph(durations, xf, transitions=None, title_input=None, total=None,
         if subtitles:
             video += f"subtitles=filename={subtitles}:fontsdir={fonts_dir or DEJAVU_DIR},"
         if total:
-            video += f'fade=t=in:st=0:d=0.8,fade=t=out:st={round(total - 1.2, 3)}:d=1.2,'
+            fo_st, fo_d, _ = closing_fade(total, voice_end)
+            fi = FADE_IN if fade_in is None else fade_in
+            video += (f'fade=t=in:st=0:d={fi},' if fi > 0 else '') + f'fade=t=out:st={fo_st}:d={fo_d},'
         parts.append(video.rstrip(',') + '[vout]' if video not in (f'[{vprev}]', '[vt]') else video + 'null[vout]')
     if not want_a:
         return ';'.join(parts)
@@ -379,7 +520,9 @@ def filter_graph(durations, xf, transitions=None, title_input=None, total=None,
             parts.append('[clipa][mus]amix=inputs=2:duration=first:normalize=0[mixa]')
         audio = '[mixa]'
     if total:
-        audio += f'afade=t=in:st=0:d=0.6,afade=t=out:st={round(total - 1.2, 3)}:d=1.2,'
+        fo_st, fo_d, _ = closing_fade(total, voice_end)
+        ai = 0.6 if fade_in is None else (round(fade_in * 0.75, 3) if fade_in > 0 else FADE_IN_DECLICK)
+        audio += f'afade=t=in:st=0:d={ai},afade=t=out:st={fo_st}:d={fo_d},'
     audio += 'loudnorm=I=-14:TP=-1.5:LRA=11:linear=true,alimiter=limit=0.794:level=disabled,aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo'
     parts.append(audio + '[aout]')
     return ';'.join(parts)
@@ -427,7 +570,7 @@ def run_ffmpeg(cmd, label):
 def main(arg):
     story_path, out_dir = resolve(arg)
     story = json.load(open(story_path))
-    inputs, durations, transitions = [], [], []
+    inputs, durations, transitions, warnings = [], [], [], []
     zooms = [shot_zoom(s) for s in story['shots']]
     zoom_ys = [shot_zoom_y(s) for s in story['shots']]
     edit = story.get('edit') or {}
@@ -444,7 +587,11 @@ def main(arg):
             start, dur = clip_window(shot, probe_duration(src))
             inputs += (['-ss', str(start)] if start else []) + ['-t', f'{dur:.3f}', '-i', src]
         durations.append(round(dur, 3))
-        transitions.append(shot.get('transition', 'fade'))
+        tr = shot.get('transition', 'fade')
+        if safe_transition(tr) != tr and len(durations) > 1:
+            warnings.append(f"{shot['id']}: transition {str(tr)[:40]!r} is not allowed, 'fade' is used")
+        transitions.append(safe_transition(tr))
+    clip_durs = list(durations)   # what each clip really plays: beat cuts stay inside it (a held last frame is not cut)
     # keep crossfades shorter than the silence after each shot's narration (Veo lines end ~5.3-5.7 s of 6 s)
     xf = float(story.get('crossfade', 0.3))
     total = round(sum(durations) - xf * (len(durations) - 1), 3)
@@ -463,7 +610,8 @@ def main(arg):
         inputs += (['-ss', str(float(music.get('from', 0)))] if music.get('from') else []) + ['-i', music['path']]
     else:
         music = None
-    dubs, warnings, last_hold = [], [], 0.0
+    dubs, last_hold = [], 0.0
+    closing = None   # (dub seconds, tempo, window) of the closing line: the closing fade waits for its last word
     karaoke = {}   # shot index -> (tempo, words, window when the dub is cut)
     for i, shot in enumerate(story['shots']):
         d = shot.get('dub')
@@ -490,12 +638,28 @@ def main(arg):
             warnings.append(f"{shot['id']}: dub {seconds:.1f}s does not fit the {window:.1f}s window even at {tempo}x: the end is cut")
         elif tempo > 1.0:
             warnings.append(f"{shot['id']}: dub {seconds:.1f}s sped up {tempo:.2f}x to fit the {window:.1f}s window")
+        if i == len(durations) - 1:
+            closing = (seconds, tempo, window)
         if d.get('words'):
             karaoke[i] = (tempo, d['words'], window if cut else None)
         idx = sum(1 for a in inputs if a == '-i')
         inputs += ['-i', dub_file]
         dubs.append({'input': idx, 'tempo': round(tempo, 3), 'lead': DUB_LEAD, 'cut': cut,
                      **({'keep': DUB_AMBIENT} if edit.get('dubKeepAmbient') else {})})
+    voice_end = None
+    if closing:
+        seconds, tempo, window = closing
+        voice_end = shot_starts(durations, xf)[-1] + DUB_LEAD + min(seconds / tempo, window)
+        extra = closing_fade(round(sum(durations) - xf * (len(durations) - 1), 3), voice_end)[2]
+        if extra:   # the fade would otherwise have to start inside the last word: the picture waits a moment longer
+            last_hold = round(last_hold + extra, 3)
+            durations[-1] = round(durations[-1] + extra, 3)
+    beats, beat_zoom = None, beat_zoom_of(edit)
+    if beat_zoom is not None:
+        beats = []
+        for i, clip_dur in enumerate(clip_durs):
+            tempo, words, cut_window = karaoke.get(i, (1.0, None, None))
+            beats.append(beat_windows(beat_cut_times(clip_dur, words, tempo, DUB_LEAD, xf, cut_window), clip_dur, beat_zoom) or None)
     subs_dir, subs = None, None
     if edit.get('subtitles'):
         texts = [s.get('narration', '') or '' for s in story['shots']]
@@ -515,7 +679,7 @@ def main(arg):
                                                                 size=edit.get('subtitleSize'), y=edit.get('subtitleY')))
     total = round(sum(durations) - xf * (len(durations) - 1), 3)
     graph_args = dict(title_input=title_input, total=total, clip_volume=edit.get('clipVolume'),
-                      music_input=music_input, music=music, subtitles=subs, tail_hold=last_hold,
+                      music_input=music_input, music=music, subtitles=subs, tail_hold=last_hold, voice_end=voice_end, fade_in=fade_in_of(edit), beats=beats,
                       fonts_dir=FONTS_DIR if edit.get('subtitleStyle') == HANDWRITTEN else None, zooms=zooms, zoom_ys=zoom_ys, dubs=dubs)
     vgraph = filter_graph(durations, xf, transitions[1:], streams='v', **graph_args)
     agraph = filter_graph(durations, xf, transitions[1:], streams='a', **graph_args)

@@ -27,8 +27,9 @@ export type Trim = { in?: number; out?: number };
 export type MusicEdit = { file: string; name: string; seconds: number; volume: number; at: number; from?: number };
 /** Subtitle look: absent = plain captions; 'tulisan-tangan' = hand-lettering (Gochi Hand) in the sky band. */
 export type SubtitleStyle = 'tulisan-tangan';
-/** subtitleSize: font scale (1 = style default); subtitleY: top of the text as a share of the frame height. */
-export type TimelineEdit = { clipVolume?: number; subtitles?: boolean; subtitleStyle?: SubtitleStyle; subtitleSize?: number; subtitleY?: number; subtitleKaraoke?: boolean; music?: MusicEdit };
+/** subtitleSize: font scale (1 = style default); subtitleY: top of the text as a share of the frame height.
+ * fadeIn: seconds of the opening fade from black (absent = 0.8); beatCuts: punch-in cuts at the pauses of the voice (absent or false = off, { zoom } tunes it). */
+export type TimelineEdit = { fadeIn?: number; beatCuts?: { zoom?: number } | false; clipVolume?: number; subtitles?: boolean; subtitleStyle?: SubtitleStyle; subtitleSize?: number; subtitleY?: number; subtitleKaraoke?: boolean; music?: MusicEdit };
 export const MIN_CLIP = 1;
 const r3 = (n: number) => Math.round(n * 1000) / 1000;
 
