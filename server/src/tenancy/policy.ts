@@ -85,6 +85,12 @@ export const ROUTE_POLICY: PolicyRegistry = {
   'POST /api/providers/keypool/:provider': { policy: 'SISTEM-ADMIN' },
   'DELETE /api/providers/keypool/:provider/:id': { policy: 'SISTEM-ADMIN' },
   'POST /api/providers/keypool/:provider/:id/test': { policy: 'SISTEM-ADMIN' },
+  // wave 2 (quota): numbers and key activation only, never project content
+  'PUT /api/providers/keypool/elevenlabs/active': { policy: 'SISTEM-ADMIN' },
+  'POST /api/providers/keypool/:provider/:id/activate': { policy: 'SISTEM-ADMIN' },
+  'GET /api/quota/limits/:userId': { policy: 'SISTEM-ADMIN' },
+  'PUT /api/quota/limits/:userId': { policy: 'SISTEM-ADMIN' },
+  'GET /api/quota/usage': { policy: 'SISTEM-ADMIN' },
   'GET /api/providers/text-routing': { policy: 'SISTEM-ADMIN' },
   'PUT /api/providers/text-routing': { policy: 'SISTEM-ADMIN' },
   'GET /api/dub/voices': { policy: 'PENGGUNA-BERSAMA' },
