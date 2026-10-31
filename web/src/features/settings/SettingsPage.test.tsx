@@ -15,7 +15,7 @@ function fakeFetch(handler: Handler) {
   });
 }
 
-const admin: User = { id: 'u1', email: 'joseph@nirmalab.com', isAdmin: true };
+const admin: User = { id: 'u1', email: 'joseph@example.com', isAdmin: true };
 const bodyOf = (init?: RequestInit) => JSON.parse(String(init?.body ?? '{}'));
 const HASH_A = 'a'.repeat(64);
 const HASH_B = 'b'.repeat(64);
@@ -39,9 +39,9 @@ describe('SettingsPage · Undang anggota', () => {
     let invites: unknown[] = [];
     const fetchImpl = fakeFetch((url, init) => {
       if (url === '/api/auth/invites' && init?.method === 'POST') {
-        expect(bodyOf(init)).toEqual({ email: 'baru@nirmalab.com' });
-        invites = [{ tokenHash: HASH_A, email: 'baru@nirmalab.com', createdAt: new Date().toISOString(), expiresAt: future, createdBy: 'u1' }];
-        return { status: 200, body: { token: 'tok_newinvite123', expiresAt: future, email: 'baru@nirmalab.com' } };
+        expect(bodyOf(init)).toEqual({ email: 'baru@example.com' });
+        invites = [{ tokenHash: HASH_A, email: 'baru@example.com', createdAt: new Date().toISOString(), expiresAt: future, createdBy: 'u1' }];
+        return { status: 200, body: { token: 'tok_newinvite123', expiresAt: future, email: 'baru@example.com' } };
       }
       if (url === '/api/auth/invites') return { status: 200, body: { invites } };
       if (url === '/api/flow/accounts') return { status: 200, body: flowBody() };
@@ -49,13 +49,13 @@ describe('SettingsPage · Undang anggota', () => {
     });
     renderPage(fetchImpl, admin, 'anggota');
     const card = screen.getByRole('region', { name: /undang anggota/i });
-    await userEvent.type(within(card).getByLabelText(/email/i), 'baru@nirmalab.com');
+    await userEvent.type(within(card).getByLabelText(/email/i), 'baru@example.com');
     await userEvent.click(within(card).getByRole('button', { name: /buat undangan/i }));
     const link = `${window.location.origin}/join/tok_newinvite123`;
     expect(await within(card).findByText(link)).toBeInTheDocument();
     await userEvent.click(within(card).getByRole('button', { name: /salin/i }));
     expect(writeText).toHaveBeenCalledWith(link);
-    expect(await within(card).findByRole('listitem', { name: 'baru@nirmalab.com' })).toHaveTextContent('Aktif');
+    expect(await within(card).findByRole('listitem', { name: 'baru@example.com' })).toHaveTextContent('Aktif');
   });
 
   it('lists invites with their state and revokes an active one', async () => {

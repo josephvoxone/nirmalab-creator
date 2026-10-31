@@ -22,7 +22,7 @@ async function production(env: Record<string, string> = {}) {
   const n = ++seq;
   const dataDir = mkdtempSync(join(tmpdir(), 'nc-joseph-'));
   const users = new UserAuthStore(dataDir);
-  const joseph = await users.createUser({ email: `joseph${n}@nirmalab.com`, password: 'joseph-pass-1', isAdmin: true });
+  const joseph = await users.createUser({ email: `joseph${n}@example.com`, password: 'joseph-pass-1', isAdmin: true });
   await new Promise(r => setTimeout(r, 5));
   const member = await users.createUser({ email: `elfree${n}@gmail.com`, password: 'member-pass-1', isAdmin: false });
   const service = new StoryService({ dataDir, flow: new FlowStore(join(dataDir, 'flow')), probe: async () => ({ durationSec: 6, hasAudio: true }), assemble: async dir => { writeFileSync(join(dir, 'final.mp4'), Buffer.alloc(64, 1)); } });

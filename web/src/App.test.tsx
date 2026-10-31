@@ -12,7 +12,7 @@ function fakeFetch(handler: Handler) {
   });
 }
 
-const admin = { id: 'u1', email: 'joseph@nirmalab.com', isAdmin: true };
+const admin = { id: 'u1', email: 'joseph@example.com', isAdmin: true };
 
 describe('App shell', () => {
   it('sends a visitor without a session to the login page and signs in', async () => {
@@ -25,7 +25,7 @@ describe('App shell', () => {
     });
     render(<App fetchImpl={fetchImpl} initialPath="/cerita" />);
     expect(await screen.findByRole('heading', { name: /masuk/i })).toBeInTheDocument();
-    await userEvent.type(screen.getByLabelText(/email/i), 'joseph@nirmalab.com');
+    await userEvent.type(screen.getByLabelText(/email/i), 'joseph@example.com');
     await userEvent.type(screen.getByLabelText(/password/i), 'secret-pass-1');
     await userEvent.click(screen.getByRole('button', { name: /masuk/i }));
     expect(await screen.findByRole('heading', { name: /mau bikin video apa/i })).toBeInTheDocument();
@@ -51,9 +51,9 @@ describe('App shell', () => {
     const token = 'tok_abcdefghijklmnopqrstuvwxyz';
     const fetchImpl = fakeFetch((url, init) => {
       if (url === '/api/auth/me') return signedIn ? { status: 200, body: { user: { ...admin, isAdmin: false } } } : { status: 401, body: {} };
-      if (url.startsWith('/api/auth/invites/peek')) return { status: 200, body: { valid: true, email: 'baru@nirmalab.com' } };
+      if (url.startsWith('/api/auth/invites/peek')) return { status: 200, body: { valid: true, email: 'baru@example.com' } };
       if (url === '/api/auth/invites/accept' && init?.method === 'POST') {
-        expect(JSON.parse(String(init.body))).toMatchObject({ token, email: 'baru@nirmalab.com' });
+        expect(JSON.parse(String(init.body))).toMatchObject({ token, email: 'baru@example.com' });
         signedIn = true;
         return { status: 200, body: { user: admin } };
       }
@@ -61,7 +61,7 @@ describe('App shell', () => {
     });
     render(<App fetchImpl={fetchImpl} initialPath={`/join/${token}`} />);
     expect(await screen.findByRole('heading', { name: /gabung/i })).toBeInTheDocument();
-    await waitFor(() => expect(screen.getByLabelText(/email/i)).toHaveValue('baru@nirmalab.com'));
+    await waitFor(() => expect(screen.getByLabelText(/email/i)).toHaveValue('baru@example.com'));
     await userEvent.type(screen.getByLabelText(/password/i), 'secret-pass-1');
     await userEvent.click(screen.getByRole('button', { name: /buat akun/i }));
     expect(await screen.findByRole('heading', { name: /mau bikin video apa/i })).toBeInTheDocument();

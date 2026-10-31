@@ -9,7 +9,7 @@ import SettingsPage from './SettingsPage.js';
 
 type Reply = { status: number; body: unknown };
 type Tok = { id: string; name: string; createdAt: string; lastUsedAt: string | null };
-const admin: User = { id: 'u1', email: 'joseph@nirmalab.com', isAdmin: true };
+const admin: User = { id: 'u1', email: 'joseph@example.com', isAdmin: true };
 const REAL = 'nmcp_live_a1b2c3d4e5f6a7b8c9d0';
 const json = (r: Reply) => new Response(JSON.stringify(r.body), { status: r.status, headers: { 'content-type': 'application/json' } });
 const ago = (ms: number) => new Date(Date.now() - ms).toISOString();

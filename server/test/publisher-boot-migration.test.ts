@@ -14,9 +14,9 @@ const youtubeEnv = {
 async function boot(env: Record<string, string> = {}, seed?: (dataDir: string, auth: UserAuthStore) => Promise<void>) {
   const dataDir = mkdtempSync(join(tmpdir(), 'nc-pubboot-'));
   const auth = new UserAuthStore(dataDir);
-  const joseph = await auth.createUser({ email: 'joseph@nirmalab.com', password: 'joseph-pass-1', isAdmin: true });
-  const bina = await auth.createUser({ email: 'bina@nirmalab.com', password: 'bina-pass-123', isAdmin: true });
-  const mira = await auth.createUser({ email: 'mira@nirmalab.com', password: 'mira-pass-123', isAdmin: false });
+  const joseph = await auth.createUser({ email: 'joseph@example.com', password: 'joseph-pass-1', isAdmin: true });
+  const bina = await auth.createUser({ email: 'bina@example.com', password: 'bina-pass-123', isAdmin: true });
+  const mira = await auth.createUser({ email: 'mira@example.com', password: 'mira-pass-123', isAdmin: false });
   await seed?.(dataDir, auth);
   const server = await buildApp({ dataDir, env: { ...youtubeEnv, ...env }, stories: { reconcileMs: 0 } });
   const login = async (email: string, password: string) => {
@@ -26,7 +26,7 @@ async function boot(env: Record<string, string> = {}, seed?: (dataDir: string, a
   const youtube = async (cookie: string) =>
     ((await server.inject({ url: '/api/publish/status', headers: { cookie } })).json() as { publishers: Array<{ platform: string; connected: boolean; accountLabel?: string }> })
       .publishers.find(p => p.platform === 'youtube')!;
-  return { dataDir, server, joseph, bina, mira, youtube, joseph$: () => login('joseph@nirmalab.com', 'joseph-pass-1'), bina$: () => login('bina@nirmalab.com', 'bina-pass-123'), mira$: () => login('mira@nirmalab.com', 'mira-pass-123') };
+  return { dataDir, server, joseph, bina, mira, youtube, joseph$: () => login('joseph@example.com', 'joseph-pass-1'), bina$: () => login('bina@example.com', 'bina-pass-123'), mira$: () => login('mira@example.com', 'mira-pass-123') };
 }
 
 describe('T7.2 — the pre-tenancy global token is adopted by the main owner at boot', () => {
@@ -38,13 +38,13 @@ describe('T7.2 — the pre-tenancy global token is adopted by the main owner at 
   });
 
   it('TENANCY_DEFAULT_OWNER_EMAIL picks the owner explicitly (here the second admin)', async () => {
-    const w = await boot({ TENANCY_DEFAULT_OWNER_EMAIL: 'Bina@Nirmalab.com' }, async dataDir => { writeLegacyTokens(dataDir); });
+    const w = await boot({ TENANCY_DEFAULT_OWNER_EMAIL: 'Bina@Example.com' }, async dataDir => { writeLegacyTokens(dataDir); });
     expect(await w.youtube(await w.bina$())).toMatchObject({ connected: true, accountLabel: 'Lentera Channel' });
     expect((await w.youtube(await w.joseph$())).connected).toBe(false);
   });
 
   it('an unknown TENANCY_DEFAULT_OWNER_EMAIL migrates nothing: the legacy file stays put, nobody gets the token', async () => {
-    const w = await boot({ TENANCY_DEFAULT_OWNER_EMAIL: 'nobody@nirmalab.com' }, async dataDir => { writeLegacyTokens(dataDir); });
+    const w = await boot({ TENANCY_DEFAULT_OWNER_EMAIL: 'nobody@example.com' }, async dataDir => { writeLegacyTokens(dataDir); });
     for (const who of [w.joseph$, w.bina$, w.mira$]) expect((await w.youtube(await who())).connected).toBe(false);
     const { existsSync } = await import('node:fs');
     expect(existsSync(join(w.dataDir, 'publisher', 'youtube.json'))).toBe(true);

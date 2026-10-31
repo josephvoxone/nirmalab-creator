@@ -15,13 +15,13 @@ const board = { title: 'Lentera Rahasia', audio: 'Audio: "{line}"', shots: [{ id
 async function world() {
   const dataDir = mkdtempSync(join(tmpdir(), 'nc-pubown-'));
   const auth = new UserAuthStore(dataDir);
-  const joseph = await auth.createUser({ email: 'joseph@nirmalab.com', password: 'joseph-pass-1', isAdmin: true });
-  const bina = await auth.createUser({ email: 'bina@nirmalab.com', password: 'bina-pass-123', isAdmin: true });
-  const mira = await auth.createUser({ email: 'mira@nirmalab.com', password: 'mira-pass-123', isAdmin: false });
+  const joseph = await auth.createUser({ email: 'joseph@example.com', password: 'joseph-pass-1', isAdmin: true });
+  const bina = await auth.createUser({ email: 'bina@example.com', password: 'bina-pass-123', isAdmin: true });
+  const mira = await auth.createUser({ email: 'mira@example.com', password: 'mira-pass-123', isAdmin: false });
   const server = await buildApp({ dataDir, env: {}, stories: { reconcileMs: 0 } });
   const login = async (email: string, password: string) =>
     String((await server.inject({ method: 'POST', url: '/api/auth/login', payload: { email, password } })).headers['set-cookie']).split(';')[0]!;
-  const cookies = { joseph: await login('joseph@nirmalab.com', 'joseph-pass-1'), bina: await login('bina@nirmalab.com', 'bina-pass-123'), mira: await login('mira@nirmalab.com', 'mira-pass-123') };
+  const cookies = { joseph: await login('joseph@example.com', 'joseph-pass-1'), bina: await login('bina@example.com', 'bina-pass-123'), mira: await login('mira@example.com', 'mira-pass-123') };
   const newStory = async (cookie: string): Promise<string> => {
     const res = await server.inject({ method: 'POST', url: '/api/stories', headers: { cookie }, payload: { storyboard: board } });
     expect(res.statusCode).toBe(201);
@@ -114,13 +114,13 @@ describe('T7.4 — preview/publish only for the owner of the project', () => {
   it('the TENANCY_DEFAULT_OWNER_EMAIL account is the owner of attribution-less stories', async () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'nc-pubown2-'));
     const auth = new UserAuthStore(dataDir);
-    await auth.createUser({ email: 'joseph@nirmalab.com', password: 'joseph-pass-1', isAdmin: true });
-    await auth.createUser({ email: 'bina@nirmalab.com', password: 'bina-pass-123', isAdmin: true });
-    const server = await buildApp({ dataDir, env: { TENANCY_DEFAULT_OWNER_EMAIL: 'bina@nirmalab.com' }, stories: { reconcileMs: 0 } });
+    await auth.createUser({ email: 'joseph@example.com', password: 'joseph-pass-1', isAdmin: true });
+    await auth.createUser({ email: 'bina@example.com', password: 'bina-pass-123', isAdmin: true });
+    const server = await buildApp({ dataDir, env: { TENANCY_DEFAULT_OWNER_EMAIL: 'bina@example.com' }, stories: { reconcileMs: 0 } });
     const login = async (email: string, password: string) =>
       String((await server.inject({ method: 'POST', url: '/api/auth/login', payload: { email, password } })).headers['set-cookie']).split(';')[0]!;
-    const joseph = await login('joseph@nirmalab.com', 'joseph-pass-1');
-    const bina = await login('bina@nirmalab.com', 'bina-pass-123');
+    const joseph = await login('joseph@example.com', 'joseph-pass-1');
+    const bina = await login('bina@example.com', 'bina-pass-123');
     const id = (await server.inject({ method: 'POST', url: '/api/stories', headers: { cookie: joseph }, payload: { storyboard: board } })).json().story.id as string;
     const path = join(dataDir, 'stories', id, 'story.json');
     const { createdBy: _drop, ...rest } = JSON.parse(readFileSync(path, 'utf8'));

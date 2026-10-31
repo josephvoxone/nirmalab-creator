@@ -15,7 +15,7 @@ function fakeFetch(handler: Handler) {
   });
 }
 
-const admin: User = { id: 'u1', email: 'joseph@nirmalab.com', isAdmin: true };
+const admin: User = { id: 'u1', email: 'joseph@example.com', isAdmin: true };
 
 function renderPanel(fetchImpl: ReturnType<typeof fakeFetch>, opts: { user?: User; openUrl?: (url: string) => void; url?: string } = {}) {
   return render(
@@ -170,7 +170,7 @@ describe('ConnectionsPanel (Settings → Koneksi)', () => {
     const first = renderPanel(mine);
     expect(await within(section()).findByRole('listitem', { name: 'YouTube' })).toHaveTextContent('Terhubung sebagai youtube-channel');
     first.unmount();
-    renderPanel(other, { user: { id: 'u2', email: 'bina@nirmalab.com', isAdmin: true } });
+    renderPanel(other, { user: { id: 'u2', email: 'bina@example.com', isAdmin: true } });
     const yt = await within(section()).findByRole('listitem', { name: 'YouTube' });
     expect(yt).toHaveTextContent('Belum terhubung');
     expect(section()).not.toHaveTextContent('youtube-channel');

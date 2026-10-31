@@ -32,7 +32,7 @@ function snapshot(dir: string): string {
 async function world() {
   const dataDir = mkdtempSync(join(tmpdir(), 'nc-inv-'));
   const auth = new UserAuthStore(dataDir);
-  const qa = await auth.createUser({ email: 'qa-admin@nirmalab.local', password: 'qa-pass-123', isAdmin: true });
+  const qa = await auth.createUser({ email: 'qa-admin@example.local', password: 'qa-pass-123', isAdmin: true });
   await new Promise(r => setTimeout(r, 4));
   const joseph = await auth.createUser({ email: 'joseph@x.io', password: 'joseph-pass-1', isAdmin: true });
   await new Promise(r => setTimeout(r, 4));
@@ -77,9 +77,9 @@ describe('T1 scripts/tenancy-inventory.mjs (read-only, production-safe)', () => 
   it('counts ownerless projects, orphans, members, tokens and bytes per owner', async () => {
     const w = await world();
     const out = JSON.parse(run([w.dataDir, '--json']));
-    expect(out.members.map((m: { email: string }) => m.email).sort()).toEqual(['bob@x.io', 'joseph@x.io', 'qa-admin@nirmalab.local']);
+    expect(out.members.map((m: { email: string }) => m.email).sort()).toEqual(['bob@x.io', 'joseph@x.io', 'qa-admin@example.local']);
     expect(out.members.find((m: { email: string }) => m.email === 'joseph@x.io')).toMatchObject({ isAdmin: true, qa: false });
-    expect(out.members.find((m: { email: string }) => m.email === 'qa-admin@nirmalab.local')).toMatchObject({ qa: true });
+    expect(out.members.find((m: { email: string }) => m.email === 'qa-admin@example.local')).toMatchObject({ qa: true });
     expect(out.primaryOwner).toMatchObject({ email: 'joseph@x.io', via: 'oldest-admin' });
     expect(out.stories).toMatchObject({ total: 6, withOwner: 4, withoutOwner: 2, unreadable: [] });
     expect(out.stories.orphans).toEqual([{ id: w.ids.orphan, title: 'Judul Proyek Yatim', ownerId: 'u_sudah_dihapus', bytes: expect.any(Number) }]);

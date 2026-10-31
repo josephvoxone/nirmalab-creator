@@ -18,8 +18,8 @@ function page(handler: Handler, tab: SettingsTab) {
 }
 
 const MEMBERS = [
-  { id: 'u1', email: 'joseph@nirmalab.com', isAdmin: true, createdAt: '2026-10-01T00:00:00Z' },
-  { id: 'u2', email: 'tim@nirmalab.com', isAdmin: false, createdAt: '2026-10-02T00:00:00Z', lastSeenAt: '2026-10-23T00:00:00Z' }
+  { id: 'u1', email: 'joseph@example.com', isAdmin: true, createdAt: '2026-10-01T00:00:00Z' },
+  { id: 'u2', email: 'tim@example.com', isAdmin: false, createdAt: '2026-10-02T00:00:00Z', lastSeenAt: '2026-10-23T00:00:00Z' }
 ];
 
 describe('Settings dialog route', () => {
@@ -56,17 +56,17 @@ describe('Settings · Anggota', () => {
       return undefined;
     }, 'anggota');
     const region = await screen.findByRole('region', { name: /^anggota/i });
-    const tim = await within(region).findByRole('listitem', { name: 'tim@nirmalab.com' });
+    const tim = await within(region).findByRole('listitem', { name: 'tim@example.com' });
     expect(tim).toHaveTextContent(/anggota/i);
-    const me = within(region).getByRole('listitem', { name: 'joseph@nirmalab.com' });
+    const me = within(region).getByRole('listitem', { name: 'joseph@example.com' });
     expect(me).toHaveTextContent(/kamu/i);
     expect(within(me).queryByRole('button', { name: /keluarkan/i })).not.toBeInTheDocument();
     await userEvent.click(within(tim).getByRole('button', { name: /jadikan admin/i }));
     await waitFor(() => expect(calls).toContainEqual(['PATCH', 'u2', { isAdmin: true }]));
-    expect(await within(region).findByRole('listitem', { name: 'tim@nirmalab.com' })).toHaveTextContent(/admin/i);
-    await userEvent.click(within(within(region).getByRole('listitem', { name: 'tim@nirmalab.com' })).getByRole('button', { name: /keluarkan/i }));
+    expect(await within(region).findByRole('listitem', { name: 'tim@example.com' })).toHaveTextContent(/admin/i);
+    await userEvent.click(within(within(region).getByRole('listitem', { name: 'tim@example.com' })).getByRole('button', { name: /keluarkan/i }));
     await userEvent.click(await screen.findByRole('button', { name: /ya, keluarkan/i }));
-    await waitFor(() => expect(within(region).queryByRole('listitem', { name: 'tim@nirmalab.com' })).not.toBeInTheDocument());
+    await waitFor(() => expect(within(region).queryByRole('listitem', { name: 'tim@example.com' })).not.toBeInTheDocument());
     expect(calls).toContainEqual(['DELETE', 'u2', null]);
   });
 
@@ -78,7 +78,7 @@ describe('Settings · Anggota', () => {
       return undefined;
     }, 'anggota');
     const region = await screen.findByRole('region', { name: /^anggota/i });
-    await userEvent.click(within(await within(region).findByRole('listitem', { name: 'tim@nirmalab.com' })).getByRole('button', { name: /jadikan admin/i }));
+    await userEvent.click(within(await within(region).findByRole('listitem', { name: 'tim@example.com' })).getByRole('button', { name: /jadikan admin/i }));
     expect(await within(region).findByRole('alert')).toHaveTextContent(/admin terakhir/i);
   });
 
@@ -91,7 +91,7 @@ describe('Settings · Anggota', () => {
     }, 'anggota');
     const region = await screen.findByRole('region', { name: /^anggota/i });
     await userEvent.click(await within(region).findByRole('button', { name: /coba lagi/i }));
-    expect(await within(region).findByRole('listitem', { name: 'tim@nirmalab.com' })).toBeInTheDocument();
+    expect(await within(region).findByRole('listitem', { name: 'tim@example.com' })).toBeInTheDocument();
   });
 });
 
@@ -105,7 +105,7 @@ function usage(days: number) {
       { accountId: 'a2', label: 'Cadangan', jobs: 4, done: 2, failed: 1, credits: 10, enabled: false, creditsUsedToday: 0 }
     ],
     byKind: { video: { jobs: 5, done: 5, credits: 50 }, image: { jobs: 6, done: 4, credits: 0 }, character: { jobs: 1, done: 0, credits: 0 } },
-    byMember: [{ userId: 'u1', email: 'joseph@nirmalab.com', jobs: 10, done: 8, credits: 40 }, { userId: 'unknown', jobs: 2, done: 1, credits: 10 }]
+    byMember: [{ userId: 'u1', email: 'joseph@example.com', jobs: 10, done: 8, credits: 40 }, { userId: 'unknown', jobs: 2, done: 1, credits: 10 }]
   };
 }
 
@@ -123,7 +123,7 @@ describe('Settings · Penggunaan', () => {
     expect(within(accounts).getByRole('row', { name: /utama/i })).toHaveTextContent(/20 \/ 60/);
     expect(within(accounts).getByRole('row', { name: /cadangan/i })).toHaveTextContent(/nonaktif/i);
     const people = within(region).getByRole('table', { name: /per anggota/i });
-    expect(within(people).getByRole('row', { name: /joseph@nirmalab.com/i })).toHaveTextContent('40');
+    expect(within(people).getByRole('row', { name: /joseph@example.com/i })).toHaveTextContent('40');
     expect(within(people).getByRole('row', { name: /tanpa pemilik/i })).toBeInTheDocument();
     expect(within(region).getAllByTestId('usage-bar')).toHaveLength(7);
     await userEvent.click(within(region).getByRole('radio', { name: /30 hari/i }));

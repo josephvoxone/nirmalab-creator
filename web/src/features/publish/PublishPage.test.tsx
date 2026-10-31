@@ -15,7 +15,7 @@ function fakeFetch(handler: Handler) {
   });
 }
 
-const admin: User = { id: 'u1', email: 'joseph@nirmalab.com', isAdmin: true };
+const admin: User = { id: 'u1', email: 'joseph@example.com', isAdmin: true };
 const bodyOf = (init?: RequestInit) => JSON.parse(String(init?.body ?? '{}'));
 const NOW = new Date(2026, 9, 24, 10, 0);
 

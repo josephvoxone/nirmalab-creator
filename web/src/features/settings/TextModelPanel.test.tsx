@@ -7,7 +7,7 @@ import { TextModelPanel } from './TextModelPanel.js';
 import type { TextModelState } from './settingsClient.js';
 
 type Reply = { status: number; body: unknown };
-const admin: User = { id: 'u1', email: 'joseph@nirmalab.com', isAdmin: true };
+const admin: User = { id: 'u1', email: 'joseph@example.com', isAdmin: true };
 const SECRET = 'fake-opencode-key-0000abcd';
 const json = (r: Reply) => new Response(JSON.stringify(r.body), { status: r.status, headers: { 'content-type': 'application/json' } });
 

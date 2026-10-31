@@ -10,7 +10,7 @@ import { CONFIGURED, MODELS, UNCONFIGURED } from '../providers/fixtures.js';
 import type { Providers } from '../providers/providersClient.js';
 
 type Reply = { status: number; body: unknown };
-const admin: User = { id: 'u1', email: 'joseph@nirmalab.com', isAdmin: true };
+const admin: User = { id: 'u1', email: 'joseph@example.com', isAdmin: true };
 const bodyOf = (init?: RequestInit) => JSON.parse(String(init?.body ?? '{}'));
 const SECRET = 'sk-or-v1-supersecret1234';
 

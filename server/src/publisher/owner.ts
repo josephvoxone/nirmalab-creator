@@ -2,8 +2,8 @@ import { normalizeEmail } from '../auth/password.js';
 
 export type OwnerCandidate = { id: string; email: string; isAdmin: boolean; createdAt: string };
 
-/** QA accounts created by the shipping skill's `qa-admin.sh` (`qa-<something>@nirmalab.local`). */
-const QA_EMAIL = /^qa-.*@nirmalab\.local$/i;
+/** QA accounts created by the shipping skill's `qa-admin.sh` (`qa-<something>@example.local`). */
+const QA_EMAIL = /^qa-.*@(nirmalab\.local|example\.local)$/i;
 
 export type MainOwner = { user: OwnerCandidate; reason: 'configured' | 'oldest-admin' };
 export type MainOwnerLookup = { owner: MainOwner; missing?: undefined } | { owner?: undefined; missing: 'configured-owner-not-found' | 'no-admin' };

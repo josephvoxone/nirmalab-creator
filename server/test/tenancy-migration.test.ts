@@ -26,7 +26,7 @@ type World = Awaited<ReturnType<typeof world>>;
 async function world() {
   const dataDir = mkdtempSync(join(tmpdir(), 'nc-mig-'));
   const auth = new UserAuthStore(dataDir);
-  const qa = await auth.createUser({ email: 'qa-admin@nirmalab.local', password: 'qa-pass-123', isAdmin: true });
+  const qa = await auth.createUser({ email: 'qa-admin@example.local', password: 'qa-pass-123', isAdmin: true });
   await new Promise(r => setTimeout(r, 4));
   const joseph = await auth.createUser({ email: 'joseph@x.io', password: 'joseph-pass-1', isAdmin: true });
   await new Promise(r => setTimeout(r, 4));

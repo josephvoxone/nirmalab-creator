@@ -6,7 +6,7 @@ import type { User } from '../../lib/api.js';
 import { KeyPoolPanel } from './KeyPoolPanel.js';
 import type { DormantKeyView, KeyPools, PoolKeyView } from './keyPoolClient.js';
 
-const admin: User = { id: 'u1', email: 'joseph@nirmalab.com', isAdmin: true };
+const admin: User = { id: 'u1', email: 'joseph@example.com', isAdmin: true };
 const SECRET = 'sk_live_super_secret_9999';
 const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 const key = (n: number, extra: Partial<PoolKeyView> = {}): PoolKeyView => ({ id: `k${n}`, label: `Akun ${n}`, keyHint: `••••${1000 + n}`, source: 'store', state: 'ready', inFlight: 0, uses: n * 3, failures: 0, ...extra });

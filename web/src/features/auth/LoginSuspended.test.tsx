@@ -9,7 +9,7 @@ describe('Masuk · akun ditangguhkan', () => {
     const fetchImpl = fakeFetch(() => ({ status: 403, body: { error: { code: 'ACCOUNT_SUSPENDED', message: 'Akun ini ditangguhkan oleh pengelola. Hubungi pengelola untuk mengaktifkannya kembali; proyek Anda tetap aman.' } } }));
     let signedIn = false;
     render(<LoginPage fetchImpl={fetchImpl} onSignedIn={() => { signedIn = true; }} />);
-    await userEvent.type(screen.getByPlaceholderText('nama@email.com'), 'tim@nirmalab.com');
+    await userEvent.type(screen.getByPlaceholderText('nama@email.com'), 'tim@example.com');
     await userEvent.type(screen.getByPlaceholderText('Password akunmu'), 'rahasia-123');
     await userEvent.click(screen.getByRole('button', { name: 'Masuk' }));
     expect(await screen.findByRole('alert')).toHaveTextContent(/ditangguhkan.*proyek anda tetap aman/i);

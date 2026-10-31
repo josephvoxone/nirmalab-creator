@@ -14,8 +14,8 @@ export const bodyOf = (init?: RequestInit) => JSON.parse(String(init?.body ?? '{
 export const ok = (body: unknown) => ({ status: 200, body });
 export const fail = (status: number, message: string) => ({ status, body: { error: { message } } });
 
-export const admin = { id: 'u1', email: 'joseph@nirmalab.com', isAdmin: true };
-export const member = { id: 'u2', email: 'tim@nirmalab.com', isAdmin: false };
+export const admin = { id: 'u1', email: 'joseph@example.com', isAdmin: true };
+export const member = { id: 'u2', email: 'tim@example.com', isAdmin: false };
 
 const look = { style: 'storybook', genre: 'drama', era: 'auto', camera: 'auto', lens: 'auto', aperture: 'auto', palette: 'auto', lighting: 'auto', tempo: 'mengalir' };
 export const TEMPLATES = [

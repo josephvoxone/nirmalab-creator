@@ -28,7 +28,7 @@ describe('migrateLegacyPublisherTokens', () => {
   it('moves each legacy file to the owner (byte-identical, 0600), retires the global file, backs up, records a manifest', async () => {
     const dir = dataDir();
     const original = writeLegacyTokens(dir);
-    const result = await migrateLegacyPublisherTokens({ dataDir: dir, ownerUserId: OWNER, ownerEmail: 'joseph@nirmalab.com', now: () => new Date('2026-11-01T02:00:00Z') });
+    const result = await migrateLegacyPublisherTokens({ dataDir: dir, ownerUserId: OWNER, ownerEmail: 'joseph@example.com', now: () => new Date('2026-11-01T02:00:00Z') });
     expect(result).toMatchObject({ status: 'migrated', moved: ['youtube', 'tiktok', 'meta'], ownerKept: [], skipped: [] });
     const root = join(dir, 'publisher');
     for (const platform of ['youtube', 'tiktok', 'meta'] as const) {
@@ -43,7 +43,7 @@ describe('migrateLegacyPublisherTokens', () => {
     const manifestText = readFileSync(result.manifestPath!, 'utf8');
     for (const secret of LEGACY_SECRET_FRAGMENTS) expect(manifestText).not.toContain(secret);
     const manifest = JSON.parse(manifestText);
-    expect(manifest).toMatchObject({ version: 1, id: '20261101T020000Z', ownerUserId: OWNER, ownerEmail: 'joseph@nirmalab.com' });
+    expect(manifest).toMatchObject({ version: 1, id: '20261101T020000Z', ownerUserId: OWNER, ownerEmail: 'joseph@example.com' });
     expect(manifest.entries.map((e: { platform: string; outcome: string; bytes: number }) => [e.platform, e.outcome, e.bytes])).toEqual([
       ['youtube', 'moved', original.youtube!.length], ['tiktok', 'moved', original.tiktok!.length], ['meta', 'moved', original.meta!.length]
     ]);
@@ -207,7 +207,7 @@ describe('rollbackLegacyPublisherTokens', () => {
 
 describe('resolveMainOwner + boot helper', () => {
   const users = [
-    { id: 'u_qa', email: 'qa-admin@nirmalab.local', isAdmin: true, createdAt: '2026-01-01T00:00:00.000Z' },
+    { id: 'u_qa', email: 'qa-admin@example.local', isAdmin: true, createdAt: '2026-01-01T00:00:00.000Z' },
     { id: 'u_member', email: 'mira@x.io', isAdmin: false, createdAt: '2026-01-02T00:00:00.000Z' },
     { id: 'u_joseph', email: 'Joseph@Nirmalab.com', isAdmin: true, createdAt: '2026-03-01T00:00:00.000Z' },
     { id: 'u_bina', email: 'bina@x.io', isAdmin: true, createdAt: '2026-05-01T00:00:00.000Z' }

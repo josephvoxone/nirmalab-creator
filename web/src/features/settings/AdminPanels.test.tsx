@@ -17,23 +17,23 @@ function page(handler: Handler, tab: SettingsTab) {
 }
 
 const MEMBERS = [
-  { id: 'u1', email: 'joseph@nirmalab.com', isAdmin: true, createdAt: '2026-10-01T00:00:00Z' },
-  { id: 'u2', email: 'tim@nirmalab.com', isAdmin: false, createdAt: '2026-10-02T00:00:00Z', lastSeenAt: '2026-10-23T00:00:00Z' }
+  { id: 'u1', email: 'joseph@example.com', isAdmin: true, createdAt: '2026-10-01T00:00:00Z' },
+  { id: 'u2', email: 'tim@example.com', isAdmin: false, createdAt: '2026-10-02T00:00:00Z', lastSeenAt: '2026-10-23T00:00:00Z' }
 ];
 const zeroUsage = Object.fromEntries(['flowCredits', 'openrouterUsd', 'elevenChars', 'llmTurns', 'genCalls'].map(k => [k, { day: 0, d30: 0, reserved: 0 }]));
 const limitsView = (over: Record<string, unknown> = {}, usage: Record<string, unknown> = {}) => ({
-  userId: 'u2', email: 'tim@nirmalab.com', isAdmin: false, limits: over,
+  userId: 'u2', email: 'tim@example.com', isAdmin: false, limits: over,
   effective: { elevenChars: { perDay: 2000, per30d: 5000, perRender: 2500 }, ...over },
   defaults: { elevenChars: { perDay: 2000, per30d: 5000, perRender: 2500 } },
   usage: { ...zeroUsage, ...usage }
 });
 const PROJECTS = {
   owners: [
-    { userId: 'u1', email: 'joseph@nirmalab.com', isAdmin: true, projects: 6, bytes: 5_200_000, lastActivityMs: 1_700_000_000_000 },
-    { userId: 'u2', email: 'tim@nirmalab.com', isAdmin: false, projects: 0, bytes: 0, lastActivityMs: null },
-    { userId: 'u3', email: 'dina@nirmalab.com', isAdmin: false, projects: 2, bytes: 1_048_576, lastActivityMs: 1_700_000_100_000, suspendedAt: '2026-10-30T00:00:00Z' }
+    { userId: 'u1', email: 'joseph@example.com', isAdmin: true, projects: 6, bytes: 5_200_000, lastActivityMs: 1_700_000_000_000 },
+    { userId: 'u2', email: 'tim@example.com', isAdmin: false, projects: 0, bytes: 0, lastActivityMs: null },
+    { userId: 'u3', email: 'dina@example.com', isAdmin: false, projects: 2, bytes: 1_048_576, lastActivityMs: 1_700_000_100_000, suspendedAt: '2026-10-30T00:00:00Z' }
   ],
-  orphans: [{ id: 'story_aaaaaaaaaaaaaaaa', title: 'Kakek Hilang Perahu', ownerId: 'u_old', ownerEmail: 'lama@nirmalab.com', bytes: 2_097_152, createdAtMs: 1_700_000_000_000, updatedAtMs: 1_700_000_500_000, status: 'done' }],
+  orphans: [{ id: 'story_aaaaaaaaaaaaaaaa', title: 'Kakek Hilang Perahu', ownerId: 'u_old', ownerEmail: 'lama@example.com', bytes: 2_097_152, createdAtMs: 1_700_000_000_000, updatedAtMs: 1_700_000_500_000, status: 'done' }],
   totals: { projects: 8, bytes: 8_000_000, orphans: 1, orphanBytes: 2_097_152, unreadable: 0 }
 };
 
@@ -53,17 +53,17 @@ describe('Pengaturan › Anggota (admin)', () => {
       return undefined;
     }, 'anggota');
     const region = await screen.findByRole('region', { name: /^anggota/i });
-    const row = await within(region).findByRole('listitem', { name: 'tim@nirmalab.com' });
+    const row = await within(region).findByRole('listitem', { name: 'tim@example.com' });
     expect(within(row).queryByText(/ditangguhkan/i)).toBeNull();
     await userEvent.click(within(row).getByRole('button', { name: /^tangguhkan/i }));
     await waitFor(() => expect(calls).toEqual(['suspend u2']));
-    const after = await within(region).findByRole('listitem', { name: 'tim@nirmalab.com' });
+    const after = await within(region).findByRole('listitem', { name: 'tim@example.com' });
     expect(await within(after).findByText(/ditangguhkan/i)).toBeInTheDocument();
     await userEvent.click(within(after).getByRole('button', { name: /^aktifkan/i }));
     await waitFor(() => expect(calls).toEqual(['suspend u2', 'activate u2']));
-    await waitFor(() => expect(within(within(region).getByRole('listitem', { name: 'tim@nirmalab.com' })).queryByText(/ditangguhkan/i)).toBeNull());
+    await waitFor(() => expect(within(within(region).getByRole('listitem', { name: 'tim@example.com' })).queryByText(/ditangguhkan/i)).toBeNull());
     // you never get a suspend/limits control on your own row
-    const me = within(region).getByRole('listitem', { name: 'joseph@nirmalab.com' });
+    const me = within(region).getByRole('listitem', { name: 'joseph@example.com' });
     expect(within(me).queryByRole('button', { name: /tangguhkan/i })).toBeNull();
   });
 
@@ -76,17 +76,17 @@ describe('Pengaturan › Anggota (admin)', () => {
       return undefined;
     }, 'anggota');
     const region = await screen.findByRole('region', { name: /^anggota/i });
-    await userEvent.click(within(await within(region).findByRole('listitem', { name: 'tim@nirmalab.com' })).getByRole('button', { name: /^keluarkan/i }));
+    await userEvent.click(within(await within(region).findByRole('listitem', { name: 'tim@example.com' })).getByRole('button', { name: /^keluarkan/i }));
     const dialog = await screen.findByRole('alertdialog');
     const text = dialog.textContent ?? '';
-    expect(text).toMatch(/tim@nirmalab\.com/);
+    expect(text).toMatch(/tim@example\.com/);
     expect(text).toMatch(/proyek.*tidak (ikut )?dihapus/i);
     expect(text).toMatch(/yatim/i);
     expect(text).toMatch(/token|koneksi/i);
     expect(text).toMatch(/tangguhkan/i);
     await userEvent.click(within(dialog).getByRole('button', { name: /ya, keluarkan/i }));
     expect(await within(region).findByText(/3 proyek menjadi yatim/i)).toBeInTheDocument();
-    expect(within(region).queryByRole('listitem', { name: 'tim@nirmalab.com' })).toBeNull();
+    expect(within(region).queryByRole('listitem', { name: 'tim@example.com' })).toBeNull();
   });
 
   it('Batas & pemakaian: loading, then numbers with placeholders; saves exactly what changed; unlimited = empty', async () => {
@@ -99,8 +99,8 @@ describe('Pengaturan › Anggota (admin)', () => {
       return undefined;
     }, 'anggota');
     const region = await screen.findByRole('region', { name: /^anggota/i });
-    await userEvent.click(within(await within(region).findByRole('listitem', { name: 'tim@nirmalab.com' })).getByRole('button', { name: /batas & pemakaian/i }));
-    const dialog = await screen.findByRole('dialog', { name: /batas & pemakaian.*tim@nirmalab\.com/i });
+    await userEvent.click(within(await within(region).findByRole('listitem', { name: 'tim@example.com' })).getByRole('button', { name: /batas & pemakaian/i }));
+    const dialog = await screen.findByRole('dialog', { name: /batas & pemakaian.*tim@example\.com/i });
     // ElevenLabs: default numbers shown, usage shown, "Bawaan" chip
     const eleven = await within(dialog).findByRole('group', { name: /elevenlabs/i });
     expect(within(eleven).getByLabelText(/per hari/i)).toHaveValue('2000');
@@ -130,7 +130,7 @@ describe('Pengaturan › Anggota (admin)', () => {
       return undefined;
     }, 'anggota');
     const region = await screen.findByRole('region', { name: /^anggota/i });
-    await userEvent.click(within(await within(region).findByRole('listitem', { name: 'tim@nirmalab.com' })).getByRole('button', { name: /batas & pemakaian/i }));
+    await userEvent.click(within(await within(region).findByRole('listitem', { name: 'tim@example.com' })).getByRole('button', { name: /batas & pemakaian/i }));
     const dialog = await screen.findByRole('dialog');
     const flow = await within(dialog).findByRole('group', { name: /flow/i });
     expect(within(flow).queryByText(/bawaan/i)).toBeNull();
@@ -155,7 +155,7 @@ describe('Pengaturan › Anggota (admin)', () => {
       return undefined;
     }, 'anggota');
     const region = await screen.findByRole('region', { name: /^anggota/i });
-    await userEvent.click(within(await within(region).findByRole('listitem', { name: 'tim@nirmalab.com' })).getByRole('button', { name: /batas & pemakaian/i }));
+    await userEvent.click(within(await within(region).findByRole('listitem', { name: 'tim@example.com' })).getByRole('button', { name: /batas & pemakaian/i }));
     const dialog = await screen.findByRole('dialog');
     expect(await within(dialog).findByRole('alert')).toHaveTextContent(/batas.*gagal dimuat/i);
     await userEvent.click(within(dialog).getByRole('button', { name: /coba lagi/i }));
@@ -184,7 +184,7 @@ describe('Pengaturan › Penyimpanan (admin)', () => {
     page(handler(), 'penyimpanan');
     const owners = await screen.findByRole('region', { name: /pemakaian per pengguna/i });
     const table = within(owners).getByRole('table');
-    expect(within(table).getByText('joseph@nirmalab.com')).toBeInTheDocument();
+    expect(within(table).getByText('joseph@example.com')).toBeInTheDocument();
     expect(within(table).getByText(/6/)).toBeInTheDocument();
     expect(table).toHaveTextContent(/5\.0 MB|5,0 MB|4\.\d MB|5 MB/);
     expect(within(table).getByText(/ditangguhkan/i)).toBeInTheDocument();
@@ -192,7 +192,7 @@ describe('Pengaturan › Penyimpanan (admin)', () => {
     const orphans = screen.getByRole('region', { name: /proyek yatim/i });
     const row = within(orphans).getByRole('listitem', { name: 'Kakek Hilang Perahu' });
     expect(row).toHaveTextContent('story_aaaaaaaaaaaaaaaa');
-    expect(row).toHaveTextContent('lama@nirmalab.com');
+    expect(row).toHaveTextContent('lama@example.com');
     expect(row).toHaveTextContent(/2(,|\.)0 MB|2 MB/);
   });
 
@@ -224,10 +224,10 @@ describe('Pengaturan › Penyimpanan (admin)', () => {
     const confirm = within(dialog).getByRole('button', { name: /^pindahkan$/i });
     expect(confirm).toBeDisabled();
     await userEvent.click(within(dialog).getByRole('combobox', { name: /pengguna tujuan/i }));
-    const tim = await screen.findByRole('option', { name: /tim@nirmalab\.com/i });
+    const tim = await screen.findByRole('option', { name: /tim@example\.com/i });
     // the list is open now: a suspended user (dina) is not offered
-    expect(screen.getAllByRole('option').map(o => o.textContent)).toEqual(expect.arrayContaining(['joseph@nirmalab.com', 'tim@nirmalab.com']));
-    expect(screen.queryByRole('option', { name: /dina@nirmalab\.com/i })).toBeNull();
+    expect(screen.getAllByRole('option').map(o => o.textContent)).toEqual(expect.arrayContaining(['joseph@example.com', 'tim@example.com']));
+    expect(screen.queryByRole('option', { name: /dina@example\.com/i })).toBeNull();
     await userEvent.click(tim);
     await userEvent.click(within(dialog).getByRole('button', { name: /^pindahkan$/i }));
     await waitFor(() => expect(calls).toEqual([{ toUserId: 'u2' }]));
@@ -275,7 +275,7 @@ describe('Pengaturan › Penyimpanan (admin)', () => {
       return undefined;
     }, 'anggota');
     const region = await screen.findByRole('region', { name: /^anggota/i });
-    await userEvent.click(within(await within(region).findByRole('listitem', { name: 'tim@nirmalab.com' })).getByRole('button', { name: /batas & pemakaian/i }));
+    await userEvent.click(within(await within(region).findByRole('listitem', { name: 'tim@example.com' })).getByRole('button', { name: /batas & pemakaian/i }));
     const dialog = await screen.findByRole('dialog');
     await within(dialog).findByRole('group', { name: /flow/i });
     for (const root of [container, dialog]) {

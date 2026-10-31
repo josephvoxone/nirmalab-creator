@@ -27,7 +27,7 @@ const bridge = (path, body, type = 'application/json') => fetch(`${BASE}${path}`
   method: 'POST', headers: { 'content-type': type, 'x-flow-bridge-token': BRIDGE_TOKEN }, body: type === 'application/json' ? JSON.stringify(body ?? {}) : body
 });
 
-check('add Flow account', (await api('/api/flow/accounts', { method: 'POST', body: JSON.stringify({ label: 'e2e', email: 'e2e@nirmalab.local', profileDir: 'cdp:http://127.0.0.1:9333' }) })).status === 200);
+check('add Flow account', (await api('/api/flow/accounts', { method: 'POST', body: JSON.stringify({ label: 'e2e', email: 'e2e@example.local', profileDir: 'cdp:http://127.0.0.1:9333' }) })).status === 200);
 
 const board = {
   title: 'E2E Selendang',

@@ -16,7 +16,7 @@ function fakeFetch(handler: Handler) {
   });
 }
 
-const admin: User = { id: 'u1', email: 'joseph@nirmalab.com', isAdmin: true };
+const admin: User = { id: 'u1', email: 'joseph@example.com', isAdmin: true };
 
 function HomeProbe() {
   const location = useLocation();
