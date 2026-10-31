@@ -3,15 +3,15 @@ import { userEvent } from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import { ProjectPage } from './ProjectPage.js';
 import { BOARD, fakeProjectApi, ID, mountProject, storyFor, type Call, type ExtraRoute } from './testkit.js';
-import type { DubShot, DubState } from './dubClient.js';
+import type { DubShot, DubState, DubFit } from './dubClient.js';
 
 const TEXTS: Record<string, string> = { '00-pembuka': '', '01-pagar': 'Jingga menunggu setiap sore.', '02-jalan': 'Suatu hari Bima pulang.', '03-peluk': 'Mereka bertemu lagi.' };
 const SCENE: Record<string, string> = { '00-pembuka': 'menunggu', '01-pagar': 'menunggu', '02-jalan': 'pulang', '03-peluk': 'pulang' };
 
 /** A tiny stand-in for the dub routes of the server: state, plan with the estimate, render only with the exact confirmation. */
-function fakeDub(opts: { hang?: boolean; configured?: boolean; voiceId?: string; failShot?: string; renderStatus?: number } = {}) {
+function fakeDub(opts: { hang?: boolean; configured?: boolean; voiceId?: string; failShot?: string; renderStatus?: number; fit?: Record<string, DubFit> } = {}) {
   const configured = opts.configured ?? true;
-  const shots: DubShot[] = Object.entries(TEXTS).map(([shotId, text]) => ({ shotId, sceneId: SCENE[shotId], text, textSource: 'narration', chars: text.length, status: 'none', skipped: !text, tooLong: false }));
+  const shots: DubShot[] = Object.entries(TEXTS).map(([shotId, text]) => ({ shotId, sceneId: SCENE[shotId], text, textSource: 'narration', chars: text.length, status: 'none', skipped: !text, tooLong: false, ...(opts.fit?.[shotId] ? { fit: opts.fit[shotId] } : {}) }));
   const settings = { ...(opts.voiceId ? { voiceId: opts.voiceId } : {}), modelId: 'eleven_multilingual_v2', languageCode: 'id', keepAmbient: true, voice: { stability: 0.5, similarityBoost: 0.75, style: 0, speed: 1, speakerBoost: true } };
   const models = [{ id: 'eleven_multilingual_v2', label: 'Multilingual v2 — kualitas terbaik', creditsPerChar: 1, languageCode: false }, { id: 'eleven_flash_v2_5', label: 'Flash v2.5 — cepat dan hemat (½ kredit)', creditsPerChar: 0.5, languageCode: true }];
   const state = (): DubState => {
@@ -33,12 +33,13 @@ function fakeDub(opts: { hang?: boolean; configured?: boolean; voiceId?: string;
     if (call.method === 'POST' && sub === '/plan') {
       const list = scopeShots((call.body as any).scope, (call.body as any).force === true);
       const chars = list.reduce((n, s) => n + s.chars, 0);
-      return json(200, { plan: { shotIds: list.map(s => s.shotId), chars, credits: chars * (settings.modelId === 'eleven_flash_v2_5' ? 0.5 : 1), modelId: settings.modelId } });
+      return json(200, { plan: { shotIds: list.map(s => s.shotId), chars, credits: chars * (settings.modelId === 'eleven_flash_v2_5' ? 0.5 : 1), modelId: settings.modelId, ...(opts.fit ? { blocked: list.filter(s => s.fit?.level === 'block').map(s => s.shotId) } : {}) } });
     }
     if (call.method === 'POST' && sub === '/render') {
       if (opts.renderStatus) return json(opts.renderStatus, { error: { code: 'REJECTED', message: 'ElevenLabs menolak: kredit habis' } });
       const list = scopeShots((call.body as any).scope, (call.body as any).force === true);
       const need = list.reduce((n, s) => n + s.chars, 0);
+      if (list.some(s => s.fit?.level === 'block') && (call.body as any).acceptTooLong !== true) return json(409, { error: { code: 'TOO_LONG', message: 'Teks terlalu panjang untuk klipnya' } });
       if ((call.body as any).confirmCredits !== need) return json(409, { error: { code: 'CONFIRM_REQUIRED', message: 'Konfirmasi biaya tidak cocok' } });
       for (const s of list) { s.status = opts.failShot === s.shotId ? 'failed' : 'done'; if (s.status === 'failed') s.error = 'ElevenLabs sedang sibuk'; else { s.seconds = 2.5; s.audio = `${s.shotId}-abcd1234`; } }
       return json(202, { dub: state() });
@@ -216,5 +217,82 @@ describe('Dubbing tab', () => {
     expect(screen.queryByRole('button', { name: /dub semua/i })).toBeNull();
     expect(screen.queryByRole('button', { name: /ubah teks/i })).toBeNull();
     expect(screen.getByLabelText('Putar dub 01-pagar')).toBeInTheDocument();
+  });
+});
+
+const WARN: DubFit = { ratio: 1.12, level: 'warn', predictedSec: 6.1, windowSec: 5.4, basis: 'predicted', suggestChars: 12 };
+const BLOCK: DubFit = { ratio: 1.54, level: 'block', predictedSec: 8.3, windowSec: 5.4, basis: 'predicted', suggestChars: 48 };
+const HOLD: DubFit = { ratio: 1.41, level: 'hold', predictedSec: 7.8, windowSec: 5.5, basis: 'predicted', holdSec: 0.9 };
+const FITOK: DubFit = { ratio: 0.6, level: 'ok', predictedSec: 3.2, windowSec: 5.4, basis: 'measured' };
+
+describe('Dubbing tab: does the line fit its shot', () => {
+  it('each spoken line shows its length against the window; warn, block and hold say what to do; ok stays quiet', async () => {
+    open(fakeDub({ voiceId: 'VOICE_ARYA_123456', fit: { '01-pagar': FITOK, '02-jalan': WARN, '03-peluk': BLOCK } }));
+    const ok = await screen.findByRole('listitem', { name: 'Shot 01-pagar' });
+    expect(ok).toHaveTextContent(/3,2 dtk.*jendela 5,4 dtk/);
+    expect(within(ok).queryByText(/ringkas/i)).toBeNull();
+    const warn = screen.getByRole('listitem', { name: 'Shot 02-jalan' });
+    expect(warn).toHaveTextContent(/6,1 dtk.*jendela 5,4 dtk/);
+    expect(warn).toHaveTextContent(/dipercepat ×1,12/);
+    expect(warn).toHaveTextContent(/ringkas ±12 karakter/i);
+    const block = screen.getByRole('listitem', { name: 'Shot 03-peluk' });
+    expect(block).toHaveTextContent(/terlalu panjang untuk klipnya/i);
+    expect(block).toHaveTextContent(/ringkas ±48 karakter/i);
+  });
+
+  it('the closing line says its last frame is held (not an error)', async () => {
+    open(fakeDub({ voiceId: 'VOICE_ARYA_123456', fit: { '03-peluk': HOLD } }));
+    expect(await screen.findByRole('listitem', { name: 'Shot 03-peluk' })).toHaveTextContent(/bingkai terakhir ditahan 0,9 dtk/i);
+  });
+
+  it('an older server without fit shows the rows as before (no empty line, no crash)', async () => {
+    open(fakeDub({ voiceId: 'VOICE_ARYA_123456' }));
+    const row = await screen.findByRole('listitem', { name: 'Shot 01-pagar' });
+    expect(row).not.toHaveTextContent(/jendela/);
+  });
+
+  it('a far-too-long line holds "Lanjut dub" back: "Ringkas dulu", and "Dub tetap" sends the render with acceptTooLong and the same confirmation', async () => {
+    const d = fakeDub({ voiceId: 'VOICE_ARYA_123456', fit: { '02-jalan': BLOCK } });
+    open(d);
+    await userEvent.click(within(await screen.findByRole('listitem', { name: 'Shot 02-jalan' })).getByRole('button', { name: /^dub$/i }));
+    const dialog = await screen.findByRole('alertdialog', { name: /konfirmasi biaya/i });
+    expect(dialog).toHaveTextContent(/ringkas dulu/i);
+    expect(dialog).toHaveTextContent(/02-jalan/);
+    expect(within(dialog).getByRole('button', { name: /lanjut dub/i })).toBeDisabled();
+    expect(posts(d, '/render')).toHaveLength(0);
+    await userEvent.click(within(dialog).getByRole('button', { name: /dub tetap/i }));
+    await waitFor(() => expect(within(screen.getByRole('listitem', { name: 'Shot 02-jalan' })).getByText('Siap')).toBeInTheDocument());
+    expect(posts(d, '/render')).toEqual([expect.objectContaining({ body: { scope: { kind: 'shots', shotIds: ['02-jalan'] }, confirmCredits: TEXTS['02-jalan']!.length, acceptTooLong: true } })]);
+  });
+
+  it('no blocked line: no "Ringkas dulu" and no "Dub tetap" button; the render body has no acceptTooLong', async () => {
+    const d = fakeDub({ voiceId: 'VOICE_ARYA_123456', fit: { '01-pagar': WARN } });
+    open(d);
+    await userEvent.click(within(await screen.findByRole('listitem', { name: 'Shot 01-pagar' })).getByRole('button', { name: /^dub$/i }));
+    const dialog = await screen.findByRole('alertdialog');
+    expect(dialog).not.toHaveTextContent(/ringkas dulu/i);
+    expect(within(dialog).queryByRole('button', { name: /dub tetap/i })).toBeNull();
+    await userEvent.click(within(dialog).getByRole('button', { name: /lanjut dub/i }));
+    await waitFor(() => expect(posts(d, '/render')).toHaveLength(1));
+    expect(posts(d, '/render')[0]!.body).not.toHaveProperty('acceptTooLong');
+  });
+});
+
+describe('Dubbing tab: shots that would be silent in the video', () => {
+  it('names the shots that have text but no fresh dub once the project has dubs', async () => {
+    const d = fakeDub({ voiceId: 'VOICE_ARYA_123456' });
+    d.shots[1]!.status = 'done'; d.shots[1]!.audio = 'x';
+    d.shots[2]!.status = 'stale'; d.shots[2]!.audio = 'y';
+    open(d);
+    const banner = await screen.findByText(/belum punya dub terbaru/i);
+    expect(banner).toHaveTextContent(/02-jalan/);
+    expect(banner).toHaveTextContent(/03-peluk/);
+    expect(banner).not.toHaveTextContent(/01-pagar/);
+  });
+
+  it('a project with no dub yet, or with every dub fresh, shows no such banner', async () => {
+    open(fakeDub({ voiceId: 'VOICE_ARYA_123456' }));
+    await screen.findByRole('region', { name: /scene menunggu/i });
+    expect(screen.queryByText(/belum punya dub terbaru/i)).toBeNull();
   });
 });

@@ -42,6 +42,8 @@ export type Story = {
   videoStale?: boolean;
   /** Shots that block assembly, with the message to show (server gate, spec §4.4). */
   gate?: { message: string; shots: GateBlocker[] };
+  /** Heads-up from the last assembly start: `dub-basi:<shot>` = that shot has text but no fresh dub (silent in the video). */
+  warnings?: string[];
   events: Array<{ atMs: number; message: string }>;
   /** Storyboard revision (+1 per change). Sent back with PUT; a mismatch answers 409 STALE. */
   rev?: number;
