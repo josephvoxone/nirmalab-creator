@@ -291,6 +291,19 @@ def tail_hold(seconds, window, max_tempo=MAX_DUB_TEMPO, breath=0.35):
     return round(seconds / max_tempo - window + breath, 2)
 
 
+FADE_IN = 0.8         # the opening fade from black every plan had before `edit.fadeIn` existed
+FADE_IN_MAX = 1.2
+FADE_IN_DECLICK = 0.02   # with no opening fade the sound still ramps in this long, so it never starts on a click
+
+
+def fade_in_of(edit):
+    """The plan's `edit.fadeIn` as seconds in 0..FADE_IN_MAX, or None (absent or not a number: the old FADE_IN)."""
+    v = (edit or {}).get('fadeIn')
+    if isinstance(v, bool) or not isinstance(v, (int, float)) or v != v:
+        return None
+    return round(min(FADE_IN_MAX, max(0.0, float(v))), 3)
+
+
 FADE_OUT = 1.2        # the closing fade to black, when nothing is being said
 FADE_OUT_MIN = 0.6    # the shortest closing fade that still reads as a fade
 CLOSING_PAD = 0.15    # quiet between the last word of the closing line and the start of the fade
@@ -313,7 +326,7 @@ def closing_fade(total, voice_end=None):
 
 def filter_graph(durations, xf, transitions=None, title_input=None, total=None,
                  clip_volume=None, music_input=None, music=None, subtitles=None, fonts_dir=None, zooms=None,
-                 streams='av', zoom_ys=None, dubs=None, tail_hold=0.0, voice_end=None):
+                 streams='av', zoom_ys=None, dubs=None, tail_hold=0.0, voice_end=None, fade_in=None):
     """One ffmpeg filter graph.  streams: 'av' (both), 'v' (video chain only) or 'a' (audio chain only).
 
     Production renders 'v' and 'a' in two ffmpeg runs: in one graph, ffmpeg 5.1 reads every clip to feed the
@@ -371,7 +384,8 @@ def filter_graph(durations, xf, transitions=None, title_input=None, total=None,
             video += f"subtitles=filename={subtitles}:fontsdir={fonts_dir or DEJAVU_DIR},"
         if total:
             fo_st, fo_d, _ = closing_fade(total, voice_end)
-            video += f'fade=t=in:st=0:d=0.8,fade=t=out:st={fo_st}:d={fo_d},'
+            fi = FADE_IN if fade_in is None else fade_in
+            video += (f'fade=t=in:st=0:d={fi},' if fi > 0 else '') + f'fade=t=out:st={fo_st}:d={fo_d},'
         parts.append(video.rstrip(',') + '[vout]' if video not in (f'[{vprev}]', '[vt]') else video + 'null[vout]')
     if not want_a:
         return ';'.join(parts)
@@ -401,7 +415,8 @@ def filter_graph(durations, xf, transitions=None, title_input=None, total=None,
         audio = '[mixa]'
     if total:
         fo_st, fo_d, _ = closing_fade(total, voice_end)
-        audio += f'afade=t=in:st=0:d=0.6,afade=t=out:st={fo_st}:d={fo_d},'
+        ai = 0.6 if fade_in is None else (round(fade_in * 0.75, 3) if fade_in > 0 else FADE_IN_DECLICK)
+        audio += f'afade=t=in:st=0:d={ai},afade=t=out:st={fo_st}:d={fo_d},'
     audio += 'loudnorm=I=-14:TP=-1.5:LRA=11:linear=true,alimiter=limit=0.794:level=disabled,aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo'
     parts.append(audio + '[aout]')
     return ';'.join(parts)
@@ -548,7 +563,7 @@ def main(arg):
                                                                 size=edit.get('subtitleSize'), y=edit.get('subtitleY')))
     total = round(sum(durations) - xf * (len(durations) - 1), 3)
     graph_args = dict(title_input=title_input, total=total, clip_volume=edit.get('clipVolume'),
-                      music_input=music_input, music=music, subtitles=subs, tail_hold=last_hold, voice_end=voice_end,
+                      music_input=music_input, music=music, subtitles=subs, tail_hold=last_hold, voice_end=voice_end, fade_in=fade_in_of(edit),
                       fonts_dir=FONTS_DIR if edit.get('subtitleStyle') == HANDWRITTEN else None, zooms=zooms, zoom_ys=zoom_ys, dubs=dubs)
     vgraph = filter_graph(durations, xf, transitions[1:], streams='v', **graph_args)
     agraph = filter_graph(durations, xf, transitions[1:], streams='a', **graph_args)

@@ -25,8 +25,9 @@ export type EditMusic = { file: string; name: string; seconds: number; volume: n
 export const SUBTITLE_STYLES = ['tulisan-tangan'] as const;
 export type SubtitleStyle = typeof SUBTITLE_STYLES[number];
 /** subtitleSize: font scale (1 = the style's default); subtitleY: top of the text as a share of the frame height;
- * subtitleKaraoke: false turns off the word-by-word highlight of dubbed shots (absent = on). */
-export type TimelineEdit = { clipVolume?: number; subtitles?: boolean; subtitleStyle?: SubtitleStyle; subtitleSize?: number; subtitleY?: number; subtitleKaraoke?: boolean; music?: EditMusic };
+ * subtitleKaraoke: false turns off the word-by-word highlight of dubbed shots (absent = on).
+ * fadeIn: seconds (0..1.2) of the opening fade from black; absent = 0.8, what every video made before this field had. */
+export type TimelineEdit = { fadeIn?: number; clipVolume?: number; subtitles?: boolean; subtitleStyle?: SubtitleStyle; subtitleSize?: number; subtitleY?: number; subtitleKaraoke?: boolean; music?: EditMusic };
 
 export type Shot = {
   id: string;
@@ -502,6 +503,9 @@ function validateBreakdown(board: Storyboard): string[] {
   return errors;
 }
 
+/** The opening fade a video had before `edit.fadeIn` existed (seconds), and the longest one allowed. */
+export const DEFAULT_FADE_IN = 0.8;
+export const MAX_FADE_IN = 1.2;
 const isNum = (v: unknown, min: number, max: number) => typeof v === 'number' && Number.isFinite(v) && v >= min && v <= max;
 
 /** Trims and the timeline edit (music, clip volume, subtitles). */
@@ -524,6 +528,7 @@ export function validateEdit(board: Storyboard): string[] {
   if (!e || typeof e !== 'object' || Array.isArray(e)) return [...errors, 'edit must be an object'];
   const edit = e as TimelineEdit;
   if (edit.clipVolume !== undefined && !isNum(edit.clipVolume, 0, 2)) errors.push('edit.clipVolume must be 0..2');
+  if (edit.fadeIn !== undefined && !isNum(edit.fadeIn, 0, MAX_FADE_IN)) errors.push(`edit.fadeIn must be a number of seconds from 0 to ${MAX_FADE_IN}`);
   if (edit.subtitles !== undefined && typeof edit.subtitles !== 'boolean') errors.push('edit.subtitles must be true or false');
   if (edit.subtitleSize !== undefined && !isNum(edit.subtitleSize, 0.6, 2)) errors.push('edit.subtitleSize must be a number from 0.6 to 2');
   if (edit.subtitleY !== undefined && !isNum(edit.subtitleY, 0.02, 0.9)) errors.push('edit.subtitleY must be a number from 0.02 to 0.9');
@@ -546,8 +551,11 @@ export function validateEdit(board: Storyboard): string[] {
 
 /** What the assembled video depends on besides the clips: a change means "assemble again". */
 export function editPrint(board: Storyboard): string {
+  // `fadeIn: 0.8` says out loud what an absent field already means: it must not stale a finished video.
+  const rest = board.edit?.fadeIn === DEFAULT_FADE_IN ? (({ fadeIn: _same, ...others }) => others)(board.edit) : undefined;
+  const edit = rest ? (Object.keys(rest).length ? rest : undefined) : board.edit;
   return JSON.stringify({
-    e: board.edit ?? null,
+    e: edit ?? null,
     s: board.shots.map(s => [s.id, s.trim ?? null, board.edit?.subtitles ? subtitleOf(s) : null, ...(s.zoom && s.zoom !== 1 ? [s.zoom] : []), ...(s.zoom && s.zoom !== 1 && s.zoomY !== undefined && s.zoomY !== 0.5 ? [`y${s.zoomY}`] : [])])
   });
 }
