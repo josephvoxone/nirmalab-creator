@@ -7,6 +7,8 @@ import { StorageMeter } from './media/storage-meter.js';
 import { AuditLedger } from './audit/ledger.js';
 import type { OpenRouterBalance } from './providers/client.js';
 import { OpenRouterConfigStore } from './providers/config.js';
+import type { SpendLedger } from './quota/ledger.js';
+import type { LimitsStore } from './quota/limits.js';
 
 export type QuotaRouteOptions = {
   userAuthStore: UserAuthStore;
@@ -15,6 +17,8 @@ export type QuotaRouteOptions = {
   balance: () => Promise<OpenRouterBalance | null>;
   /** Cached disk scan shared with the storage routes (the janitor invalidates it). Default: a private one. */
   storage?: StorageMeter;
+  /** Per-user spend and limits (the caller's own numbers go out as `mine`). */
+  quotaLedger?: { ledger: SpendLedger; limits: LimitsStore };
 };
 
 export async function registerQuotaRoutes(server: FastifyInstance, options: QuotaRouteOptions): Promise<void> {
@@ -22,7 +26,8 @@ export async function registerQuotaRoutes(server: FastifyInstance, options: Quot
   // Every member polls this route each minute: the volume is walked once per cache window, not once per call.
   const storageMeter = options.storage ?? new StorageMeter(options.dataDir);
   server.get('/api/quota', async (request, reply) => {
-    if (!sessionUser(options.userAuthStore, request)) return reply.code(401).send({ error: { code: 'UNAUTHENTICATED', message: 'Masuk dulu' } });
+    const me = sessionUser(options.userAuthStore, request);
+    if (!me) return reply.code(401).send({ error: { code: 'UNAUTHENTICATED', message: 'Masuk dulu' } });
     const accounts = (await options.flow.listAccounts()).filter(a => a.enabled !== false);
     const known = accounts.filter(a => typeof a.credits === 'number');
     const capped = accounts.filter(a => typeof a.dailyCreditCap === 'number');
@@ -46,7 +51,9 @@ export async function registerQuotaRoutes(server: FastifyInstance, options: Quot
       openrouter: { configured, remainingUsd: balance?.remainingUsd ?? null, usedUsd: balance?.usedUsd ?? null },
       // Vision audit spend of today (spec §9.5) — money only, no prompts.
       audit: await new AuditLedger(options.dataDir).today(),
-      storage: { usedBytes: storage.usedBytes, diskFreeBytes: storage.diskFreeBytes }
+      storage: { usedBytes: storage.usedBytes, diskFreeBytes: storage.diskFreeBytes },
+      // The caller's own limits and use (ElevenLabs characters, Flow credits, OpenRouter $): never anybody else's.
+      ...(options.quotaLedger ? { mine: { limits: options.quotaLedger.limits.effective(me.id), usage: await options.quotaLedger.ledger.usage(me.id) } } : {})
     };
   });
 }

@@ -19,6 +19,7 @@ import { AXCEL_PROJECT_RESOLUTION, CREDITS_PER_SHOT, axcelClipSec, subtitleOf, b
 import { ShotCompileError } from '../bible/compiler.js';
 import { bibleSceneErrors, syncBible } from '../bible/sync.js';
 import { SnapshotStore, type RestoreAttention, type RestoreOutcome } from './snapshots.js';
+import { QuotaError, type QuotaKind } from '../quota/errors.js';
 import { AUDIT_GATE, AuditParseError, MAX_AUDIT_IMAGES, type AuditDimensions, type AuditExpectation, type AuditResult } from '../audit/vision.js';
 
 import { composeStyle, resolveLook } from './looks.js';
@@ -214,6 +215,14 @@ export type StoryDeps = {
     model: () => Promise<string | undefined>;
     run: (input: { images: string[]; expectation: AuditExpectation; model: string }) => Promise<AuditResult>;
     frames: (clip: string, dir: string, shotId: string) => Promise<string[]>;
+  };
+  /**
+   * Money gate (quota ledger). `check` is the friendly pre-flight of a whole run (throws QuotaError, reserves nothing; the
+   * atomic gate is `FlowStore.createJob`); `audit` holds the price of one vision audit for `userId` until `commit`/`release`.
+   */
+  quota?: {
+    check: (userId: string | undefined, amounts: Partial<Record<QuotaKind, number>>) => Promise<void>;
+    audit: (userId: string | undefined, key: string) => Promise<{ commit: (actualUsd?: number) => Promise<void>; release: () => Promise<void> }>;
   };
   /**
    * Free motion QC of a finished clip. `undefined` (or a throw) = no verdict: the clip stays usable, the event log says
@@ -695,7 +704,30 @@ export class StoryService {
     if (needed > remaining) throw new StoryError('BUDGET', `Butuh ±${usdLabel(needed)}, saldo OpenRouter ${usdLabel(remaining)}`);
   }
 
-  private async queueShot(record: StoryRecord, board: Storyboard, shotId: string): Promise<void> {
+  /**
+   * A background re-take (collect, retry of a failed take): when the owner's quota is used up the shot FAILS with the quota
+   * message, so it neither hangs as queued nor loops; the user presses retry after the limit moves or resets.
+   */
+  /** Same as `requeueShot` for a sheet or keyframe take. */
+  private async requeueTake(take: TakeState, requeue: () => Promise<void>): Promise<void> {
+    try {
+      await requeue();
+    } catch (error) {
+      if (!(error instanceof QuotaError)) throw error;
+      Object.assign(take, { status: 'failed', error: error.message, lastError: error.message });
+    }
+  }
+
+  private async requeueShot(record: StoryRecord, board: Storyboard, state: ShotState): Promise<void> {
+    try {
+      await this.queueShot(record, board, state.id);
+    } catch (error) {
+      if (!(error instanceof QuotaError)) throw error;
+      Object.assign(state, { status: 'failed', error: error.message, lastError: error.message });
+    }
+  }
+
+  private async queueShot(record: StoryRecord, board: Storyboard, shotId: string, options: { force?: boolean } = {}): Promise<void> {
     const shot = board.shots.find(s => s.id === shotId)!;
     const state = record.shots.find(s => s.id === shotId)!;
     const prompt = this.compiled(() => shotPromptFor(board, shot), shotId);
@@ -716,6 +748,7 @@ export class StoryService {
       kind: 'video',
       ...this.owner(record),
       ...engine,
+      ...(options.force ? { budgetOverride: true } : {}),
       ...(konsisten ? {
         group: record.id,
         characters: shotCast(board, shot).map(c => ({ name: c.name, look: c.look })),
@@ -792,14 +825,35 @@ export class StoryService {
           throw new StoryError('BUDGET', `Butuh ±${needed} credits untuk ${todo.length} shot, tersisa ${credits} credits di akun Flow`);
         }
       }
-      for (const state of todo) await this.queueShot(record, board, state.id);
+      // Friendly pre-flight of the whole run against the owner's quota (the atomic gate is FlowStore.createJob): a run that
+      // cannot be paid is refused before the first job exists. `force` skips only the balance estimate, never a limit.
+      if (this.deps.quota && record.createdBy && todo.length) {
+        const usdPerClip = videoEngine?.provider === 'openrouter' ? await this.deps.openRouter?.usdPerClip(videoEngine.model).catch(() => null) : null;
+        await this.deps.quota.check(record.createdBy, videoEngine?.provider === 'openrouter'
+          ? (typeof usdPerClip === 'number' ? { openrouterUsd: todo.length * usdPerClip } : {})
+          : videoEngine?.provider === 'axcel' ? {} : { flowCredits: todo.length * CREDITS_PER_SHOT });
+      }
+      // If the gate refuses midway (another request took the last room), the clips already queued stay tracked and the
+      // others fail with the quota message: no job is ever left running that the project does not know about.
+      let quotaStop: QuotaError | undefined;
+      let queued = 0;
+      for (const state of todo) {
+        if (quotaStop) { Object.assign(state, { status: 'failed', error: quotaStop.message, lastError: quotaStop.message }); continue; }
+        try { await this.queueShot(record, board, state.id, options.force ? { force: true } : {}); queued += 1; } catch (error) {
+          if (!(error instanceof QuotaError)) throw error;
+          if (!queued) throw error;
+          quotaStop = error;
+          Object.assign(state, { status: 'failed', error: error.message, lastError: error.message });
+        }
+      }
       // A second render while rendering widens the run instead of replacing it.
       const previous = record.status === 'rendering' ? [...this.runIds(record)] : [];
       record.run = { shots: record.shots.map(s => s.id).filter(sid => ids.has(sid) || previous.includes(sid)) };
       record.status = 'rendering';
       record.error = undefined;
       const queue = videoEngine?.provider === 'axcel' ? `Axcel (${videoEngine.model})` : videoEngine?.provider === 'openrouter' ? 'OpenRouter' : 'Flow';
-      await this.save(record, todo.length ? `${todo.length} shot masuk antrean ${queue}` : undefined);
+      await this.save(record, todo.length ? `${queued} shot masuk antrean ${queue}` : undefined);
+      if (quotaStop) throw quotaStop;
       return record;
     });
   }
@@ -880,7 +934,7 @@ export class StoryService {
       if (state.status !== 'queued' || !state.jobId) continue;
       const job = await this.deps.flow.getJob(state.jobId);
       if (!job) {
-        if ((await this.rejectTake(state, 'Job Flow hilang')) === 'requeue') await this.queueShot(record, board, state.id);
+        if ((await this.rejectTake(state, 'Job Flow hilang')) === 'requeue') await this.requeueShot(record, board, state);
         changed = true;
         continue;
       }
@@ -908,7 +962,7 @@ export class StoryService {
           state.needsEdit = true;
           state.lastError = job.error;
           state.error = `Flow menolak membuat klip ini di ${state.refusedBy!.length} akun berbeda (bukan karena kredit): ubah dulu prompt atau keyframe shot ini, lalu render lagi`;
-        } else if ((await this.rejectTake(state, job.error ?? 'Flow gagal')) === 'requeue') await this.queueShot(record, board, state.id);
+        } else if ((await this.rejectTake(state, job.error ?? 'Flow gagal')) === 'requeue') await this.requeueShot(record, board, state);
         changed = true;
         continue;
       }
@@ -918,7 +972,7 @@ export class StoryService {
       const reason = await this.qc(target, isSilent(board, shot));
       if (reason) {
         await rm(target, { force: true });
-        if ((await this.rejectTake(state, reason)) === 'requeue') await this.queueShot(record, board, state.id);
+        if ((await this.rejectTake(state, reason)) === 'requeue') await this.requeueShot(record, board, state);
       } else {
         state.status = 'done';
         state.durationSec = (await this.deps.probe(target)).durationSec;
@@ -1345,7 +1399,7 @@ export class StoryService {
       return true;
     }
     if (!job || job.status === 'failed') {
-      if ((await this.rejectTake(take, job?.error ?? 'Job Flow hilang')) === 'requeue') await requeue();
+      if ((await this.rejectTake(take, job?.error ?? 'Job Flow hilang')) === 'requeue') await this.requeueTake(take, requeue);
       return true;
     }
     if (job.status !== 'done' || !job.resultPath) return false;
@@ -1353,7 +1407,7 @@ export class StoryService {
     const reason = await qc(target);
     if (reason) {
       await rm(target, { force: true });
-      if ((await this.rejectTake(take, reason)) === 'requeue') await requeue();
+      if ((await this.rejectTake(take, reason)) === 'requeue') await this.requeueTake(take, requeue);
       return true;
     }
     Object.assign(take, { status: 'done', lastError: undefined, mediaId: job.result?.mediaId, caption: job.result?.caption });
@@ -1386,10 +1440,22 @@ export class StoryService {
     if (!audit || !images.length) return undefined;
     const model = await audit.model().catch(() => undefined);
     if (!model) return undefined;
+    // The audit is OpenRouter money of the project's owner: held before the call, settled with the real cost after it.
+    let hold: { commit: (actualUsd?: number) => Promise<void>; release: () => Promise<void> } | undefined;
+    if (this.deps.quota) {
+      try { hold = await this.deps.quota.audit(record.createdBy, `audit:${record.id}:${shot.id}:${randomBytes(4).toString('hex')}`); } catch (error) {
+        if (!(error instanceof QuotaError)) throw error;
+        record.events = [...record.events, { atMs: Date.now(), message: `Audit dilewati: ${error.message}`.slice(0, 300) }].slice(-60);
+        return undefined;
+      }
+    }
     try {
       const result = await audit.run({ images: images.slice(0, MAX_AUDIT_IMAGES), expectation: this.expectation(board, shot), model });
+      await hold?.commit(result.costUsd).catch(() => undefined);
       return { score: result.score, dimensions: result.dimensions, issues: result.issues, repair: result.repair, model, atMs: Date.now(), costUsd: result.costUsd };
     } catch (error) {
+      // A parse failure still cost money (the model answered); anything else never reached a bill.
+      if (error instanceof AuditParseError) await hold?.commit(undefined).catch(() => undefined); else await hold?.release().catch(() => undefined);
       if (error instanceof AuditParseError) {
         return {
           score: 0, dimensions: { sceneMatch: 0, actionMatch: 0, moodMatch: 0, composition: 0 },
@@ -1445,8 +1511,17 @@ export class StoryService {
     }
     if (audit.repair && repairs < AUDIT_REPAIR_LIMIT) {
       state.auditRepair = audit.repair;
+      const before = state.frame;
       state.frame = { status: 'pending', attempts: 0 };
-      await this.queueFrame(record, board, state.id);
+      try {
+        await this.queueFrame(record, board, state.id);
+      } catch (error) {
+        if (!(error instanceof QuotaError)) throw error;
+        // The keyframe itself is usable (it only failed the audit): a human decides, with the quota message in the log.
+        state.frame = before;
+        state.needsReview = true;
+        record.events = [...record.events, { atMs: Date.now(), message: `Perbaikan otomatis keyframe ${state.id} dilewati: ${error.message}`.slice(0, 300) }].slice(-60);
+      }
       state.auditRepair = undefined;
       return true;
     }
@@ -1491,7 +1566,15 @@ export class StoryService {
     state.status = 'pending';
     state.attempts = 0;
     state.auditRepair = audit.repair;
-    await this.queueShot(record, board, state.id);
+    try {
+      await this.queueShot(record, board, state.id);
+    } catch (error) {
+      if (!(error instanceof QuotaError)) throw error;
+      // The clip itself is fine (it only failed the audit): a human decides, with the quota message in the log.
+      state.status = 'done';
+      state.needsReview = true;
+      record.events = [...record.events, { atMs: Date.now(), message: `Perbaikan otomatis ${state.id} dilewati: ${error.message}`.slice(0, 300) }].slice(-60);
+    }
     state.auditRepair = undefined;
     return true;
   }

@@ -244,14 +244,55 @@ function orderAccounts(accounts: FlowAccount[], rotation: FlowRotation): FlowAcc
   return [...accounts].sort(compare[rotation]);
 }
 
+/** Everything `createJob` accepts. `budgetOverride`: the caller already accepted going past the known OpenRouter balance (`force`). */
+export type CreateJobInput = {
+  prompt: string;
+  technique?: string;
+  aspect?: '9:16' | '16:9';
+  durationSec?: number;
+  maxAttempts?: number;
+  kind?: FlowJobKind;
+  group?: string;
+  characters?: FlowCharacterRef[];
+  startFrame?: { mediaId: string; caption: string };
+  createdBy?: string;
+  provider?: ProviderId;
+  model?: string;
+  references?: string[];
+  startImage?: string;
+  resolution?: number;
+  avoidAccountId?: string;
+  budgetOverride?: boolean;
+};
+
+/**
+ * Money gate of the job queue (the quota ledger, wired by `buildApp`). `prepare` may use the network (prices, balance) and
+ * runs BEFORE the queue; `reserve` runs inside it, must not touch the network, and throws to refuse the job (nothing is
+ * stored then); `settle` runs when a job ends for good: done = the provider billed, failed = give the reservation back.
+ */
+export interface JobGate {
+  prepare?(input: CreateJobInput): Promise<unknown>;
+  reserve(job: FlowJob, prepared: unknown, options: { budgetOverride?: boolean }): Promise<void>;
+  settle(job: FlowJob, outcome: 'done' | 'failed'): Promise<void>;
+}
+
 export class FlowStore {
   private readonly path: string;
   private readonly historyPath: string;
   private queue: Promise<unknown> = Promise.resolve();
+  private gate: JobGate | undefined;
 
   constructor(dataDir: string) {
     this.path = join(dataDir, 'flow.json');
     this.historyPath = join(dataDir, HISTORY_FILE);
+  }
+
+  /** Installs the money gate (see `JobGate`). Without one nothing is reserved: the store behaves as before. */
+  setGate(gate: JobGate | undefined): void { this.gate = gate; }
+
+  /** A gate that fails to settle must never fail a completion: the sweep gives back what is left open. */
+  private async settle(job: FlowJob, outcome: 'done' | 'failed'): Promise<void> {
+    try { await this.gate?.settle(job, outcome); } catch (error) { console.error('[flow] quota settle failed', error instanceof Error ? error.message : error); }
   }
 
   private serialize<T>(work: () => Promise<T>): Promise<T> {
@@ -476,28 +517,13 @@ export class FlowStore {
     });
   }
 
-  async createJob(input: {
-    prompt: string;
-    technique?: string;
-    aspect?: '9:16' | '16:9';
-    durationSec?: number;
-    maxAttempts?: number;
-    kind?: FlowJobKind;
-    group?: string;
-    characters?: FlowCharacterRef[];
-    startFrame?: { mediaId: string; caption: string };
-    createdBy?: string;
-    provider?: ProviderId;
-    model?: string;
-    references?: string[];
-    startImage?: string;
-    resolution?: number;
-    avoidAccountId?: string;
-  }): Promise<FlowJob> {
+  async createJob(input: CreateJobInput): Promise<FlowJob> {
     const openrouter = input.provider === 'openrouter';
     const axcel = input.provider === 'axcel';
     if (openrouter && !isModelId(input.model)) throw new FlowInputError('model is required for provider openrouter (e.g. google/veo-3.1-fast)');
     if (axcel && !isAxcelModel(input.model)) throw new FlowInputError(`model is required for provider axcel (one of: ${AXCEL_MODELS.join(', ')})`);
+    const gate = this.gate;
+    const prepared = gate?.prepare ? await gate.prepare(input) : undefined;
     return this.serialize(async () => {
       const state = await this.read();
       const prompt = input.prompt.trim();
@@ -527,8 +553,15 @@ export class FlowStore {
           ...(axcel && input.resolution && [480, 720, 1080].includes(input.resolution) ? { resolution: input.resolution } : {})
         } : {})
       };
+      // The reservation comes first: a refused job never exists, and a job never exists without its reservation.
+      if (gate) await gate.reserve(job, prepared, { ...(input.budgetOverride ? { budgetOverride: true } : {}) });
       state.jobs.push(job);
-      await this.write(state);
+      try {
+        await this.write(state);
+      } catch (error) {
+        await this.settle(job, 'failed');
+        throw error;
+      }
       return job;
     });
   }
@@ -554,6 +587,7 @@ export class FlowStore {
       const now = Date.now();
       const day = today();
       let changed = false;
+      const expired: FlowJob[] = [];
       // A bridge that died mid-job never reports back: expire its lease so the job is retried.
       for (const stale of state.jobs) {
         if (stale.status === 'running' && now - (stale.startedAtMs ?? now) > JOB_LEASE_MS) {
@@ -564,7 +598,7 @@ export class FlowStore {
           stale.status = stale.attempts >= stale.maxAttempts ? 'failed' : 'queued';
           stale.bridgeId = undefined;
           stale.accountId = undefined;
-          if (stale.status === 'failed') stale.finishedAtMs = now;
+          if (stale.status === 'failed') { stale.finishedAtMs = now; expired.push(stale); }
           changed = true;
         }
       }
@@ -580,6 +614,7 @@ export class FlowStore {
           changed = true;
         }
       }
+      for (const dead of expired) await this.settle(dead, 'failed');
       if (provider !== 'flow') {
         const next = state.jobs.filter(j => j.status === 'queued' && ofProvider(j)).sort((a, b) => a.createdAtMs - b.createdAtMs)[0];
         if (!next) {
@@ -777,6 +812,7 @@ export class FlowStore {
       if (result.result) job.result = result.result;
       job.finishedAtMs = Date.now();
       await this.write(state);
+      await this.settle(job, 'done');
       return job;
     });
   }
@@ -820,6 +856,7 @@ export class FlowStore {
         job.accountId = undefined;
       }
       await this.write(state);
+      if (job.status === 'failed') await this.settle(job, 'failed');
       return job;
     });
   }
@@ -848,6 +885,7 @@ export class FlowStore {
       job.finishedAtMs = Date.now();
       job.remoteId = undefined;
       await this.write(state);
+      await this.settle(job, 'failed');
       return { ok: true as const, job };
     });
   }

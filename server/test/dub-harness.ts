@@ -23,10 +23,16 @@ export type HarnessOptions = {
   balance?: () => Promise<number | undefined>;
   clipSeconds?: (id: string) => Promise<Record<string, number>>;
   fail?: (input: SynthesizeInput) => Error | undefined;
+  /** Quota ledger handed to the service (T5b). */
+  quota?: DubDeps['quota'];
+  /** The provider call never returns (a process that dies mid-dub). */
+  hang?: boolean;
+  /** Directory of the stories (to run a second service on the same files after a "restart"). */
+  dir?: string;
 };
 
 export function makeHarness(options: HarnessOptions = {}) {
-  const dir = mkdtempSync(join(tmpdir(), 'dubh-'));
+  const dir = options.dir ?? mkdtempSync(join(tmpdir(), 'dubh-'));
   const calls: SynthesizeInput[] = [];
   const stale: string[] = [];
   const current = { board: options.board ?? defaultBoard() };
@@ -38,6 +44,7 @@ export function makeHarness(options: HarnessOptions = {}) {
       configured: () => options.configured ?? true,
       synthesize: async input => {
         calls.push(input); // counted when the call STARTS: that is when the provider bills
+        if (options.hang) await new Promise<never>(() => undefined);
         await new Promise(r => setTimeout(r, options.delayMs ?? 15));
         const err = options.fail?.(input);
         if (err) throw err;
@@ -47,7 +54,8 @@ export function makeHarness(options: HarnessOptions = {}) {
     },
     queue: new FairQueue({ concurrency: options.concurrency ?? 6 }),
     probe: async () => 3.2,
-    ...(options.clipSeconds ? { clipSeconds: options.clipSeconds } : {})
+    ...(options.clipSeconds ? { clipSeconds: options.clipSeconds } : {}),
+    ...(options.quota ? { quota: options.quota } : {})
   };
   const svc = new DubService(deps);
   return { svc, calls, stale, dir, current, cleanup: () => rmSync(dir, { recursive: true, force: true }) };

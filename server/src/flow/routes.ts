@@ -10,6 +10,7 @@ import type { UserAuthStore } from '../auth/store.js';
 import { usdLabel } from '../providers/catalog.js';
 import { AXCEL_MODELS, isAxcelModel } from '../providers/axcel.js';
 import { isModelId } from '../providers/config.js';
+import { QuotaError } from '../quota/errors.js';
 import { FLOW_ROTATIONS, FlowInputError, FlowStore, type FlowAccountPatch, type FlowRotation } from './store.js';
 
 export type FlowRouteOptions = {
@@ -200,8 +201,10 @@ export async function registerFlowRoutes(server: FastifyInstance, options: FlowR
           return bad(reply, 402, 'BUDGET', `Butuh ±${usdLabel(price)}, saldo OpenRouter ${usdLabel(remaining)}`);
         }
       }
-      const job = await store.createJob({
+      let job;
+      try { job = await store.createJob({
         ...(provider === 'flow' ? {} : { provider, model: request.body!.model as string }),
+        ...(request.body?.force === true ? { budgetOverride: true } : {}),
         // Axcel's renderer sometimes parks a job at `progress 40` for over an hour, so one attempt
         // and fail over — three attempts would keep the user waiting ~70 min for nothing.
         ...(provider === 'axcel' ? { maxAttempts: 1 } : {}),
@@ -213,7 +216,10 @@ export async function registerFlowRoutes(server: FastifyInstance, options: FlowR
         ...(typeof request.body?.technique === 'string' && request.body.technique.trim()
           ? { technique: request.body.technique.trim().slice(0, 120) } : {}),
         createdBy: user.id
-      });
+      }); } catch (error) {
+        if (error instanceof QuotaError) return reply.code(429).send(error.toBody());
+        throw error;
+      }
       return { job };
     }
   );

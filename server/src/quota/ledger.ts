@@ -167,6 +167,12 @@ export class SpendLedger {
   /** Atomic check-then-reserve; the same key while still open is a no-op. Throws QuotaError over a limit. */
   async reserve(r: Reservation): Promise<void> { return this.reserveMany([r]); }
 
+  /** Dry run of `reserveMany`: throws the same QuotaError, reserves nothing (the friendly pre-flight before a confirmation). */
+  async precheck(batch: Reservation[]): Promise<void> {
+    if (!batch.length) return;
+    await this.run(s => this.check(s, batch, this.now()), { write: false });
+  }
+
   /** All or nothing. A batch of one user is also checked against `perRender` as a whole. */
   async reserveMany(batch: Reservation[]): Promise<void> {
     if (!batch.length) return;

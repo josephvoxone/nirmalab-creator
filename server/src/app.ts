@@ -21,7 +21,11 @@ import { captionFor } from './stories/caption.js';
 import { MediaCache, type FfmpegRunner } from './media/images.js';
 import { registerStorageRoutes, serialCleanup } from './media/storage.js';
 import { StoryService, type StoryDeps } from './stories/service.js';
-import { openRouterBalance } from './providers/balance.js';
+import { openRouterBalance, openRouterBalanceAt } from './providers/balance.js';
+import { FlowGate, committedBalance, storyQuota } from './quota/gates.js';
+import { SpendLedger } from './quota/ledger.js';
+import { LimitsStore } from './quota/limits.js';
+import { registerQuotaLimitRoutes } from './quota/routes.js';
 import { OpenRouterCatalog } from './providers/catalog.js';
 import { registerProviderRoutes } from './providers/routes.js';
 import { AxcelClient, AxcelConfigStore, AxcelWorker } from './providers/axcel.js';
@@ -120,11 +124,27 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   }, { prefix: '/api' });
 
   const flowStore = new FlowStore(join(options.dataDir, 'flow'));
+  // QUOTA (T5): per-user ledger of what leaves money (Flow credits, OpenRouter USD, ElevenLabs characters). Limits live in
+  // quota/limits.json (numbers only); admins (isAdmin) have no ElevenLabs limit, non-admins the defaults of quota/limits.ts.
+  const quotaLimits = new LimitsStore(options.dataDir, id => userAuthStore.findUserById(id)?.isAdmin === true);
+  await quotaLimits.init();
+  const quotaLedger = new SpendLedger(options.dataDir, { limitFor: quotaLimits.resolve });
   const media = new MediaCache({ dataDir: options.dataDir, ffmpeg: options.media?.ffmpeg });
   const providerFetch = options.providers?.fetch ?? fetch;
   const catalog = new OpenRouterCatalog(options.dataDir, { fetch: providerFetch });
   const providerConfig = new OpenRouterConfigStore(options.dataDir);
   const auditLedger = new AuditLedger(options.dataDir);
+  const balanceSource = { balance: () => openRouterBalance(options.dataDir, { fetch: providerFetch }), fetchedAtMs: () => openRouterBalanceAt(options.dataDir) };
+  // The balance every budget check sees: the cached one minus what is already promised/spent since (closes the 60 s cache race).
+  const spendableBalance = committedBalance(quotaLedger, balanceSource);
+  flowStore.setGate(new FlowGate({
+    ledger: quotaLedger,
+    prices: {
+      usdPerClip: async model => { try { return (await catalog.find('video', model))?.usdPerClip ?? null; } catch { return null; } },
+      usdPerImage: async model => { try { return (await catalog.find('image', model))?.usdPerImage ?? null; } catch { return null; } }
+    },
+    balance: balanceSource
+  }));
   // Audit is inert without an OpenRouter key: `model()` returns undefined and nothing is spent or flagged.
   const audit: StoryDeps['audit'] = options.stories?.audit ?? {
     model: async () => ((await providerConfig.apiKey()) ? providerConfig.auditModel() : undefined),
@@ -160,8 +180,10 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
       usdPerClip: async model => {
         try { return (await catalog.find('video', model))?.usdPerClip ?? null; } catch { return null; }
       },
-      balance: () => openRouterBalance(options.dataDir, { fetch: providerFetch })
-    }
+      balance: spendableBalance
+    },
+    // Pre-flight of a run and the hold around one vision audit (quota/gates.ts).
+    quota: storyQuota(quotaLedger, quotaLimits.resolve)
   });
   await registerPublisherRoutes(server, {
     service: new PublisherService({ dataDir: options.dataDir, env }),
@@ -196,7 +218,7 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
     bridgeToken: env.OPENCREATOR_FLOW_BRIDGE_TOKEN?.trim() || undefined,
     openRouter: {
       usdPerClip: async model => { try { return (await catalog.find('video', model))?.usdPerClip ?? null; } catch { return null; } },
-      balance: () => openRouterBalance(options.dataDir, { fetch: providerFetch })
+      balance: spendableBalance
     }
   });
   // One text-model store + client per process; later features (project assistant, MCP) take `textModel` from here.
@@ -214,7 +236,8 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   await registerProviderRoutes(server, { userAuthStore, dataDir: options.dataDir, flow: flowStore, fetch: providerFetch, catalog, text: { store: textStore, model: openCodeModel } });
   // One cached disk scan for the sidebar quota; the storage janitor drops it when it has changed the volume.
   const storageMeter = new StorageMeter(options.dataDir);
-  await registerQuotaRoutes(server, { userAuthStore, dataDir: options.dataDir, flow: flowStore, balance: () => openRouterBalance(options.dataDir, { fetch: providerFetch }), storage: storageMeter });
+  await registerQuotaRoutes(server, { userAuthStore, dataDir: options.dataDir, flow: flowStore, balance: () => openRouterBalance(options.dataDir, { fetch: providerFetch }), storage: storageMeter, quotaLedger: { ledger: quotaLedger, limits: quotaLimits } });
+  await registerQuotaLimitRoutes(server, { userAuthStore, ledger: quotaLedger, limits: quotaLimits });
   const workerMs = options.providers?.workerMs ?? 5000;
   if (workerMs > 0) {
     const stopWorker = new OpenRouterWorker({ dataDir: options.dataDir, store: flowStore, fetch: providerFetch, catalog }).start(workerMs);
@@ -255,11 +278,22 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
     queue: dubQueue,
     probe: async file => (await (options.stories?.probe ?? probeClip)(file)).durationSec,
     // Real clip lengths give the dub-fit check its window; a story with no rendered clip yet falls back to the 6 s Flow clip.
+    quota: quotaLedger,
     clipSeconds: async id => Object.fromEntries(((await stories.get(id))?.shots ?? []).flatMap(s => (typeof s.durationSec === 'number' && s.durationSec > 0 ? [[s.id, s.durationSec] as const] : [])))
   });
   await registerDubRoutes(server, { userAuthStore, stories, dub: dubService, client: elevenClient, keys: { elevenlabs: elevenKeys, gemini: geminiKeys }, routing: textRouting, fetch: providerFetch });
   // Shots the user already confirmed before a restart are queued again.
   if (options.dub?.resume !== false) void stories.list().then(all => dubService!.resume(all.map(r => r.id))).catch(() => undefined);
+  // Reservations whose job/dub no longer exists (a crash between reserve and create) are freed at boot and every 10 minutes.
+  {
+    const jobLive = FlowGate.isLive(id => flowStore.getJob(id));
+    const sweep = () => void quotaLedger.sweep(async key => key.startsWith('job:') ? jobLive(key) : key.startsWith('dub:') ? dubRef().isHoldLive(key) : false)
+      .catch(error => server.log.warn({ err: error }, 'quota sweep failed'));
+    const first = setTimeout(sweep, 60_000);
+    const every = setInterval(sweep, 10 * 60_000);
+    first.unref(); every.unref();
+    server.addHook('onClose', async () => { clearTimeout(first); clearInterval(every); });
+  }
   // Load of the shared queues, for the admin (and for deciding the concurrency limits with numbers).
   server.get('/api/system/load', async (request, reply) => {
     if (!requireAdmin(userAuthStore, request, reply)) return undefined;

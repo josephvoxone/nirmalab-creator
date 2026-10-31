@@ -10,6 +10,7 @@ import { MAX_POOL_KEYS, type PoolProvider, type ProviderKeys } from '../lib/prov
 import { probeGeminiKey } from '../llm/gemini.js';
 import type { TextRoutingStore } from '../llm/router.js';
 import { ProviderInputError } from '../providers/config.js';
+import { QuotaError } from '../quota/errors.js';
 import { StoryError, type StoryService } from '../stories/service.js';
 import { sendVideo } from '../stories/routes.js';
 import { DubError, type DubErrorCode, type ElevenLabsClient } from './elevenlabs.js';
@@ -33,6 +34,7 @@ function send(reply: FastifyReply, status: number, code: string, message: string
 }
 
 function fail(reply: FastifyReply, error: unknown) {
+  if (error instanceof QuotaError) return reply.code(429).send(error.toBody());
   if (error instanceof DubError) return send(reply, DUB_STATUS[error.code], error.code, error.message);
   if (error instanceof ProviderInputError) return send(reply, 400, 'INVALID_INPUT', error.message);
   if (error instanceof StoryError) return send(reply, error.code === 'NOT_FOUND' ? 404 : error.code === 'INVALID' ? 400 : 409, error.code, error.message);

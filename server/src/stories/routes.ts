@@ -9,6 +9,7 @@ import { CATALOG } from './looks.js';
 import type { CoverService } from './covers.js';
 import { StoryError, type StoryService } from './service.js';
 import { ShotCompileError } from '../bible/compiler.js';
+import { QuotaError } from '../quota/errors.js';
 import { SHOT_ID, compileBoardShot, validateEngine, type Shot, type Storyboard } from './storyboard.js';
 import { ACTIONS, type ActionContext, type ActionResult } from '../assistant/actions.js';
 import { sceneNumber } from '../assistant/resolve.js';
@@ -19,6 +20,7 @@ import { MAX_MUSIC_BYTES, MUSIC_MIME, MUSIC_TOO_LARGE_MESSAGE, MUSIC_TYPES, NOT_
 const STATUS: Record<StoryError['code'], number> = { INVALID: 400, NOT_FOUND: 404, BUSY: 409, BUDGET: 409, STALE: 409 };
 
 function fail(reply: FastifyReply, error: unknown) {
+  if (error instanceof QuotaError) return reply.code(429).send(error.toBody());
   if (error instanceof StoryError) return reply.code(STATUS[error.code]).send({ error: { code: error.code, message: error.message } });
   const message = error instanceof Error ? error.message : String(error);
   return reply.code(503).send({ error: { code: 'STORY_FAILED', message } });
@@ -55,7 +57,7 @@ const notFound = (reply: FastifyReply, what = 'Shot') => reply.code(404).send({ 
 
 const badRequest = (reply: FastifyReply, message: string) => reply.code(400).send({ error: { code: 'INVALID', message } });
 
-const ACTION_STATUS: Record<string, number> = { INVALID: 400, NOT_FOUND: 404, BUSY: 409, BUDGET: 409, STALE: 409, NOT_CONFIGURED: 400, UNAVAILABLE: 503, FAILED: 503 };
+const ACTION_STATUS: Record<string, number> = { QUOTA: 429, INVALID: 400, NOT_FOUND: 404, BUSY: 409, BUDGET: 409, STALE: 409, NOT_CONFIGURED: 400, UNAVAILABLE: 503, FAILED: 503 };
 
 /** An action result over HTTP: a plain error keeps its code; `needsConfirm` is a normal 200 the UI answers with confirm. */
 function sendAction(reply: FastifyReply, result: ActionResult, ok: () => Promise<Record<string, unknown>>) {
