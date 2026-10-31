@@ -5,8 +5,7 @@ import type { FastifyInstance } from 'fastify';
 import { buildApp, type AppOptions } from '../src/app.js';
 import { UserAuthStore } from '../src/auth/store.js';
 
-export const ADMIN = { email: 'admin@x.io', password: 'admin-pass-1' };
-const ENV = { OPENCREATOR_ADMIN_EMAIL: ADMIN.email, OPENCREATOR_ADMIN_PASSWORD: ADMIN.password };
+const ADMIN_PASSWORD = 'admin-pass-1';
 let counter = 0;
 export const storyId = (n = ++counter) => `story_${n.toString(16).padStart(16, '0')}`;
 
@@ -34,6 +33,10 @@ export function writeStory(dataDir: string, f: StoryFixture): string {
 
 export async function adminWorld(extra: Partial<AppOptions> = {}) {
   const dataDir = mkdtempSync(join(tmpdir(), 'nc-adm-'));
+  // A fresh admin email per world: the login rate limit is a process-wide table, many worlds would trip it (429).
+  const worldNo = ++counter;
+  const adminEmail = `admin${worldNo}@x.io`;
+  const ENV = { OPENCREATOR_ADMIN_EMAIL: adminEmail, OPENCREATOR_ADMIN_PASSWORD: ADMIN_PASSWORD };
   const server: FastifyInstance = await buildApp({
     dataDir, env: ENV, logger: false,
     stories: { reconcileMs: 0 }, providers: { workerMs: 0 }, dub: { resume: false }, media: { cleanupMs: 0 }, ...extra
@@ -43,13 +46,15 @@ export async function adminWorld(extra: Partial<AppOptions> = {}) {
     return { res, cookie: String(res.headers['set-cookie'] ?? '').split(';')[0] ?? '' };
   };
   const auth = new UserAuthStore(dataDir);
-  const admin = auth.findUserByEmail(ADMIN.email)!;
-  const adminCookie = (await login(ADMIN.email, ADMIN.password)).cookie;
+  const admin = auth.findUserByEmail(adminEmail)!;
+  const adminCookie = (await login(adminEmail, ADMIN_PASSWORD)).cookie;
   const addUser = async (email: string, isAdmin = false) => {
-    const user = await auth.createUser({ email, password: 'member-pass-1', isAdmin });
-    return { user, cookie: (await login(email, 'member-pass-1')).cookie };
+    // unique per world (rate limit is keyed on ip+email and shared by the whole process); tests read `user.email`
+    const unique = email.replace('@', `+${worldNo}@`);
+    const user = await auth.createUser({ email: unique, password: 'member-pass-1', isAdmin });
+    return { user, cookie: (await login(unique, 'member-pass-1')).cookie };
   };
   const req = (method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE', url: string, cookie: string | undefined = adminCookie, payload?: unknown) =>
     server.inject({ method, url, ...(cookie ? { headers: { cookie } } : {}), ...(payload === undefined ? {} : { payload: payload as object }) });
-  return { server, dataDir, auth, admin, adminCookie, addUser, login, req };
+  return { server, dataDir, auth, admin, adminEmail, adminCookie, addUser, login, req };
 }

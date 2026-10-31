@@ -21,15 +21,15 @@ describe('T8 suspend: refused with a clear message, the project stays', () => {
     const before = dirBytes(join(w.dataDir, 'stories', sid));
     w.auth.setSuspended(mira.user.id, true, w.admin.id);
     expect((await w.req('GET', '/api/auth/me', mira.cookie)).statusCode).toBe(401);
-    const ok = await w.login('mira@x.io', 'member-pass-1');
+    const ok = await w.login(mira.user.email, 'member-pass-1');
     expect(ok.res.statusCode).toBe(403);
     expect(ok.res.json().error.code).toBe('ACCOUNT_SUSPENDED');
     expect(ok.res.json().error.message).toMatch(/ditangguhkan/i);
     expect(ok.res.headers['set-cookie']).toBeUndefined();
-    expect((await w.login('mira@x.io', 'wrong-password')).res.statusCode).toBe(401);
+    expect((await w.login(mira.user.email, 'wrong-password')).res.statusCode).toBe(401);
     expect(dirBytes(join(w.dataDir, 'stories', sid))).toBe(before);
     w.auth.setSuspended(mira.user.id, false, w.admin.id);
-    expect((await w.login('mira@x.io', 'member-pass-1')).res.statusCode).toBe(200);
+    expect((await w.login(mira.user.email, 'member-pass-1')).res.statusCode).toBe(200);
   });
 
   it('an MCP token of a suspended member stops working at once and works again after reactivation (token not deleted)', async () => {
@@ -92,7 +92,7 @@ describe('T8 DELETE /api/auth/members/:id (C.3): the member goes, the projects s
     expect(existsSync(join(w.dataDir, 'publisher', mira.user.id))).toBe(false);
     expect((await pub.get(bina.user.id, 'youtube'))?.accessToken).toBe('yt-bina');
     // the previous owner stays nameable
-    expect(w.auth.findTombstone(mira.user.id)).toMatchObject({ email: 'mira@x.io', removedBy: w.admin.id });
+    expect(w.auth.findTombstone(mira.user.id)).toMatchObject({ email: mira.user.email, removedBy: w.admin.id });
   });
 
   it('is idempotent and heals a half-done removal: the second call is 200 alreadyRemoved and re-runs the revocations', async () => {

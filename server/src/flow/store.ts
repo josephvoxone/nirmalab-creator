@@ -678,6 +678,24 @@ export class FlowStore {
     });
   }
 
+  /**
+   * Tenancy (admin console): a project moved to another owner takes its Flow jobs along (attribution for FUTURE use and file access;
+   * what the ledger already recorded is never rewritten). Returns how many jobs changed; a second call changes none.
+   */
+  async reassignGroup(group: string, toUserId: string): Promise<number> {
+    return this.serialize(async () => {
+      const state = await this.read();
+      let changed = 0;
+      for (const job of state.jobs) {
+        if (job.group !== group || job.createdBy === toUserId) continue;
+        job.createdBy = toUserId.slice(0, 80);
+        changed += 1;
+      }
+      if (changed) await this.write(state);
+      return changed;
+    });
+  }
+
   async groupAccount(group: string): Promise<string | undefined> {
     return (await this.read()).groupAccounts?.[group];
   }

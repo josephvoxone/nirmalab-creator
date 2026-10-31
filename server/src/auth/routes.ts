@@ -230,7 +230,10 @@ export async function registerAuthRoutes(
       return reply.code(400).send({ error: { code: 'INVALID_INPUT', message: 'isAdmin must be true or false' } });
     }
     try {
-      return { member: store.setAdmin(request.params.id, isAdmin, user.id) };
+      const before = store.findUserById(request.params.id)?.isAdmin;
+      const member = store.setAdmin(request.params.id, isAdmin, user.id);
+      if (before !== undefined && before !== isAdmin) await options.audit?.({ by: user.id, action: 'anggota.peran', targetId: member.id, targetEmail: member.email, detail: { isAdmin } }).catch(() => undefined);
+      return { member };
     } catch (error) {
       return sendMemberError(reply, error);
     }
