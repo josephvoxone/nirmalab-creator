@@ -109,7 +109,9 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
     await registerAuthRoutes(scoped, userAuthStore, {
       bootstrapAdminEmail: env.OPENCREATOR_ADMIN_EMAIL,
       bootstrapAdminPassword: env.OPENCREATOR_ADMIN_PASSWORD,
-      trustProxyHops
+      trustProxyHops,
+      // COOKIE_SECURE=1 always / 0 never / unset = only over HTTPS (see AuthRouteOptions.secureCookies).
+      secureCookies: env.COOKIE_SECURE === '1' ? true : env.COOKIE_SECURE === '0' ? false : 'auto'
     });
   }, { prefix: '/api' });
 

@@ -65,6 +65,12 @@ export type AuthRouteOptions = {
   bootstrapAdminPassword?: string;
   /** The trusted-proxy hop count `buildApp` gave Fastify (reported by the admin diagnostic only). */
   trustProxyHops?: number;
+  /**
+   * Session cookie `Secure` attribute: 'auto' (default) = only when the request arrived over HTTPS (Fastify's
+   * `request.protocol`, which believes X-Forwarded-Proto only from a trusted proxy hop), true/false = always/never.
+   * `Secure` on a plain-http page would make the browser drop the cookie, so auto is the safe default.
+   */
+  secureCookies?: 'auto' | boolean;
 };
 
 async function bootstrapAdminIfNeeded(store: UserAuthStore, options: AuthRouteOptions): Promise<void> {
@@ -86,6 +92,7 @@ export async function registerAuthRoutes(
   options: AuthRouteOptions = {}
 ): Promise<void> {
   await bootstrapAdminIfNeeded(store, options);
+  const secureCookies = options.secureCookies ?? 'auto';
 
   server.get('/auth/status', async () => ({ hasUsers: store.hasUsers() }));
 
@@ -107,14 +114,14 @@ export async function registerAuthRoutes(
       return reply.code(401).send({ error: { code: 'INVALID_CREDENTIALS', message: 'Wrong email or password' } });
     }
     const session = store.createSession(user.id);
-    setSessionCookie(reply, session.token);
+    setSessionCookie(request, reply, session.token, secureCookies);
     return { user: store.publicUser(user) };
   });
 
   server.post('/auth/logout', async (request, reply) => {
     const token = readSessionToken(request);
     if (token) store.destroySession(token);
-    clearSessionCookie(reply);
+    clearSessionCookie(request, reply, secureCookies);
     return { ok: true };
   });
 
@@ -244,7 +251,7 @@ export async function registerAuthRoutes(
       try {
         const user = await store.acceptInvite({ token, email, password });
         const session = store.createSession(user.id);
-        setSessionCookie(reply, session.token);
+        setSessionCookie(request, reply, session.token, secureCookies);
         return { user: store.publicUser(user) };
       } catch (error) {
         return reply.code(400).send({
@@ -274,13 +281,16 @@ function sendMemberError(reply: FastifyReply, error: unknown) {
   return reply.code(status).send({ error: { code: error.code, message: error.message } });
 }
 
-function setSessionCookie(reply: FastifyReply, token: string): void {
+const cookieSecure = (request: FastifyRequest, mode: 'auto' | boolean): string =>
+  (mode === 'auto' ? request.protocol === 'https' : mode) ? '; Secure' : '';
+
+function setSessionCookie(request: FastifyRequest, reply: FastifyReply, token: string, mode: 'auto' | boolean): void {
   reply.header(
     'Set-Cookie',
-    `${SESSION_COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_MAX_AGE}`
+    `${SESSION_COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_MAX_AGE}${cookieSecure(request, mode)}`
   );
 }
 
-function clearSessionCookie(reply: FastifyReply): void {
-  reply.header('Set-Cookie', `${SESSION_COOKIE}=deleted; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`);
+function clearSessionCookie(request: FastifyRequest, reply: FastifyReply, mode: 'auto' | boolean): void {
+  reply.header('Set-Cookie', `${SESSION_COOKIE}=deleted; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${cookieSecure(request, mode)}`);
 }
