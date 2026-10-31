@@ -78,6 +78,27 @@ class Events(unittest.TestCase):
         (only,) = karaoke_events(0.0, 1.0, W(('a', 0, .3)))
         self.assertTrue(only[2].startswith('{\\fad(120,200)}'), only[2])
 
+    def test_a_cue_that_is_replaced_at_once_neither_fades_out_nor_the_next_one_fades_in(self):
+        # two cues, the second starts 0.1 s after the first one's last word: swap instantly, no dimming of the lit word
+        words = W(('a', 0, .3), ('b', .35, .6), ('c', .7, 1.0), ('d', 1.05, 1.3))
+        evs = karaoke_events(0.0, 1.0, words)
+        self.assertEqual(plain(evs[1][2]), 'a b')
+        self.assertTrue(evs[1][2].startswith('{\\fad(0,0)}'), 'the last line of a cue followed at once by another must not fade: ' + evs[1][2])
+        self.assertTrue(evs[2][2].startswith('{\\fad(0,0)}'), 'and the first line of the cue that follows at once must not fade in: ' + evs[2][2])
+
+    def test_a_cue_after_a_real_pause_fades_in_and_the_one_before_it_fades_out(self):
+        words = W(('a', 0, .3), ('b', .35, .6), ('c', 3.0, 3.3), ('d', 3.35, 3.6))
+        evs = karaoke_events(0.0, 1.0, words)
+        self.assertTrue(evs[1][2].startswith('{\\fad(0,200)}'), evs[1][2])
+        self.assertTrue(evs[2][2].startswith('{\\fad(120,0)}'), evs[2][2])
+
+    def test_the_next_cue_never_steals_the_light_of_the_last_word_before_it(self):
+        # 'b' is spoken in 0.1 s and 'c' follows at once; popping 'c' in 0.08 s early would leave 'b' lit for 0.02 s
+        words = W(('a', 0, .3), ('b', .35, .45), ('c', .5, .9), ('d', .95, 1.2))
+        evs = karaoke_events(0.0, 1.0, words)
+        lit_b = [e for e in evs if e[2].count(SUNG) == 1 and plain(e[2]) == 'a b' and e[2].split(' ')[1].count(SUNG)][0]
+        self.assertGreaterEqual(lit_b[1] - lit_b[0], 0.12 - 1e-6, f'b is lit for {lit_b[1] - lit_b[0]:.3f} s')
+
     def test_times_follow_the_tempo_of_the_sped_up_dub(self):
         evs = karaoke_events(10.3, 1.25, W(('Halo', 0.0, 0.4), ('dunia.', 0.5, 1.0)))
         self.assertAlmostEqual(evs[1][0], 10.3 + 0.5 / 1.25, places=2)

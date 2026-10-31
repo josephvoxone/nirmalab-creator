@@ -68,6 +68,8 @@ KARAOKE_POST = 0.25     # and lingers a moment after its last
 KARAOKE_MAX_WORDS = 3   # a few words at a time, not the whole sentence
 KARAOKE_MAX_CHARS = 30
 KARAOKE_GAP = 0.6       # a pause this long between two words starts a new cue
+KARAOKE_MIN_LIT = 0.12  # a word stays lit at least this long: the next cue never pops in over a short last word
+KARAOKE_SWAP = 0.35     # cues closer than this swap instantly; only a real pause earns a fade
 
 
 def shot_starts(durations, xf):
@@ -148,8 +150,9 @@ def karaoke_events(clock_start, tempo, words, window=None):
     """Caption lines that show a few words at a time, with only the word being spoken lit.
 
     Every cue yields one line per word: the same words, the spoken one in SUNG, the rest in UNSUNG, each line lasting from
-    when its word starts to when the next one does (so the light hands over with no gap). The first line fades the cue in,
-    the last fades it out. `clock_start` is when the voice begins on the output clock, `tempo` the speed-up applied to the
+    when its word starts to when the next one does (so the light hands over with no gap). A cue after a real pause fades in
+    and one before a real pause fades out; cues that follow each other at once swap instantly (a fade would dim the lit word),
+    and the next cue never pops in over the last word before it (KARAOKE_MIN_LIT). `clock_start` is when the voice begins on the output clock, `tempo` the speed-up applied to the
     dub, `window` the seconds of dub that survive when it is cut (words starting after it are never spoken, so never shown).
     """
     tempo = tempo if tempo and tempo > 0 else 1.0
@@ -157,14 +160,26 @@ def karaoke_events(clock_start, tempo, words, window=None):
     if window is not None:
         words = [w for w in words if w[1] / tempo < window]
     events = []
-    for cue in karaoke_cues(words):
+    cues = karaoke_cues(words)
+    prev = None   # (start of the last word, end of the last word) of the cue before, on the output clock
+    for ci, cue in enumerate(cues):
         starts = [clock_start + w[1] / tempo for w in cue]
-        starts[0] = max(0.0, starts[0] - KARAOKE_PRE)
-        ends = starts[1:] + [clock_start + cue[-1][2] / tempo + KARAOKE_POST]
+        first_word = starts[0]
+        close_prev = prev is not None and first_word - prev[1] < KARAOKE_SWAP
+        pre = first_word - KARAOKE_PRE
+        if prev is not None:
+            pre = max(pre, min(first_word, prev[0] + KARAOKE_MIN_LIT))   # the word before it keeps its light
+        starts[0] = max(0.0, pre)
+        last_end = clock_start + cue[-1][2] / tempo
+        nxt = clock_start + cues[ci + 1][0][1] / tempo if ci + 1 < len(cues) else None
+        close_next = nxt is not None and nxt - last_end < KARAOKE_SWAP
+        ends = starts[1:] + [last_end + KARAOKE_POST]
         for k, (word, s, e) in enumerate(zip(cue, starts, ends)):
-            fade = '{\\fad(%d,%d)}' % (120 if k == 0 else 0, 200 if k == len(cue) - 1 else 0)
-            text = fade + ' '.join('{\\1c%s&}%s' % (SUNG if j == k else UNSUNG, _ass_word(w[0])) for j, w in enumerate(cue))
+            fade_in = 120 if k == 0 and not close_prev else 0
+            fade_out = 200 if k == len(cue) - 1 and not close_next else 0
+            text = '{\\fad(%d,%d)}' % (fade_in, fade_out) + ' '.join('{\\1c%s&}%s' % (SUNG if j == k else UNSUNG, _ass_word(w[0])) for j, w in enumerate(cue))
             events.append([round(s, 3), round(max(e, s + 0.04), 3), text, True])
+        prev = (clock_start + cue[-1][1] / tempo, last_end)
     for a, b in zip(events, events[1:]):
         a[1] = min(a[1], b[0])
     return [tuple(e) for e in events]
