@@ -41,6 +41,7 @@ import { registerDubRoutes } from './dub/routes.js';
 import { createGeminiModel } from './llm/gemini.js';
 import { TextRoutingStore, createRoutedModel, limitedModel } from './llm/router.js';
 import { requireAdmin } from './auth/routes.js';
+import { parseTrustProxyHops, trustProxyFor } from './auth/proxy.js';
 import { createOpenCodeModel, type TextModel } from './llm/opencode.js';
 
 export type AppOptions = {
@@ -50,6 +51,8 @@ export type AppOptions = {
   env?: NodeJS.ProcessEnv;
   logger?: boolean;
   version?: string;
+  /** Reverse proxies trusted to write X-Forwarded-For (env TRUST_PROXY_HOPS; default 1). See auth/proxy.ts. */
+  trustProxyHops?: number;
   stories?: Partial<Pick<StoryDeps, 'probe' | 'assemble' | 'imageSize' | 'audit'>> & {
     generateText?: TextGenerator;
     /** Background reconcile interval; 0 disables (tests). Default 5 s. */
@@ -83,7 +86,9 @@ export type AppOptions = {
 
 export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   const env = options.env ?? process.env;
-  const server = Fastify({ logger: options.logger ?? false, bodyLimit: 210 * 1024 * 1024, trustProxy: true });
+  // trustProxy is a hop COUNT (as a function, see auth/proxy.ts), never `true`: `true` trusts the whole X-Forwarded-For chain, i.e. whatever the client wrote.
+  const trustProxyHops = options.trustProxyHops ?? parseTrustProxyHops(env.TRUST_PROXY_HOPS);
+  const server = Fastify({ logger: options.logger ?? false, bodyLimit: 210 * 1024 * 1024, trustProxy: trustProxyFor(trustProxyHops) });
 
   server.addHook('onSend', async (_request, reply, payload) => {
     reply.header('x-content-type-options', 'nosniff');
@@ -98,7 +103,8 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   await server.register(async scoped => {
     await registerAuthRoutes(scoped, userAuthStore, {
       bootstrapAdminEmail: env.OPENCREATOR_ADMIN_EMAIL,
-      bootstrapAdminPassword: env.OPENCREATOR_ADMIN_PASSWORD
+      bootstrapAdminPassword: env.OPENCREATOR_ADMIN_PASSWORD,
+      trustProxyHops
     });
   }, { prefix: '/api' });
 

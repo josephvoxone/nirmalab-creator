@@ -10,14 +10,28 @@ const LOGIN_MAX_ATTEMPTS = 10;
 type Attempt = { count: number; resetAt: number };
 const loginAttempts = new Map<string, Attempt>();
 
+/**
+ * The address the rate limit is keyed on: Fastify's `request.ip`, which honours `trustProxy` as a NUMBER OF HOPS
+ * (see ./proxy.ts). Never read X-Forwarded-For here: its left side is written by the client.
+ */
 function clientIp(request: FastifyRequest): string {
-  const forwarded = request.headers['x-forwarded-for'];
-  const first = Array.isArray(forwarded) ? forwarded[0] : forwarded?.split(',')[0];
-  return (first ?? request.ip ?? 'unknown').trim();
+  return request.ip || 'unknown';
 }
+
+/** Expired windows are dropped once the table is this big, so many different keys cannot grow memory without bound. */
+const LOGIN_TABLE_SWEEP_AT = 5000;
+export const loginAttemptCount = (): number => loginAttempts.size;
 
 function loginAllowed(key: string): boolean {
   const now = Date.now();
+  if (loginAttempts.size >= LOGIN_TABLE_SWEEP_AT) {
+    for (const [k, v] of loginAttempts) if (v.resetAt < now) loginAttempts.delete(k);
+    // Still full of live windows (an attack): drop the oldest windows rather than grow.
+    for (const k of loginAttempts.keys()) {
+      if (loginAttempts.size < LOGIN_TABLE_SWEEP_AT) break;
+      loginAttempts.delete(k);
+    }
+  }
   const entry = loginAttempts.get(key);
   if (!entry || entry.resetAt < now) {
     loginAttempts.set(key, { count: 1, resetAt: now + LOGIN_WINDOW_MS });
@@ -49,6 +63,8 @@ export function sessionUser(store: UserAuthStore, request: FastifyRequest) {
 export type AuthRouteOptions = {
   bootstrapAdminEmail?: string;
   bootstrapAdminPassword?: string;
+  /** The trusted-proxy hop count `buildApp` gave Fastify (reported by the admin diagnostic only). */
+  trustProxyHops?: number;
 };
 
 async function bootstrapAdminIfNeeded(store: UserAuthStore, options: AuthRouteOptions): Promise<void> {
@@ -115,6 +131,21 @@ export async function registerAuthRoutes(
       const code = message.includes('8-256') ? 'WEAK_PASSWORD' : 'WRONG_PASSWORD';
       return reply.code(400).send({ error: { code, message } });
     }
+  });
+
+  // Admin diagnostic for the proxy chain: what the app resolves as the client address and why. No secrets
+  // (admin only; shows the caller's own request). Lets the operator confirm TRUST_PROXY_HOPS without shell access.
+  server.get('/auth/client-ip', async (request, reply) => {
+    if (!requireAdmin(store, request, reply)) return undefined;
+    const forwarded = request.headers['x-forwarded-for'];
+    return {
+      ip: request.ip,
+      hops: options.trustProxyHops ?? null,
+      socket: request.socket.remoteAddress ?? null,
+      xForwardedFor: Array.isArray(forwarded) ? forwarded.join(', ') : forwarded ?? null,
+      xForwardedProto: request.headers['x-forwarded-proto'] ?? null,
+      protocol: request.protocol
+    };
   });
 
   server.get('/auth/me', async (request, reply) => {
