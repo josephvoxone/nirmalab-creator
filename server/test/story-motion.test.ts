@@ -1,7 +1,10 @@
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { bibleBoard, finishQueued, renderedStory, serviceSetup } from './bible-board.js';
+import { createMotionQc } from '../src/media/motion-qc.js';
 import { StoryService, type MotionVerdict, type ShotState, type StoryDeps } from '../src/stories/service.js';
 import { hashFor, type Storyboard } from '../src/stories/storyboard.js';
 
@@ -224,6 +227,34 @@ describe('a clip re-queued in place (human-clicked audit repair) loses its old v
   });
 });
 
+describe('undo: a verdict always travels with its own take', () => {
+  it('restoring an older take brings back ITS verdict (and flag), not the newer take’s; the other shot is untouched', async () => {
+    let n = 0;
+    const t = serviceSetup({ motion: { check: async input => (input.file.endsWith('02-kapas.mp4') ? (n++ === 0 ? verdict('fail') : verdict('ok')) : verdict('ok')) } });
+    const done = await renderedStory(t, cepat());
+    const old = done.shots[1]!;
+    expect(old).toMatchObject({ needsReview: true, motion: { status: 'fail' }, motionJobId: old.jobId });
+    const taken = await t.service.snapshots.take(done.id, 'ubah shot 2');
+    const board = await t.service.readStoryboard(done.id);
+    board.shots[1] = { ...board.shots[1]!, intent: { ...board.shots[1]!.intent!, action: 'lifts the woven basket while a gull crosses the sky' } };
+    const edited = await t.service.updateStoryboard(done.id, board, { rev: taken.rev });
+    await t.service.snapshots.commit(taken.undoId, edited.rev);
+    await t.service.render(done.id, { force: true });
+    await finishQueued(t, 'video');
+    await t.service.reconcile(done.id);
+    const newer = (await states(t, done.id))['02-kapas']!;
+    expect(newer.jobId).not.toBe(old.jobId);
+    expect(newer).toMatchObject({ motion: { status: 'ok' }, motionJobId: newer.jobId });
+    expect(newer.needsReview).toBeUndefined();
+
+    expect((await t.service.restoreSnapshot(done.id, taken.undoId, (await t.service.get(done.id))!.rev)).result).toBe('ok');
+    const back = (await states(t, done.id))['02-kapas']!;
+    expect(back.jobId).toBe(old.jobId);
+    expect(back).toMatchObject({ motion: { status: 'fail' }, motionJobId: old.jobId, needsReview: true });
+    expect((await states(t, done.id))['01-laras']!.motion?.status).toBe('ok');
+  });
+});
+
 describe('gateBlockers: a human approval only covers the verdict it saw', () => {
   const base = { id: 's', status: 'done', attempts: 0 } as ShotState;
   const svc = () => serviceSetup().service;
@@ -352,3 +383,44 @@ describe('backfill: free check of the clips already done', () => {
   });
 });
 
+
+const python = process.env.STORY_PYTHON ?? 'python3';
+const hasTools = spawnSync('ffmpeg', ['-version']).status === 0 && spawnSync(python, ['-c', 'import numpy']).status === 0;
+
+describe.skipIf(!hasTools)('the whole chain with real clips: collect → clipqc.py (real python, real ffmpeg) → verdict → gate', () => {
+  it('a clip that cross-dissolves into another picture is flagged and blocks the cut; nothing is queued; a human can sign it off', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'nc-motion-e2e-'));
+    const size = 'mandelbrot=s=180x320:r=24';
+    const dissolve = join(dir, 'dissolve.mp4');
+    execFileSync('ffmpeg', ['-v', 'error', '-y', '-f', 'lavfi', '-i', size, '-f', 'lavfi', '-i', 'life=s=180x320:r=24:mold=10:life_color=#00ff00:death_color=#aa0000:ratio=0.2',
+      '-filter_complex', '[0:v]trim=duration=5,setpts=PTS-STARTPTS[a];[1:v]trim=duration=5,setpts=PTS-STARTPTS[b];[a][b]xfade=transition=fade:duration=0.8:offset=2.5,format=yuv420p[v]',
+      '-map', '[v]', '-t', '6', '-c:v', 'libx264', dissolve]);
+    const steady = join(dir, 'steady.mp4');
+    execFileSync('ffmpeg', ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'testsrc2=s=180x320:r=24:d=6', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', steady]);
+
+    const t = serviceSetup({ motion: createMotionQc({ python }) });
+    const story = await t.service.create(cepat());
+    await t.service.render(story.id, { force: true });
+    const clips = join(t.dataDir, 'flow', 'clips');
+    mkdirSync(clips, { recursive: true });
+    const jobs = (await t.flow.listJobs()).filter(j => j.kind === 'video' && j.status === 'queued');
+    for (const job of jobs) {
+      const file = join(clips, `${job.id}.mp4`);
+      copyFileSync(job.technique?.endsWith('01-laras') ? dissolve : steady, file);
+      await t.flow.completeJob(job.id, { filePath: file, bytes: 20_000, result: { mediaId: `m-${job.id}` } });
+    }
+    await t.service.reconcile(story.id);
+    const after = await states(t, story.id);
+    expect(after['01-laras']!.status).toBe('done');
+    expect(after['01-laras']!.motion).toMatchObject({ status: 'fail' });
+    expect(after['01-laras']!.motion!.reasons.join(' ')).toMatch(/berganti\/melebur sendiri di detik 2\.[6-9]/);
+    expect(after['01-laras']!.needsReview).toBe(true);
+    expect(after['02-kapas']!.motion?.status).toBeDefined();
+    expect(after['02-kapas']!.motion!.status).not.toBe('fail');
+    await expect(t.service.assemble(story.id)).rejects.toThrow(/01-laras/);
+    expect(await videoJobs(t)).toHaveLength(2);                         // still the two first takes: no automatic re-render
+    await t.service.approveShot(story.id, '01-laras', { by: 'u_admin' });
+    await t.service.assemble(story.id);
+    expect((await t.service.get(story.id))!.status).toBe('done');
+  });
+});

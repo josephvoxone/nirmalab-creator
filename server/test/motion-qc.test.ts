@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -93,6 +93,9 @@ describe('createMotionQc (fake runner)', () => {
   });
 });
 
+const python = process.env.STORY_PYTHON ?? 'python3';
+const hasTools = spawnSync('ffmpeg', ['-version']).status === 0 && spawnSync(python, ['-c', 'import numpy']).status === 0;
+
 describe('createMotionQc (real process)', () => {
   it('kills a checker that hangs past the limit and answers nothing', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'nc-motion-'));
@@ -104,11 +107,11 @@ describe('createMotionQc (real process)', () => {
     expect(Date.now() - t).toBeLessThan(5000);
   });
 
-  it('end to end with the real bridge/py/clipqc.py on a real clip: a still picture is a verdict (warn: under-animated)', async () => {
+  it.skipIf(!hasTools)('end to end with the real bridge/py/clipqc.py on a real clip: a still picture is a verdict (warn: under-animated)', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'nc-motion-'));
     const clip = join(dir, '01-still.mp4');
     execFileSync('ffmpeg', ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'color=c=0x445566:s=180x320:r=24:d=4', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', clip]);
-    const v = await createMotionQc({ python: process.env.STORY_PYTHON ?? 'python3' }).check({ file: clip, move: 'static', look: 'painterly' });
+    const v = await createMotionQc({ python }).check({ file: clip, move: 'static', look: 'painterly' });
     expect(v).toBeDefined();
     expect(v!.status).not.toBe('ok');
     expect(v!.reasons.join(' ')).toMatch(/gambar diam|membeku/);
