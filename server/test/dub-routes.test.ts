@@ -26,7 +26,7 @@ async function setup(opts: { env?: Record<string, string>; subscription?: (key: 
     const url = String(input);
     const key = ((init?.headers ?? {}) as Record<string, string>)['xi-api-key'] ?? String(((init?.headers ?? {}) as Record<string, string>).authorization ?? '').replace('Bearer ', '');
     if (url.includes('/v1/text-to-speech/')) {
-      calls.tts.push({ voice: url.split('/text-to-speech/')[1]!.split('?')[0]!, key, body: JSON.parse(String(init!.body)) });
+      calls.tts.push({ voice: url.split('/text-to-speech/')[1]!.split('?')[0]!.replace(/\/with-timestamps$/, ''), key, body: JSON.parse(String(init!.body)) });
       return opts.tts ? opts.tts(key) : new Response(MP3, { status: 200, headers: { 'content-type': 'audio/mpeg' } });
     }
     if (url.endsWith('/v1/user/subscription')) { calls.subscription++; return opts.subscription ? opts.subscription(key) : json({ tier: 'creator', character_count: 100, character_limit: 100000, next_character_count_reset_unix: 1893456000 }); }

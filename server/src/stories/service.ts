@@ -892,6 +892,7 @@ export class StoryService {
         ...(board.edit?.subtitles && board.edit.subtitleStyle ? { subtitleStyle: board.edit.subtitleStyle } : {}),
         ...(board.edit?.subtitles && board.edit.subtitleSize !== undefined ? { subtitleSize: board.edit.subtitleSize } : {}),
         ...(board.edit?.subtitles && board.edit.subtitleY !== undefined ? { subtitleY: board.edit.subtitleY } : {}),
+        ...(board.edit?.subtitles && board.edit.subtitleKaraoke === false ? { subtitleKaraoke: false } : {}),
         ...(music ? { music: { path: join(dir, music.file), volume: music.volume, at: music.at, ...(music.from ? { from: music.from } : {}) } } : {}),
         ...(dubbed?.keepAmbient ? { dubKeepAmbient: true } : {})
       } : undefined

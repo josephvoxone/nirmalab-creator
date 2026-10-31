@@ -36,13 +36,40 @@ async function client(handler: Parameters<typeof fakeFetch>[0], keys = [KEY1, KE
   return { c: new ElevenLabsClient({ keys: pool, fetch: f.fn }), pool, calls: f.calls };
 }
 
+const AL = { characters: [...'Halo dunia'], character_start_times_seconds: [0, .1, .2, .3, .4, .5, .6, .7, .8, .9], character_end_times_seconds: [.1, .2, .3, .4, .5, .6, .7, .8, .9, 1] };
+const timed = (alignment: unknown = AL) => new Response(JSON.stringify({ audio_base64: AUDIO.toString('base64'), alignment, normalized_alignment: alignment }), { status: 200, headers: { 'content-type': 'application/json' } });
+
+describe('ElevenLabsClient.synthesize (word timings)', () => {
+  it('asks for the timed variant, decodes the audio and returns the words with their times', async () => {
+    const { c, calls } = await client(() => timed());
+    const r = await c.synthesize({ text: 'Halo dunia', voiceId: 'V1', modelId: 'eleven_multilingual_v2' });
+    expect(calls[0]!.url).toContain('/v1/text-to-speech/V1/with-timestamps');
+    expect(r.audio.equals(AUDIO)).toBe(true);
+    expect(r.words).toEqual([['Halo', 0, 0.4], ['dunia', 0.5, 1]]);
+  });
+
+  it('still returns the audio when the answer has no alignment (words stay undefined)', async () => {
+    const { c } = await client(() => timed(null));
+    const r = await c.synthesize({ text: 'Halo dunia', voiceId: 'V1', modelId: 'eleven_multilingual_v2' });
+    expect(r.audio.equals(AUDIO)).toBe(true);
+    expect(r.words).toBeUndefined();
+  });
+
+  it('treats a JSON answer without audio as a bad answer and rotates to the next key', async () => {
+    const { c, calls } = await client((_c, n) => n === 1 ? new Response(JSON.stringify({ alignment: AL }), { status: 200, headers: { 'content-type': 'application/json' } }) : timed());
+    const r = await c.synthesize({ text: 'Halo dunia', voiceId: 'V1', modelId: 'eleven_multilingual_v2' });
+    expect(calls).toHaveLength(2);
+    expect(r.words).toBeDefined();
+  });
+});
+
 describe('ElevenLabsClient.synthesize', () => {
   it('posts the text to the voice with the key, model and voice settings and returns the mp3 bytes', async () => {
     const { c, calls } = await client(() => audio());
     const out = await c.synthesize({ text: 'Aku menyentuhnya.', voiceId: 'VOICE123', modelId: 'eleven_multilingual_v2', settings: { stability: 0.6, similarityBoost: 0.8, style: 0.2, speed: 0.95, speakerBoost: true }, seed: 7 });
     expect(out.audio.equals(AUDIO)).toBe(true);
     const call = calls[0]!;
-    expect(call.url).toBe('https://api.elevenlabs.io/v1/text-to-speech/VOICE123?output_format=mp3_44100_128');
+    expect(call.url).toBe('https://api.elevenlabs.io/v1/text-to-speech/VOICE123/with-timestamps?output_format=mp3_44100_128');
     expect(call.init.method).toBe('POST');
     expect(header(call, 'xi-api-key')).toBe(KEY1);
     expect(JSON.parse(String(call.init.body))).toEqual({

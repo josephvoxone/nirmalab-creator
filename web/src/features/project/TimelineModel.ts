@@ -28,7 +28,7 @@ export type MusicEdit = { file: string; name: string; seconds: number; volume: n
 /** Subtitle look: absent = plain captions; 'tulisan-tangan' = hand-lettering (Gochi Hand) in the sky band. */
 export type SubtitleStyle = 'tulisan-tangan';
 /** subtitleSize: font scale (1 = style default); subtitleY: top of the text as a share of the frame height. */
-export type TimelineEdit = { clipVolume?: number; subtitles?: boolean; subtitleStyle?: SubtitleStyle; subtitleSize?: number; subtitleY?: number; music?: MusicEdit };
+export type TimelineEdit = { clipVolume?: number; subtitles?: boolean; subtitleStyle?: SubtitleStyle; subtitleSize?: number; subtitleY?: number; subtitleKaraoke?: boolean; music?: MusicEdit };
 export const MIN_CLIP = 1;
 const r3 = (n: number) => Math.round(n * 1000) / 1000;
 

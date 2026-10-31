@@ -13,6 +13,7 @@ import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { DEFAULT_DUB_MODEL, DUB_MODELS, DubError, MAX_TEXT_CHARS, estimateCredits, isDubModel, type DubModel, type SynthesizeInput, type VoiceSettings } from './elevenlabs.js';
 import type { FairQueue } from '../lib/fair-queue.js';
+import { estimateWords, type Word } from './words.js';
 import { SHOT_ID, narrationOf, type Shot, type Storyboard } from '../stories/storyboard.js';
 
 export type DubSettings = { voiceId?: string; modelId: string; languageCode: string; voice: Required<VoiceSettings>; keepAmbient: boolean };
@@ -20,7 +21,7 @@ export type SettingsPatch = { voiceId?: string | null; modelId?: string; voice?:
 export type DubScope = { kind: 'all' } | { kind: 'scene'; sceneId: string } | { kind: 'shots'; shotIds: string[] };
 export type ShotStatus = 'none' | 'queued' | 'running' | 'done' | 'stale' | 'failed';
 
-type ShotDub = { text?: string; voiceId?: string; hash?: string; file?: string; seconds?: number; chars?: number; status?: 'queued' | 'running' | 'failed'; error?: string; atMs?: number };
+type ShotDub = { text?: string; voiceId?: string; hash?: string; file?: string; seconds?: number; chars?: number; words?: Word[]; status?: 'queued' | 'running' | 'failed'; error?: string; atMs?: number };
 type Doc = { version: 1; settings: DubSettings; shots: Record<string, ShotDub> };
 
 export type ShotView = {
@@ -33,13 +34,14 @@ export type DubState = {
   totals: { dubbable: number; done: number; stale: number; failed: number; active: number; chars: number };
 };
 export type DubPlan = { shotIds: string[]; chars: number; credits: number; modelId: string };
-export type AssemblyDub = { keepAmbient: boolean; shots: Record<string, { file: string; seconds: number }> };
+/** `words`: when each word is spoken (seconds into the file), for the karaoke subtitles. */
+export type AssemblyDub = { keepAmbient: boolean; shots: Record<string, { file: string; seconds: number; words?: Word[] }> };
 
 export type DubDeps = {
   dir: (storyId: string) => string;
   board: (storyId: string) => Promise<Storyboard>;
   markStale: (storyId: string) => Promise<void>;
-  client: { configured(): boolean; synthesize(input: SynthesizeInput): Promise<{ audio: Buffer; keyId: string }> };
+  client: { configured(): boolean; synthesize(input: SynthesizeInput): Promise<{ audio: Buffer; keyId: string; words?: Word[] }> };
   queue: FairQueue;
   probe: (file: string) => Promise<number>;
 };
@@ -259,7 +261,7 @@ export class DubService {
       return undefined;
     };
     const prev = neighbour(-1); const next = neighbour(1);
-    const { audio } = await this.deps.client.synthesize({
+    const { audio, words } = await this.deps.client.synthesize({
       text: e.text, voiceId: e.voiceId, modelId: doc.settings.modelId, languageCode: doc.settings.languageCode, settings: doc.settings.voice,
       ...(prev ? { previousText: prev } : {}), ...(next ? { nextText: next } : {})
     });
@@ -273,6 +275,7 @@ export class DubService {
       const x = (d.shots[shotId] ??= {});
       const previous = x.file;
       Object.assign(x, { hash: e.hash, file: `dub/${name}`, seconds, chars: e.text.length, atMs: Date.now() });
+      if (words) x.words = words; else delete x.words;
       delete x.status; delete x.error;
       return previous;
     });
@@ -299,7 +302,7 @@ export class DubService {
 
   async remove(id: string, shotId: string): Promise<DubState> {
     await this.requireShot(id, shotId);
-    const old = await this.mutate(id, doc => { const x = doc.shots[shotId]; const f = x?.file; if (x) { delete x.file; delete x.hash; delete x.seconds; delete x.chars; delete x.atMs; delete x.status; delete x.error; } return f; });
+    const old = await this.mutate(id, doc => { const x = doc.shots[shotId]; const f = x?.file; if (x) { delete x.file; delete x.hash; delete x.seconds; delete x.chars; delete x.words; delete x.atMs; delete x.status; delete x.error; } return f; });
     if (old) { await rm(join(this.deps.dir(id), old), { force: true }); await this.deps.markStale(id); }
     return this.state(id);
   }
@@ -310,7 +313,10 @@ export class DubService {
     const shots: AssemblyDub['shots'] = {};
     for (const shot of board.shots) {
       const e = this.effective(doc, shot);
-      if (e.entry.file && e.entry.hash === e.hash && typeof e.entry.seconds === 'number') shots[shot.id] = { file: join(this.deps.dir(id), e.entry.file), seconds: e.entry.seconds };
+      if (e.entry.file && e.entry.hash === e.hash && typeof e.entry.seconds === 'number') {
+        const words = e.entry.words ?? estimateWords(e.text, e.entry.seconds);
+        shots[shot.id] = { file: join(this.deps.dir(id), e.entry.file), seconds: e.entry.seconds, ...(words ? { words } : {}) };
+      }
     }
     return { keepAmbient: doc.settings.keepAmbient, shots };
   }

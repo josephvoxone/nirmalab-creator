@@ -42,6 +42,8 @@ describe('timeline edit: validation', () => {
     expect(errors(b => { b.shots[0]!.caption = 'x'.repeat(201); })).toMatch(/caption/);
     expect(errors(b => { b.edit = { subtitles: true, subtitleSize: 3 }; })).toMatch(/subtitleSize/);
     expect(errors(b => { b.edit = { subtitles: true, subtitleY: 0.99 }; })).toMatch(/subtitleY/);
+    expect(errors(b => { b.edit = { subtitles: true, subtitleKaraoke: 'ya' } as unknown as Storyboard['edit']; })).toMatch(/subtitleKaraoke/);
+    expect(errors(b => { b.edit = { subtitles: true, subtitleKaraoke: false }; })).toBe('');
     expect(errors(b => { b.shots[0]!.caption = 'Terang untuk satu langkah'; b.edit = { subtitles: true, subtitleSize: 1.25, subtitleY: 0.42 }; })).toBe('');
     expect(errors(b => { b.shots[0]!.zoom = 1.12; })).toBe('');
     expect(errors(b => { b.shots[0]!.zoom = 1.4; })).toBe('');
@@ -136,6 +138,32 @@ describe('timeline edit: the video must be assembled again', () => {
     const plan = JSON.parse(readFileSync(join(t.service.storyDir(id), 'assemble.json'), 'utf8'));
     expect(plan.shots[0].narration).toBe('Teks yang saya tulis sendiri');
     expect(plan.edit).toEqual({ subtitles: true, subtitleSize: 1.25, subtitleY: 0.42 });
+  });
+
+  it('switching the word highlight off is assembly only: the video goes stale, no clip re-renders, and the assembler is told', async () => {
+    const { t, id } = await assembled();
+    const b = await t.service.readStoryboard(id);
+    b.edit = { subtitles: true, subtitleStyle: 'tulisan-tangan' };
+    await t.service.updateStoryboard(id, b);
+    await t.service.assemble(id);
+    const before = (await t.service.get(id))!.shots.map(s => [s.id, s.status, s.jobId]);
+    b.edit = { subtitles: true, subtitleStyle: 'tulisan-tangan', subtitleKaraoke: false };
+    const after = await t.service.updateStoryboard(id, b);
+    expect(after.videoStale).toBe(true);
+    expect(after.shots.map(s => [s.id, s.status, s.jobId])).toEqual(before);
+    await t.service.assemble(id);
+    const plan = JSON.parse(readFileSync(join(t.service.storyDir(id), 'assemble.json'), 'utf8'));
+    expect(plan.edit).toEqual({ subtitles: true, subtitleStyle: 'tulisan-tangan', subtitleKaraoke: false });
+  });
+
+  it('the highlight is on by default: the plan says nothing about it unless it was turned off', async () => {
+    const { t, id } = await assembled();
+    const b = await t.service.readStoryboard(id);
+    b.edit = { subtitles: true };
+    await t.service.updateStoryboard(id, b);
+    await t.service.assemble(id);
+    const plan = JSON.parse(readFileSync(join(t.service.storyDir(id), 'assemble.json'), 'utf8'));
+    expect(plan.edit).toEqual({ subtitles: true });
   });
 
   it('editing only a subtitle text marks the video stale', async () => {

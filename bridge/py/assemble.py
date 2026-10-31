@@ -12,6 +12,7 @@ narration lines can be burned in as subtitles (libass), timed to their clips on 
 """
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -60,6 +61,80 @@ def _ass_time(t):
     return f'{cs // 360000}:{cs // 6000 % 60:02d}:{cs // 100 % 60:02d}.{cs % 100:02d}'
 
 
+SUNG = '&H005AD6FF'     # spoken words: warm gold (ASS colours are BGR)
+UNSUNG = '&H00EAF4FA'   # words still to come: warm white
+KARAOKE_PRE = 0.15      # a cue appears a beat before its first word
+KARAOKE_POST = 0.35     # and lingers a moment after its last
+KARAOKE_MAX_WORDS = 6
+KARAOKE_MAX_CHARS = 34
+KARAOKE_GAP = 0.6       # a pause this long between two words starts a new cue
+
+
+def shot_starts(durations, xf):
+    """Where each shot begins on the output clock (clips overlap by the crossfade)."""
+    out, t = [], 0.0
+    for d in durations:
+        out.append(round(t, 3))
+        t = round(t + d - xf, 3)
+    return out
+
+
+def _tokens(text):
+    return re.sub(r'[^0-9a-z]+', ' ', (text or '').lower()).split()
+
+
+def words_match_text(words, text):
+    """True when the timed words spell exactly the caption (ignoring case and punctuation)."""
+    return bool(words) and _tokens(' '.join(str(w[0]) for w in words)) == _tokens(text)
+
+
+def karaoke_cues(words, max_words=KARAOKE_MAX_WORDS, max_chars=KARAOKE_MAX_CHARS, gap=KARAOKE_GAP):
+    """Split timed words into short readable cues: at sentence ends, at long pauses, never past max_words / max_chars."""
+    cues, cur = [], []
+    for w in words:
+        if cur:
+            too_long = len(' '.join(x[0] for x in cur + [w])) > max_chars
+            if len(cur) >= max_words or too_long or w[1] - cur[-1][2] > gap:
+                cues.append(cur)
+                cur = []
+        cur.append(w)
+        if re.search(r'[.!?;:][\"\u201d\u2019)]*$', w[0]) or (w[0].endswith(',') and len(cur) >= 4):
+            cues.append(cur)
+            cur = []
+    if cur:
+        cues.append(cur)
+    return cues
+
+
+def _ass_word(word):
+    return re.sub(r'\s+', ' ', str(word).replace('{', '(').replace('}', ')').replace('\\', '')).strip()
+
+
+def karaoke_events(clock_start, tempo, words, window=None):
+    """(start, end, text, True) cues whose \\kf tags sweep each word over the time it is spoken.
+
+    `clock_start` is when the voice begins on the output clock, `tempo` the speed-up applied to the dub, `window` the seconds
+    of dub that survive when it is cut (words starting after it are never spoken, so never shown).
+    """
+    tempo = tempo if tempo and tempo > 0 else 1.0
+    words = [(str(w[0]), float(w[1]), float(w[2])) for w in words if w and str(w[0]).strip()]
+    if window is not None:
+        words = [w for w in words if w[1] / tempo < window]
+    events = []
+    for cue in karaoke_cues(words):
+        text = '{\\k%d}' % round(KARAOKE_PRE * 100)
+        for i, (word, s, e) in enumerate(cue):
+            nxt = cue[i + 1][1] if i + 1 < len(cue) else e
+            cs = max(1, round((nxt - s) / tempo * 100))
+            text += '{\\kf%d}%s%s' % (cs, _ass_word(word), ' ' if i + 1 < len(cue) else '')
+        start = max(0.0, clock_start + cue[0][1] / tempo - KARAOKE_PRE)
+        end = clock_start + cue[-1][2] / tempo + KARAOKE_POST
+        events.append([round(start, 3), round(end, 3), text, True])
+    for a, b in zip(events, events[1:]):
+        a[1] = min(a[1], b[0])
+    return [tuple(e) for e in events]
+
+
 # Fonts shipped next to this file (title card faces, handwritten subtitles).
 FONTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'fonts')
 DEJAVU_DIR = '/usr/share/fonts/truetype/dejavu'
@@ -79,19 +154,34 @@ def ass_document(events, w, h, style=None, size=None, y=None):
     else:
         style_line = (f'Style: Default,DejaVu Sans,{size},&H00FFFFFF,&H00FFFFFF,&H00101010,&H64000000,1,0,0,0,100,100,0,0,1,{max(2, size // 14)},1,2,'
                       f'{round(w * 0.08)},{round(w * 0.08)},{round(h * 0.14)},1')
+    # Karaoke: ASS sweeps SecondaryColour (not yet spoken) to PrimaryColour (spoken). A heavy dark outline keeps both
+    # readable on a pale painted sky, where thin white lettering disappeared.
+    if handwritten:
+        karaoke_line = (f'Style: Karaoke,Gochi Hand,{size},{SUNG},{UNSUNG},&H20122030,&H00000000,0,0,0,0,100,100,1,0,1,'
+                        f'{max(4, size // 8)},0,8,{round(w * 0.08)},{round(w * 0.08)},{round(h * 0.11)},1')
+    else:
+        karaoke_line = (f'Style: Karaoke,DejaVu Sans,{size},{SUNG},{UNSUNG},&H00101010,&H64000000,1,0,0,0,100,100,0,0,1,{max(4, size // 9)},1,2,'
+                        f'{round(w * 0.08)},{round(w * 0.08)},{round(h * 0.14)},1')
     lines = [
         '[Script Info]', 'ScriptType: v4.00+', f'PlayResX: {w}', f'PlayResY: {h}', 'WrapStyle: 0', '',
         '[V4+ Styles]',
         'Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, '
         'ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding',
-        style_line,
+        style_line, karaoke_line,
         '', '[Events]', 'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text'
     ]
     lead = '{\\fad(500,500)\\blur1.5}' if handwritten else ''
     # A chosen position pins the top of the text, centred, at y x height.
     if y is not None:
         lead = f'{{\\an8\\pos({w // 2},{round(h * y)})}}' + lead
-    for start, end, text in events:
+    kar_lead = '{\\fad(120,200)\\blur1}' if handwritten else '{\\fad(120,200)}'
+    if y is not None:
+        kar_lead = f'{{\\an8\\pos({w // 2},{round(h * y)})}}' + kar_lead
+    for ev in events:
+        start, end, text = ev[:3]
+        if len(ev) > 3 and ev[3]:   # a karaoke cue: its \k tags are already built and every word already escaped
+            lines.append(f'Dialogue: 0,{_ass_time(start)},{_ass_time(end)},Karaoke,,0,0,0,,{kar_lead}{text}')
+            continue
         safe = text.replace('{', '(').replace('}', ')').replace('\r', '').replace('\n', '\\N')
         lines.append(f'Dialogue: 0,{_ass_time(start)},{_ass_time(end)},Default,,0,0,0,,{lead}{safe}')
     return '\n'.join(lines) + '\n'
@@ -302,6 +392,7 @@ def main(arg):
     else:
         music = None
     dubs, warnings = [], []
+    karaoke = {}   # shot index -> (tempo, words, window when the dub is cut)
     for i, shot in enumerate(story['shots']):
         d = shot.get('dub')
         if not d or not d.get('file'):
@@ -319,6 +410,8 @@ def main(arg):
             warnings.append(f"{shot['id']}: dub {seconds:.1f}s does not fit the {window:.1f}s window even at {tempo}x: the end is cut")
         elif tempo > 1.0:
             warnings.append(f"{shot['id']}: dub {seconds:.1f}s sped up {tempo:.2f}x to fit the {window:.1f}s window")
+        if d.get('words'):
+            karaoke[i] = (tempo, d['words'], window if cut else None)
         idx = sum(1 for a in inputs if a == '-i')
         inputs += ['-i', dub_file]
         dubs.append({'input': idx, 'tempo': round(tempo, 3), 'lead': DUB_LEAD, 'cut': cut,
@@ -326,7 +419,15 @@ def main(arg):
     subs_dir, subs = None, None
     if edit.get('subtitles'):
         texts = [s.get('narration', '') or '' for s in story['shots']]
-        events = subtitle_events(durations, xf, texts)
+        # A dubbed shot whose caption is exactly what the voice says gets a karaoke sweep timed from the dub's own word
+        # timings; every other shot keeps the plain caption for its whole window.
+        karaoke_events_out, starts = [], shot_starts(durations, xf)
+        if edit.get('subtitleKaraoke', True):
+            for i, (tempo, words, cut_window) in karaoke.items():
+                if words_match_text(words, texts[i]):
+                    karaoke_events_out += karaoke_events(starts[i] + DUB_LEAD, tempo, words, cut_window)
+                    texts[i] = ''
+        events = sorted(subtitle_events(durations, xf, texts) + karaoke_events_out, key=lambda e: e[0])
         if events:
             subs_dir = tempfile.mkdtemp(prefix='subs-')
             subs = os.path.join(subs_dir, 'subs.ass')

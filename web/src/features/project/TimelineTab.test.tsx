@@ -272,6 +272,20 @@ describe('Timeline edit (Premiere-style)', () => {
     await waitFor(() => expect(lastBoard(api.calls)?.edit).toEqual({ subtitles: true }));
   });
 
+  it('subtitles: \"Sorot kata\" is on by default, appears only with subtitles, and saves subtitleKaraoke=false when switched off', async () => {
+    const api = fakeProjectApi({ story: allDone() });
+    open(api);
+    await screen.findByRole('group', { name: /program monitor/i });
+    expect(screen.queryByRole('switch', { name: 'Sorot kata mengikuti suara' })).toBeNull();
+    await userEvent.click(screen.getByRole('switch', { name: 'Subtitle di video' }));
+    const sw = await screen.findByRole('switch', { name: 'Sorot kata mengikuti suara' });
+    expect(sw).toBeChecked();
+    await userEvent.click(sw);
+    await waitFor(() => expect(lastBoard(api.calls)?.edit).toEqual({ subtitles: true, subtitleKaraoke: false }));
+    await userEvent.click(screen.getByRole('switch', { name: 'Sorot kata mengikuti suara' }));
+    await waitFor(() => expect(lastBoard(api.calls)?.edit).toEqual({ subtitles: true }));
+  });
+
   it('subtitle size and position: presets save edit.subtitleSize / subtitleY, and the monitor shows the same size and place', async () => {
     const api = fakeProjectApi({ story: allDone() });
     open(api);

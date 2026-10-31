@@ -30,6 +30,13 @@ describe('StoryService + dubbing', () => {
     expect(plan.edit.dubKeepAmbient).toBe(true);
   });
 
+  it('the plan carries the word timings of a dub, so the assembler can sweep the subtitle word by word', async () => {
+    const words = [['Aku', 0, 0.3], ['menunggu.', 0.35, 1.1]];
+    const { t, id } = await ready({ dub: { for: async () => ({ keepAmbient: false, shots: { '01-a': { file: '/data/dub/01-a-abc.mp3', seconds: 2.5, words } } }) } });
+    await t.service.assemble(id);
+    expect(planOf(t, id).shots[0].dub).toEqual({ file: '/data/dub/01-a-abc.mp3', seconds: 2.5, words });
+  });
+
   it('with no dub at all the plan is exactly what it was (no dub keys, no edit block invented)', async () => {
     const { t, id } = await ready({ dub: { for: async () => ({ keepAmbient: false, shots: {} }) } });
     await t.service.assemble(id);

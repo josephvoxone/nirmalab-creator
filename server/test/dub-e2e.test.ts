@@ -79,7 +79,48 @@ describe.skipIf(!hasTools)('dubbing → real assembler', () => {
     expect((await probeClip(r.final)).hasAudio).toBe(true);
   }, 240_000);
 
-  it('"suasana diredam" keeps the clip sound quiet under the voice instead of removing it', async () => {
+  it('the voice\'s word timings travel service → assemble.json → libass: the subtitle turns gold word by word as it is spoken', async () => {
+    const dir = join(root, 'story-karaoke');
+    execFileSync('mkdir', ['-p', dir]);
+    execFileSync('ffmpeg', ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'color=c=0x223344:s=720x1280:r=24:d=6', '-f', 'lavfi', '-i', 'sine=frequency=330:duration=6', '-shortest', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', join(dir, 'a.mp4')]);
+    const board = { title: 'Uji', shots: [{ id: 'a', prompt: 'p', narration: 'satu dua tiga empat.' }] } as Storyboard;
+    const svc = new DubService({
+      dir: () => dir, board: async () => board, markStale: async () => undefined,
+      client: { configured: () => true, synthesize: async () => ({ audio: tone(3), keyId: 'k', words: [['satu', 0, 0.6], ['dua', 0.7, 1.3], ['tiga', 1.4, 2.0], ['empat.', 2.1, 2.7]] as [string, number, number][] }) },
+      queue: new FairQueue({ concurrency: 1 }),
+      probe: async f => (await probeClip(f)).durationSec
+    });
+    await svc.updateSettings('s', { voiceId: 'VOICE_TEST' });
+    const plan = await svc.plan('s', { kind: 'all' });
+    await svc.render('s', { kind: 'all' }, { owner: 'u', confirmCredits: plan.credits });
+    await svc.idle('s');
+    const dubs = await svc.dubFor('s');
+    const planFile = (karaoke: boolean) => writeFileSync(join(dir, 'assemble.json'), JSON.stringify({
+      title: 'Uji', slug: 'final', crossfade: 0.3,
+      shots: [{ id: 'a', narration: 'satu dua tiga empat.', dub: dubs.shots.a }],
+      edit: { subtitles: true, subtitleStyle: 'tulisan-tangan', subtitleSize: 1.2, ...(karaoke ? {} : { subtitleKaraoke: false }) }
+    }));
+    const gold = (file: string, t: number): number => Number(execFileSync(PY, ['-c', `
+import subprocess, sys
+from PIL import Image
+f, t = sys.argv[1], sys.argv[2]
+subprocess.run(['ffmpeg','-v','error','-y','-ss',t,'-i',f,'-frames:v','1',f+'.png'], check=True)
+im = Image.open(f+'.png').convert('RGB')
+print(sum(1 for r,g,b in im.getdata() if r > 230 and 170 < g < 235 and b < 140))`, file, String(t)]).toString().trim());
+    planFile(true);
+    await assembleStory(dir);
+    const final = join(dir, 'final.mp4');
+    const swept = [0.05, 1.2, 2.0, 2.9].map(t => gold(final, t));   // the voice starts at 0.3 s
+    expect(swept[0]).toBe(0);
+    expect(swept[1]!).toBeGreaterThan(0);
+    expect(swept[2]!).toBeGreaterThan(swept[1]!);
+    expect(swept[3]!).toBeGreaterThan(swept[2]!);
+    planFile(false);                        // "Sorot kata" off: the same words, plain caption, nothing is ever gold
+    await assembleStory(dir);
+    expect([1.2, 2.9].map(t => gold(final, t))).toEqual([0, 0]);
+  }, 240_000);
+
+  it('\"suasana diredam\" keeps the clip sound quiet under the voice instead of removing it', async () => {
     const muted = await run(false);
     const kept = await run(true);
     const [mClip] = energy(muted.final, 0.6, 3.0, [CLIP_HZ]);

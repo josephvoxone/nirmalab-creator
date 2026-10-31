@@ -23,7 +23,7 @@ const board = (): Storyboard => ({
 } as Storyboard);
 
 type Harness = ReturnType<typeof make>;
-function make(options: { fail?: (input: SynthesizeInput) => Error | undefined; configured?: boolean; concurrency?: number } = {}) {
+function make(options: { fail?: (input: SynthesizeInput) => Error | undefined; configured?: boolean; concurrency?: number; words?: [string, number, number][] } = {}) {
   const calls: SynthesizeInput[] = [];
   const stale: string[] = [];
   let running = 0; let peak = 0;
@@ -40,7 +40,7 @@ function make(options: { fail?: (input: SynthesizeInput) => Error | undefined; c
         calls.push(input);
         const err = options.fail?.(input);
         if (err) throw err;
-        return { audio: Buffer.from(`MP3:${input.text}:${input.voiceId}`), keyId: 'k1' };
+        return { audio: Buffer.from(`MP3:${input.text}:${input.voiceId}`), keyId: 'k1', ...(options.words ? { words: options.words } : {}) };
       }
     },
     queue: new FairQueue({ concurrency: options.concurrency ?? 4 }),
@@ -53,6 +53,38 @@ let current: Storyboard = board();
 beforeEach(() => { current = board(); });
 const ID = 'story_aaaaaaaaaaaaaaaa';
 const confirmFor = async (h: Harness, scope: Parameters<Harness['svc']['plan']>[1]) => (await h.svc.plan(ID, scope)).credits;
+
+describe('DubService word timings', () => {
+  const words: [string, number, number][] = [['Aku', 0, 0.3], ['mau', 0.35, 0.7], ['yang', 0.75, 1.0], ['indah.', 1.05, 1.6]];
+
+  it('keeps the word timings the voice reported and hands them to the assembler', async () => {
+    const h = make({ words });
+    await h.svc.updateSettings(ID, { voiceId: 'V1' });
+    await h.svc.render(ID, { kind: 'shots', shotIds: ['s1'] }, { owner: 'u1', confirmCredits: await confirmFor(h, { kind: 'shots', shotIds: ['s1'] }) });
+    await h.svc.idle(ID);
+    const dub = await h.svc.dubFor(ID);
+    expect(dub.shots.s1!.words).toEqual(words);
+  });
+
+  it('estimates timings for a dub that was rendered without any, so older audio still gets a sweep', async () => {
+    const h = make();
+    await h.svc.updateSettings(ID, { voiceId: 'V1' });
+    await h.svc.render(ID, { kind: 'shots', shotIds: ['s1'] }, { owner: 'u1', confirmCredits: await confirmFor(h, { kind: 'shots', shotIds: ['s1'] }) });
+    await h.svc.idle(ID);
+    const w = (await h.svc.dubFor(ID)).shots.s1!.words!;
+    expect(w.map(x => x[0])).toEqual(['Aku', 'mau', 'yang', 'indah.']);
+    expect(w[w.length - 1]![2]).toBeLessThanOrEqual(3.2);
+  });
+
+  it('drops the timings together with the audio when the text changes (a stale dub is never mixed, so never swept)', async () => {
+    const h = make({ words });
+    await h.svc.updateSettings(ID, { voiceId: 'V1' });
+    await h.svc.render(ID, { kind: 'shots', shotIds: ['s1'] }, { owner: 'u1', confirmCredits: await confirmFor(h, { kind: 'shots', shotIds: ['s1'] }) });
+    await h.svc.idle(ID);
+    current.shots[0]!.narration = 'Sesuatu yang lain sama sekali.';
+    expect((await h.svc.dubFor(ID)).shots.s1).toBeUndefined();
+  });
+});
 
 describe('DubService.state / plan', () => {
   it('uses the narration (not the caption) as the text, skips silent shots, and counts characters', async () => {

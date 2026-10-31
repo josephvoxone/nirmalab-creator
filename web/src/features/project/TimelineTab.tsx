@@ -465,6 +465,13 @@ export function TimelineTab() {
               options={[{ value: 'biasa', label: 'Biasa', hint: 'Teks putih di bawah' }, { value: 'tulisan-tangan', label: 'Tulisan tangan', hint: 'Huruf tangan di langit atas (artbook)' }]} />
           )}
           {edit.subtitles === true && (
+            <label className="flex items-center gap-1.5 text-[12px] text-muted-foreground" title="Kata yang sedang diucapkan menyala emas, mengikuti suara dubbing">
+              <Switch size="sm" aria-label="Sorot kata mengikuti suara" checked={edit.subtitleKaraoke !== false} disabled={busy}
+                onCheckedChange={v => save(withEdit(board, { subtitleKaraoke: v ? undefined : false }))} />
+              Sorot kata
+            </label>
+          )}
+          {edit.subtitles === true && (
             <Segmented name="Ukuran subtitle" value={String(edit.subtitleSize ?? 1)} disabled={busy}
               onChange={v => save(withEdit(board, { subtitleSize: Number(v) === 1 ? undefined : Number(v) }))}
               options={[{ value: '0.8', label: 'Kecil', hint: '80%' }, { value: '1', label: 'Sedang', hint: 'Ukuran bawaan gaya' }, { value: '1.25', label: 'Besar', hint: '125%' }, { value: '1.5', label: 'Jumbo', hint: '150%' }]} />

@@ -1,13 +1,15 @@
 /**
  * ElevenLabs text-to-speech through a pool of API keys (`ProviderKeys`).
  *
- * Endpoints (checked against the API reference): `POST /v1/text-to-speech/{voice_id}`, `GET /v2/voices`,
+ * Endpoints (checked against the API reference): `POST /v1/text-to-speech/{voice_id}/with-timestamps` (audio + per-character
+ * alignment, same price as the plain call; plain audio answers are still accepted), `GET /v2/voices`,
  * `GET /v1/user/subscription` (free: reads the credit balance). `language_code` is accepted by Flash/Turbo v2.5 only.
  * A key is never put in an error message or a log.
  */
 import { KeyPool, PoolBusyError, PoolEmptyError, type Verdict } from '../lib/key-pool.js';
 import type { ProviderKeys } from '../lib/provider-keys.js';
 import type { FetchLike } from '../providers/client.js';
+import { wordsFromAlignment, type Word } from './words.js';
 
 export const ELEVEN_BASE = 'https://api.elevenlabs.io';
 export const MAX_TEXT_CHARS = 2500;
@@ -69,7 +71,7 @@ export class ElevenLabsClient {
   get pool(): KeyPool { return this.keys.pool; }
   configured(): boolean { return this.keys.pool.size() > 0; }
 
-  async synthesize(input: SynthesizeInput): Promise<{ audio: Buffer; keyId: string }> {
+  async synthesize(input: SynthesizeInput): Promise<{ audio: Buffer; keyId: string; words?: Word[] }> {
     const text = input.text.trim();
     if (!text) throw new DubError('REJECTED', 'Teks dubbing kosong.');
     if (text.length > MAX_TEXT_CHARS) throw new DubError('REJECTED', `Teks dubbing terlalu panjang (${text.length} > ${MAX_TEXT_CHARS} karakter).`);
@@ -89,13 +91,13 @@ export class ElevenLabsClient {
         ...(s.speakerBoost !== undefined ? { use_speaker_boost: s.speakerBoost } : {})
       }
     };
-    const url = `${this.base}/v1/text-to-speech/${encodeURIComponent(input.voiceId)}?output_format=${OUTPUT_FORMAT}`;
+    const url = `${this.base}/v1/text-to-speech/${encodeURIComponent(input.voiceId)}/with-timestamps?output_format=${OUTPUT_FORMAT}`;
     let lastReason = '';
     try {
-      return await this.keys.pool.run<{ audio: Buffer; keyId: string }>(async key => {
-        const verdict = await this.call(url, key.key, { method: 'POST', body: JSON.stringify(body), headers: { 'content-type': 'application/json', accept: 'audio/mpeg' } }, input.signal);
+      return await this.keys.pool.run<{ audio: Buffer; keyId: string; words?: Word[] }>(async key => {
+        const verdict = await this.call(url, key.key, { method: 'POST', body: JSON.stringify(body), headers: { 'content-type': 'application/json', accept: 'application/json' } }, input.signal);
         if ('rotate' in verdict) lastReason = verdict.rotate.reason;
-        return 'ok' in verdict ? { ok: { audio: verdict.ok, keyId: key.id } } : verdict;
+        return 'ok' in verdict ? { ok: { audio: verdict.ok.audio, keyId: key.id, ...(verdict.ok.words ? { words: verdict.ok.words } : {}) } } : verdict;
       });
     } catch (error) {
       if (error instanceof DubError) throw error;
@@ -106,7 +108,7 @@ export class ElevenLabsClient {
   }
 
   /** One request with one key, turned into a pool verdict. */
-  private async call(url: string, key: string, init: { method: string; body?: string; headers?: Record<string, string> }, outer?: AbortSignal): Promise<Verdict<Buffer>> {
+  private async call(url: string, key: string, init: { method: string; body?: string; headers?: Record<string, string> }, outer?: AbortSignal): Promise<Verdict<{ audio: Buffer; words?: Word[] }>> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), TTS_TIMEOUT_MS);
     const onAbort = () => controller.abort();
@@ -121,9 +123,16 @@ export class ElevenLabsClient {
       }
       if (res.ok) {
         const type = res.headers.get('content-type') ?? '';
+        if (/json/i.test(type)) { // the timed variant: base64 audio + per-character alignment of the ORIGINAL text
+          const answer = await readJson(res);
+          const bytes = Buffer.from(typeof answer?.audio_base64 === 'string' ? answer.audio_base64 : '', 'base64');
+          if (bytes.length < 100) return { rotate: { cooldownMs: 5_000, reason: 'jawaban bukan audio' } };
+          const words = wordsFromAlignment(answer?.alignment);
+          return { ok: { audio: bytes, ...(words ? { words } : {}) } };
+        }
         const bytes = Buffer.from(await res.arrayBuffer());
         if (!/audio|octet-stream/i.test(type) || bytes.length < 100) return { rotate: { cooldownMs: 5_000, reason: 'jawaban bukan audio' } };
-        return { ok: bytes };
+        return { ok: { audio: bytes } };
       }
       const body = await readJson(res);
       const reason = reasonOf(body, `HTTP ${res.status}`);

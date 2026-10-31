@@ -24,8 +24,9 @@ export type EditMusic = { file: string; name: string; seconds: number; volume: n
 /** Subtitle looks: absent = plain captions at the bottom; 'tulisan-tangan' = hand-lettering in the sky band. */
 export const SUBTITLE_STYLES = ['tulisan-tangan'] as const;
 export type SubtitleStyle = typeof SUBTITLE_STYLES[number];
-/** subtitleSize: font scale (1 = the style's default); subtitleY: top of the text as a share of the frame height. */
-export type TimelineEdit = { clipVolume?: number; subtitles?: boolean; subtitleStyle?: SubtitleStyle; subtitleSize?: number; subtitleY?: number; music?: EditMusic };
+/** subtitleSize: font scale (1 = the style's default); subtitleY: top of the text as a share of the frame height;
+ * subtitleKaraoke: false turns off the word-by-word highlight of dubbed shots (absent = on). */
+export type TimelineEdit = { clipVolume?: number; subtitles?: boolean; subtitleStyle?: SubtitleStyle; subtitleSize?: number; subtitleY?: number; subtitleKaraoke?: boolean; music?: EditMusic };
 
 export type Shot = {
   id: string;
@@ -526,6 +527,7 @@ export function validateEdit(board: Storyboard): string[] {
   if (edit.subtitles !== undefined && typeof edit.subtitles !== 'boolean') errors.push('edit.subtitles must be true or false');
   if (edit.subtitleSize !== undefined && !isNum(edit.subtitleSize, 0.6, 2)) errors.push('edit.subtitleSize must be a number from 0.6 to 2');
   if (edit.subtitleY !== undefined && !isNum(edit.subtitleY, 0.02, 0.9)) errors.push('edit.subtitleY must be a number from 0.02 to 0.9');
+  if (edit.subtitleKaraoke !== undefined && typeof edit.subtitleKaraoke !== 'boolean') errors.push('edit.subtitleKaraoke must be true or false');
   if (edit.subtitleStyle !== undefined && !(SUBTITLE_STYLES as readonly string[]).includes(edit.subtitleStyle)) errors.push(`edit.subtitleStyle must be one of: ${SUBTITLE_STYLES.join(', ')}`);
   const m = edit.music as unknown as Record<string, unknown> | undefined;
   if (m !== undefined) {
