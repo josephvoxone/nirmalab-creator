@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, timingSafeEqual } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { hashPassword, newAuthToken, normalizeEmail, verifyPassword } from './password.js';
@@ -61,6 +61,21 @@ const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 export function hashToken(token: string): string {
   return createHash('sha256').update(token, 'utf8').digest('hex');
+}
+
+/**
+ * The record whose `tokenHash` equals `wantedHex`, compared in constant time over EVERY record (no early exit),
+ * the same pattern as the MCP token check. The hashes are SHA-256 so a timing attack is impractical anyway;
+ * this keeps one rule for every secret comparison in the codebase.
+ */
+function findByTokenHash<T extends { tokenHash: string }>(records: T[], wantedHex: string): T | undefined {
+  const wanted = Buffer.from(wantedHex, 'hex');
+  let match: T | undefined;
+  for (const record of records) {
+    const stored = Buffer.from(record.tokenHash, 'hex');
+    if (stored.length === wanted.length && timingSafeEqual(stored, wanted)) match = record;
+  }
+  return match;
 }
 
 function nowIso(): string {
@@ -153,7 +168,7 @@ export class UserAuthStore {
 
   peekInvite(token: string): AuthInvite | undefined {
     const wanted = hashToken(token);
-    const invite = this.read().invites.find(entry => entry.tokenHash === wanted);
+    const invite = findByTokenHash(this.read().invites, wanted);
     if (!invite || invite.usedAt || Date.parse(invite.expiresAt) < Date.now()) return undefined;
     return invite;
   }
@@ -161,7 +176,7 @@ export class UserAuthStore {
   async acceptInvite(input: { token: string; email: string; password: string }): Promise<AuthUser> {
     const doc = this.read();
     const wanted = hashToken(input.token);
-    const invite = doc.invites.find(entry => entry.tokenHash === wanted);
+    const invite = findByTokenHash(doc.invites, wanted);
     if (!invite || invite.usedAt || Date.parse(invite.expiresAt) < Date.now()) {
       throw new Error('Invite invalid or expired');
     }
@@ -223,7 +238,7 @@ export class UserAuthStore {
   resolveSession(token: string): AuthUser | undefined {
     const doc = this.read();
     const wanted = hashToken(token);
-    const session = doc.sessions.find(entry => entry.tokenHash === wanted);
+    const session = findByTokenHash(doc.sessions, wanted);
     if (!session || Date.parse(session.expiresAt) < Date.now()) return undefined;
     return doc.users.find(user => user.id === session.userId);
   }
@@ -231,7 +246,8 @@ export class UserAuthStore {
   destroySession(token: string): void {
     const doc = this.read();
     const wanted = hashToken(token);
-    const kept = doc.sessions.filter(entry => entry.tokenHash !== wanted);
+    const found = findByTokenHash(doc.sessions, wanted);
+    const kept = found ? doc.sessions.filter(entry => entry !== found) : doc.sessions;
     if (kept.length === doc.sessions.length) return;
     doc.sessions = kept;
     this.write(doc);

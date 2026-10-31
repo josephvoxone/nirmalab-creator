@@ -10,14 +10,28 @@ const LOGIN_MAX_ATTEMPTS = 10;
 type Attempt = { count: number; resetAt: number };
 const loginAttempts = new Map<string, Attempt>();
 
+/**
+ * The address the rate limit is keyed on: Fastify's `request.ip`, which honours `trustProxy` as a NUMBER OF HOPS
+ * (see ./proxy.ts). Never read X-Forwarded-For here: its left side is written by the client.
+ */
 function clientIp(request: FastifyRequest): string {
-  const forwarded = request.headers['x-forwarded-for'];
-  const first = Array.isArray(forwarded) ? forwarded[0] : forwarded?.split(',')[0];
-  return (first ?? request.ip ?? 'unknown').trim();
+  return request.ip || 'unknown';
 }
+
+/** Expired windows are dropped once the table is this big, so many different keys cannot grow memory without bound. */
+const LOGIN_TABLE_SWEEP_AT = 5000;
+export const loginAttemptCount = (): number => loginAttempts.size;
 
 function loginAllowed(key: string): boolean {
   const now = Date.now();
+  if (loginAttempts.size >= LOGIN_TABLE_SWEEP_AT) {
+    for (const [k, v] of loginAttempts) if (v.resetAt < now) loginAttempts.delete(k);
+    // Still full of live windows (an attack): drop the oldest windows rather than grow.
+    for (const k of loginAttempts.keys()) {
+      if (loginAttempts.size < LOGIN_TABLE_SWEEP_AT) break;
+      loginAttempts.delete(k);
+    }
+  }
   const entry = loginAttempts.get(key);
   if (!entry || entry.resetAt < now) {
     loginAttempts.set(key, { count: 1, resetAt: now + LOGIN_WINDOW_MS });
@@ -49,6 +63,14 @@ export function sessionUser(store: UserAuthStore, request: FastifyRequest) {
 export type AuthRouteOptions = {
   bootstrapAdminEmail?: string;
   bootstrapAdminPassword?: string;
+  /** The trusted-proxy hop count `buildApp` gave Fastify (reported by the admin diagnostic only). */
+  trustProxyHops?: number;
+  /**
+   * Session cookie `Secure` attribute: 'auto' (default) = only when the request arrived over HTTPS (Fastify's
+   * `request.protocol`, which believes X-Forwarded-Proto only from a trusted proxy hop), true/false = always/never.
+   * `Secure` on a plain-http page would make the browser drop the cookie, so auto is the safe default.
+   */
+  secureCookies?: 'auto' | boolean;
 };
 
 async function bootstrapAdminIfNeeded(store: UserAuthStore, options: AuthRouteOptions): Promise<void> {
@@ -70,6 +92,7 @@ export async function registerAuthRoutes(
   options: AuthRouteOptions = {}
 ): Promise<void> {
   await bootstrapAdminIfNeeded(store, options);
+  const secureCookies = options.secureCookies ?? 'auto';
 
   server.get('/auth/status', async () => ({ hasUsers: store.hasUsers() }));
 
@@ -91,14 +114,14 @@ export async function registerAuthRoutes(
       return reply.code(401).send({ error: { code: 'INVALID_CREDENTIALS', message: 'Wrong email or password' } });
     }
     const session = store.createSession(user.id);
-    setSessionCookie(reply, session.token);
+    setSessionCookie(request, reply, session.token, secureCookies);
     return { user: store.publicUser(user) };
   });
 
   server.post('/auth/logout', async (request, reply) => {
     const token = readSessionToken(request);
     if (token) store.destroySession(token);
-    clearSessionCookie(reply);
+    clearSessionCookie(request, reply, secureCookies);
     return { ok: true };
   });
 
@@ -115,6 +138,21 @@ export async function registerAuthRoutes(
       const code = message.includes('8-256') ? 'WEAK_PASSWORD' : 'WRONG_PASSWORD';
       return reply.code(400).send({ error: { code, message } });
     }
+  });
+
+  // Admin diagnostic for the proxy chain: what the app resolves as the client address and why. No secrets
+  // (admin only; shows the caller's own request). Lets the operator confirm TRUST_PROXY_HOPS without shell access.
+  server.get('/auth/client-ip', async (request, reply) => {
+    if (!requireAdmin(store, request, reply)) return undefined;
+    const forwarded = request.headers['x-forwarded-for'];
+    return {
+      ip: request.ip,
+      hops: options.trustProxyHops ?? null,
+      socket: request.socket.remoteAddress ?? null,
+      xForwardedFor: Array.isArray(forwarded) ? forwarded.join(', ') : forwarded ?? null,
+      xForwardedProto: request.headers['x-forwarded-proto'] ?? null,
+      protocol: request.protocol
+    };
   });
 
   server.get('/auth/me', async (request, reply) => {
@@ -213,7 +251,7 @@ export async function registerAuthRoutes(
       try {
         const user = await store.acceptInvite({ token, email, password });
         const session = store.createSession(user.id);
-        setSessionCookie(reply, session.token);
+        setSessionCookie(request, reply, session.token, secureCookies);
         return { user: store.publicUser(user) };
       } catch (error) {
         return reply.code(400).send({
@@ -243,13 +281,16 @@ function sendMemberError(reply: FastifyReply, error: unknown) {
   return reply.code(status).send({ error: { code: error.code, message: error.message } });
 }
 
-function setSessionCookie(reply: FastifyReply, token: string): void {
+const cookieSecure = (request: FastifyRequest, mode: 'auto' | boolean): string =>
+  (mode === 'auto' ? request.protocol === 'https' : mode) ? '; Secure' : '';
+
+function setSessionCookie(request: FastifyRequest, reply: FastifyReply, token: string, mode: 'auto' | boolean): void {
   reply.header(
     'Set-Cookie',
-    `${SESSION_COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_MAX_AGE}`
+    `${SESSION_COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_MAX_AGE}${cookieSecure(request, mode)}`
   );
 }
 
-function clearSessionCookie(reply: FastifyReply): void {
-  reply.header('Set-Cookie', `${SESSION_COOKIE}=deleted; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`);
+function clearSessionCookie(request: FastifyRequest, reply: FastifyReply, mode: 'auto' | boolean): void {
+  reply.header('Set-Cookie', `${SESSION_COOKIE}=deleted; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${cookieSecure(request, mode)}`);
 }

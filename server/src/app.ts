@@ -41,6 +41,9 @@ import { registerDubRoutes } from './dub/routes.js';
 import { createGeminiModel } from './llm/gemini.js';
 import { TextRoutingStore, createRoutedModel, limitedModel } from './llm/router.js';
 import { requireAdmin } from './auth/routes.js';
+import { parseTrustProxyHops, trustProxyFor } from './auth/proxy.js';
+import { registerCrossSiteGuard } from './auth/csrf.js';
+import { StorageMeter } from './media/storage-meter.js';
 import { createOpenCodeModel, type TextModel } from './llm/opencode.js';
 
 export type AppOptions = {
@@ -50,6 +53,8 @@ export type AppOptions = {
   env?: NodeJS.ProcessEnv;
   logger?: boolean;
   version?: string;
+  /** Reverse proxies trusted to write X-Forwarded-For (env TRUST_PROXY_HOPS; default 1). See auth/proxy.ts. */
+  trustProxyHops?: number;
   stories?: Partial<Pick<StoryDeps, 'probe' | 'assemble' | 'imageSize' | 'audit'>> & {
     generateText?: TextGenerator;
     /** Background reconcile interval; 0 disables (tests). Default 5 s. */
@@ -83,12 +88,20 @@ export type AppOptions = {
 
 export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   const env = options.env ?? process.env;
-  const server = Fastify({ logger: options.logger ?? false, bodyLimit: 210 * 1024 * 1024, trustProxy: true });
+  // trustProxy is a hop COUNT (as a function, see auth/proxy.ts), never `true`: `true` trusts the whole X-Forwarded-For chain, i.e. whatever the client wrote.
+  const trustProxyHops = options.trustProxyHops ?? parseTrustProxyHops(env.TRUST_PROXY_HOPS);
+  const server = Fastify({ logger: options.logger ?? false, bodyLimit: 210 * 1024 * 1024, trustProxy: trustProxyFor(trustProxyHops) });
+
+  // CSRF second layer: a cookie-carrying mutation that claims another site is refused (auth/csrf.ts).
+  registerCrossSiteGuard(server, env.ALLOWED_ORIGINS);
 
   server.addHook('onSend', async (_request, reply, payload) => {
     reply.header('x-content-type-options', 'nosniff');
     reply.header('x-frame-options', 'DENY');
     reply.header('referrer-policy', 'same-origin');
+    // Only the directives that restrict nothing the SPA, media or previews load: no framing (same as X-Frame-Options,
+    // but honoured where XFO is not), no <base> hijack, no plugins. A full script/style CSP is a separate, tested step.
+    if (!reply.hasHeader('content-security-policy')) reply.header('content-security-policy', "frame-ancestors 'none'; base-uri 'self'; object-src 'none'");
     return payload;
   });
 
@@ -98,7 +111,10 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   await server.register(async scoped => {
     await registerAuthRoutes(scoped, userAuthStore, {
       bootstrapAdminEmail: env.OPENCREATOR_ADMIN_EMAIL,
-      bootstrapAdminPassword: env.OPENCREATOR_ADMIN_PASSWORD
+      bootstrapAdminPassword: env.OPENCREATOR_ADMIN_PASSWORD,
+      trustProxyHops,
+      // COOKIE_SECURE=1 always / 0 never / unset = only over HTTPS (see AuthRouteOptions.secureCookies).
+      secureCookies: env.COOKIE_SECURE === '1' ? true : env.COOKIE_SECURE === '0' ? false : 'auto'
     });
   }, { prefix: '/api' });
 
@@ -193,7 +209,9 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   // The model every feature uses: primary + automatic fallback, with a cap on simultaneous provider calls.
   const textModel = options.text?.model ?? limitedModel(createRoutedModel({ opencode: openCodeModel, gemini: geminiModel, routing: () => textRouting.view() }), llmQueue);
   await registerProviderRoutes(server, { userAuthStore, dataDir: options.dataDir, flow: flowStore, fetch: providerFetch, catalog, text: { store: textStore, model: openCodeModel } });
-  await registerQuotaRoutes(server, { userAuthStore, dataDir: options.dataDir, flow: flowStore, balance: () => openRouterBalance(options.dataDir, { fetch: providerFetch }) });
+  // One cached disk scan for the sidebar quota; the storage janitor drops it when it has changed the volume.
+  const storageMeter = new StorageMeter(options.dataDir);
+  await registerQuotaRoutes(server, { userAuthStore, dataDir: options.dataDir, flow: flowStore, balance: () => openRouterBalance(options.dataDir, { fetch: providerFetch }), storage: storageMeter });
   const workerMs = options.providers?.workerMs ?? 5000;
   if (workerMs > 0) {
     const stopWorker = new OpenRouterWorker({ dataDir: options.dataDir, store: flowStore, fetch: providerFetch, catalog }).start(workerMs);
@@ -267,8 +285,9 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
     server.addHook('onClose', async () => clearInterval(timer));
   }
 
-  const cleanup = serialCleanup(options.dataDir, { jobs: () => flowStore.listJobs(Number.MAX_SAFE_INTEGER) });
-  await registerStorageRoutes(server, { userAuthStore, dataDir: options.dataDir, cleanup });
+  const sweepOnce = serialCleanup(options.dataDir, { jobs: () => flowStore.listJobs(Number.MAX_SAFE_INTEGER) });
+  const cleanup = async () => { try { return await sweepOnce(); } finally { storageMeter.invalidate(); } };
+  await registerStorageRoutes(server, { userAuthStore, dataDir: options.dataDir, cleanup, meter: storageMeter });
   const cleanupMs = options.media?.cleanupMs ?? 24 * 3_600_000;
   if (cleanupMs > 0) {
     const sweep = () => void cleanup().then(
