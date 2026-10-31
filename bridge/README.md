@@ -1,6 +1,6 @@
 # flow-bridge
 
-Menghubungkan antrean Flow OpenCreator (`creator.nirmalab.com`) dengan Google Flow lewat
+Menghubungkan antrean Flow OpenCreator (`<your-app-url>`) dengan Google Flow lewat
 [google-flow-mcp](../../../google-flow-mcp) yang berjalan **di Mac** (Chrome dengan profile login),
 bukan di VPS. Server tetap ringan; browser hanya ada di Mac.
 
@@ -41,7 +41,7 @@ server di `/data/flow/bridge-token` (0600, dibaca per request — rotate = tulis
 node --test test/
 ```
 
-## Files: `~/Documents/nirmalab/flow` (`FLOW_HOME`)
+## Files: `~/.shotweave/flow` (override with `FLOW_HOME`)
 
 Every Flow file lives there, not in this repo: `stories/<slug>/` (storyboard.json, shots, final video), `bridge/` (Studio job clips), `exports/` (MCP downloads; `~/FlowExports` symlinks to it), `logs/`. Story video: `node story.mjs <slug> [--limit 1]` then `/usr/bin/python3 py/assemble.py <slug>`.
 
@@ -77,14 +77,14 @@ Studio (web) ──POST /api/flow/jobs {provider:'axcel'}──▶ server:claimJ
 ```
 
 Env di `~/.config/opencreator/axcel-bridge.env` (0600): `AXCEL_BRIDGE_TOKEN` (wajib, ≥16 char),
-`AXCEL_BRIDGE_PORT` (8899), `AXCEL_OUT_DIR` (`~/Documents/nirmalab/flow/axcel`), `AXCEL_DEBUG=1`.
+`AXCEL_BRIDGE_PORT` (8899), `AXCEL_OUT_DIR` (`~/.shotweave/flow/axcel`), `AXCEL_DEBUG=1`.
 Token yang sama diisi di **Pengaturan › Provider › Axcel** (tersimpan di
 `/data/providers/axcel.json`, 0600) atau lewat env server `AXCEL_BRIDGE_TOKEN`.
 
 Kalau server Studio ada di VPS (bukan di Mac ini), isi juga:
 
 ```
-AXCEL_SERVER_URL=https://creator.nirmalab.com
+AXCEL_SERVER_URL=<your-app-url>
 AXCEL_SERVER_TOKEN=<token bridge server, /data/flow/bridge-token>
 ```
 

@@ -1,4 +1,4 @@
-# Nirmalab Creator
+# Shotweave Studio
 
 **English** | [Bahasa Indonesia](README.id.md)
 
@@ -6,6 +6,10 @@ Illustrated AI story videos, end to end: write the story, break it into scenes a
 keyframes and clips, dub the narration, burn word-synced captions, and assemble the film.
 
 Self-hosted, one container, your own keys and data directory.
+
+> Environment variable and on-disk path names still carry the prefixes from the first
+> version (`OPENCREATOR_*`, `~/Documents/nirmalab/...`). Renaming them would break running
+> deployments, so they stay for now.
 
 ## What is in it
 

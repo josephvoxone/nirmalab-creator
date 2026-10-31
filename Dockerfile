@@ -1,4 +1,4 @@
-# Nirmalab Creator — one small image: Fastify API + built web + story assembler (ffmpeg + Python/PIL) + clip motion QC (numpy).
+# Shotweave Studio - one small image: Fastify API + built web + story assembler (ffmpeg + Python/PIL) + clip motion QC (numpy).
 FROM node:22-bookworm-slim AS build
 WORKDIR /app
 RUN corepack enable

@@ -1,4 +1,4 @@
-# Nirmalab Creator
+# Shotweave Studio
 
 [English](README.md) | **Bahasa Indonesia**
 
@@ -7,6 +7,10 @@ generate keyframe dan klip, isi suara narasi, bakar caption yang menyala per kat
 film.
 
 Self-hosted, satu container, key dan folder data milikmu sendiri.
+
+> Nama variabel environment dan path di disk masih memakai awalan versi pertama
+> (`OPENCREATOR_*`, `~/Documents/nirmalab/...`). Mengganti namanya akan memutus deployment
+> yang sedang jalan, jadi untuk sementara dibiarkan.
 
 ## Isinya
 
