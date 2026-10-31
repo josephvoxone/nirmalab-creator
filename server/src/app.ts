@@ -42,6 +42,7 @@ import { createGeminiModel } from './llm/gemini.js';
 import { TextRoutingStore, createRoutedModel, limitedModel } from './llm/router.js';
 import { requireAdmin } from './auth/routes.js';
 import { parseTrustProxyHops, trustProxyFor } from './auth/proxy.js';
+import { registerCrossSiteGuard } from './auth/csrf.js';
 import { createOpenCodeModel, type TextModel } from './llm/opencode.js';
 
 export type AppOptions = {
@@ -89,6 +90,9 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   // trustProxy is a hop COUNT (as a function, see auth/proxy.ts), never `true`: `true` trusts the whole X-Forwarded-For chain, i.e. whatever the client wrote.
   const trustProxyHops = options.trustProxyHops ?? parseTrustProxyHops(env.TRUST_PROXY_HOPS);
   const server = Fastify({ logger: options.logger ?? false, bodyLimit: 210 * 1024 * 1024, trustProxy: trustProxyFor(trustProxyHops) });
+
+  // CSRF second layer: a cookie-carrying mutation that claims another site is refused (auth/csrf.ts).
+  registerCrossSiteGuard(server, env.ALLOWED_ORIGINS);
 
   server.addHook('onSend', async (_request, reply, payload) => {
     reply.header('x-content-type-options', 'nosniff');
