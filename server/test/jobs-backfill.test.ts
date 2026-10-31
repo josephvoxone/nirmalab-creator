@@ -152,3 +152,14 @@ describe('T4-4: the backfill runs at boot (buildApp)', () => {
     await t.server.close();
   });
 });
+
+describe('T4-4: FlowStore.assignCreatedBy is compare-and-set', () => {
+  it('never replaces an owner somebody set meanwhile, and clearCreatedBy only removes what the backfill wrote', async () => {
+    const w = await world();
+    const done = await w.store.assignCreatedBy({ [w.ids.owned]: 'u_intruder', [w.ids.studio]: 'u_new' });
+    expect(done).toEqual([{ id: w.ids.studio, after: 'u_new' }]);
+    expect((await w.store.getJob(w.ids.owned))?.createdBy).toBe(w.bob.id);
+    expect(await w.store.clearCreatedBy([{ id: w.ids.owned, after: 'u_intruder' }, { id: w.ids.studio, after: 'u_other' }])).toEqual([]);
+    expect(await w.store.clearCreatedBy([{ id: w.ids.studio, after: 'u_new' }])).toEqual([w.ids.studio]);
+  });
+});
