@@ -348,6 +348,25 @@ describe('T3 matrix: before the body is read', () => {
   });
 });
 
+describe('T3 matrix: sibling spellings of the same route do not open a side door', () => {
+  it('HEAD (Fastify mirrors every GET), a trailing slash, another letter case and an encoded id: a non-owner never gets anything but 404/401', async () => {
+    const p = ids(w, await w.seedProject(w.a));
+    const encoded = p.id.replace('story_', '%73tory_');
+    for (const who of [w.b, w.m]) {
+      for (const url of [S(p, '/video'), S(p, '/dub'), S(p, `/shots/${SHOT}/frame`), S(p, '/music'), S(p)]) {
+        expect((await w.server.inject({ method: 'HEAD', url, headers: { cookie: who.cookie } })).statusCode, `HEAD ${url} ${who.email}`).toBe(404);
+      }
+      expect((await w.server.inject({ url: `/api/stories/${encoded}`, headers: { cookie: who.cookie } })).statusCode, `encoded id ${who.email}`).toBe(404);
+      for (const url of [`${S(p)}/`, S(p).replace('/api/', '/API/')]) {
+        expect([404], `${url}`).toContain((await w.server.inject({ url, headers: { cookie: who.cookie } })).statusCode);
+      }
+    }
+    // The owner through the same doors: HEAD works, the encoded id is the same project.
+    expect((await w.server.inject({ method: 'HEAD', url: S(p, '/video'), headers: { cookie: w.a.cookie } })).statusCode).toBe(200);
+    expect((await w.server.inject({ url: `/api/stories/${encoded}`, headers: { cookie: w.a.cookie } })).statusCode).toBe(200);
+  });
+});
+
 describe('T3 matrix: system admin, public, shared, bridge', () => {
   it('SISTEM-ADMIN routes: anonymous 401, member 403, admin passes the gate (generated from the registry)', async () => {
     const fill = (url: string) => url.replace(/:[A-Za-z]+/g, 'x').replace('*', 'x');
