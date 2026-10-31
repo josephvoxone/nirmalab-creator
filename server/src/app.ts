@@ -16,6 +16,8 @@ import { assembleStory, imageSize, probeClip } from './stories/media.js';
 import { registerStoryRoutes } from './stories/routes.js';
 import { registerAssistantRoutes } from './assistant/routes.js';
 import { registerMcpRoutes } from './mcp/routes.js';
+import { McpTokenStore } from './mcp/tokens.js';
+import { scanProjects } from './tenancy/project-meta.js';
 import { CoverService } from './stories/covers.js';
 import { captionFor } from './stories/caption.js';
 import { MediaCache, type FfmpegRunner } from './media/images.js';
@@ -125,8 +127,19 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   server.get('/api/health', async () => ({ ok: true, app: 'nirmalab-creator', version: options.version ?? 'dev' }));
 
   const userAuthStore = new UserAuthStore(options.dataDir);
+  // T8 admin: one MCP token store per process (shared with the MCP routes below), so removing a member can revoke their tokens.
+  const mcpTokens = new McpTokenStore(options.dataDir, userAuthStore);
   await server.register(async scoped => {
     await registerAuthRoutes(scoped, userAuthStore, {
+      // T8 member removal (audit 06 §C.3): the account is already gone when this runs; revoke what hangs on it. Idempotent, so a retry heals a half-done removal.
+      // The member's projects are NOT touched: they become orphans the admin moves or deletes from Pengaturan > Penyimpanan.
+      onMemberRemoved: async member => {
+        await mcpTokens.revokeAllFor(member.id);
+        await publisherService.revokeAllFor(member.id);
+        await quotaLimits.set(member.id, {});
+        const { projects } = await scanProjects(options.dataDir, { withBytes: false });
+        return { orphanedProjects: projects.filter(project => project.ownerId === member.id).length };
+      },
       bootstrapAdminEmail: env.OPENCREATOR_ADMIN_EMAIL,
       bootstrapAdminPassword: env.OPENCREATOR_ADMIN_PASSWORD,
       trustProxyHops,
@@ -349,7 +362,7 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   // Project assistant chat (SSE), history and undo: same text model and prices as the story actions.
   await registerAssistantRoutes(server, { userAuthStore, stories, textModel, price: actionPrice, ...(options.assistant ?? {}) });
   // Remote MCP (`/mcp`, bearer personal tokens) + token routes: the same action layer as the chat.
-  await registerMcpRoutes(server, { userAuthStore, dataDir: options.dataDir, stories, generateText, textModel, price: actionPrice, version: options.version });
+  await registerMcpRoutes(server, { userAuthStore, dataDir: options.dataDir, tokens: mcpTokens, stories, generateText, textModel, price: actionPrice, version: options.version });
   await registerTrendRoutes(server, { userAuthStore, dataDir: options.dataDir, stories, env });
   const reconcileMs = options.stories?.reconcileMs ?? 5000;
   if (reconcileMs > 0) {

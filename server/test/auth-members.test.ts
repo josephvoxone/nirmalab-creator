@@ -197,7 +197,7 @@ describe('member routes', () => {
     expect((await server.inject({ method: 'GET', url: '/auth/me', headers: { cookie: member } })).statusCode).toBe(200);
     const removed = await del(memberId, admin);
     expect(removed.statusCode).toBe(200);
-    expect(removed.json()).toEqual({ ok: true });
+    expect(removed.json()).toEqual({ ok: true, orphanedProjects: 0 }); // T8 (06 §C.3): the answer now says how many projects were left without an owner
 
     const me = await server.inject({ method: 'GET', url: '/auth/me', headers: { cookie: member } });
     expect(me.statusCode).toBe(401);
@@ -205,7 +205,11 @@ describe('member routes', () => {
     expect(login.statusCode).toBe(401);
     const list = await server.inject({ method: 'GET', url: '/auth/members', headers: { cookie: admin } });
     expect(list.json().members.map((m: { email: string }) => m.email)).toEqual(['admin@x.io']);
-    expect((await del(memberId, admin)).statusCode).toBe(404);
+    // T8: removing the same member again is a harmless retry (200 alreadyRemoved), an id that never existed is still 404
+    const again = await del(memberId, admin);
+    expect(again.statusCode).toBe(200);
+    expect(again.json()).toMatchObject({ ok: true, alreadyRemoved: true });
+    expect((await del('u_never', admin)).statusCode).toBe(404);
   });
 
 });

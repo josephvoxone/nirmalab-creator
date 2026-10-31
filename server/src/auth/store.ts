@@ -10,7 +10,12 @@ export type AuthUser = {
   isAdmin: boolean;
   createdAt: string;
   invitedBy?: string;
+  /** Set while an admin has suspended the account: sign-in is refused and every session is gone, nothing else is touched. */
+  suspendedAt?: string;
 };
+
+/** What stays of a removed account: enough to name the previous owner of an orphaned project. Never the password hash. */
+export type Tombstone = { id: string; email: string; removedAt: string; removedBy: string };
 
 export type AuthInvite = {
   tokenHash: string;
@@ -38,6 +43,7 @@ export type PublicMember = {
   createdAt: string;
   /** Newest session start (login) for this user, when one is on file. */
   lastSeenAt?: string;
+  suspendedAt?: string;
 };
 
 export type MemberErrorCode = 'SELF' | 'LAST_ADMIN' | 'NOT_FOUND';
@@ -54,6 +60,7 @@ type AuthDocument = {
   users: AuthUser[];
   invites: AuthInvite[];
   sessions: AuthSession[];
+  removedUsers: Tombstone[];
 };
 
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
@@ -82,8 +89,13 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
+/** Admins other than `exceptId` who can still sign in (not suspended). */
+function otherActiveAdmins(doc: AuthDocument, exceptId: string): number {
+  return doc.users.filter(entry => entry.isAdmin && !entry.suspendedAt && entry.id !== exceptId).length;
+}
+
 function emptyDocument(): AuthDocument {
-  return { version: 1, users: [], invites: [], sessions: [] };
+  return { version: 1, users: [], invites: [], sessions: [], removedUsers: [] };
 }
 
 export class UserAuthStore {
@@ -240,7 +252,8 @@ export class UserAuthStore {
     const wanted = hashToken(token);
     const session = findByTokenHash(doc.sessions, wanted);
     if (!session || Date.parse(session.expiresAt) < Date.now()) return undefined;
-    return doc.users.find(user => user.id === session.userId);
+    const user = doc.users.find(entry => entry.id === session.userId);
+    return user && !user.suspendedAt ? user : undefined;
   }
 
   destroySession(token: string): void {
@@ -262,7 +275,7 @@ export class UserAuthStore {
     }
     return doc.users.map(user => {
       const seen = lastSeen.get(user.id);
-      return { ...this.publicUser(user), ...(seen === undefined ? {} : { lastSeenAt: seen }) };
+      return { ...this.publicUser(user), ...(seen === undefined ? {} : { lastSeenAt: seen }), ...(user.suspendedAt ? { suspendedAt: user.suspendedAt } : {}) };
     });
   }
 
@@ -272,7 +285,7 @@ export class UserAuthStore {
     const user = doc.users.find(entry => entry.id === userId);
     if (!user) throw new MemberError('NOT_FOUND', 'User not found');
     if (!isAdmin && userId === byUserId) throw new MemberError('SELF', 'You cannot remove your own admin role');
-    if (!isAdmin && user.isAdmin && doc.users.filter(entry => entry.isAdmin).length <= 1) {
+    if (!isAdmin && user.isAdmin && otherActiveAdmins(doc, userId) === 0) {
       throw new MemberError('LAST_ADMIN', 'The workspace needs at least one admin');
     }
     if (user.isAdmin !== isAdmin) {
@@ -282,16 +295,45 @@ export class UserAuthStore {
     return this.publicUser(user);
   }
 
-  /** Delete a user with their sessions (signed out everywhere) and their still-open invites. */
-  removeUser(userId: string, byUserId: string): void {
+  /**
+   * Suspend / reactivate an account. Suspending signs the person out everywhere at once and refuses their next sign-in;
+   * their projects, connections and tokens stay exactly as they are. Nobody suspends themselves, and the workspace keeps
+   * one ACTIVE admin. Idempotent: suspending twice keeps the first timestamp.
+   */
+  setSuspended(userId: string, suspended: boolean, byUserId: string): PublicMember {
+    const doc = this.read();
+    const user = doc.users.find(entry => entry.id === userId);
+    if (!user) throw new MemberError('NOT_FOUND', 'User not found');
+    if (suspended && userId === byUserId) throw new MemberError('SELF', 'You cannot suspend yourself');
+    if (suspended && user.isAdmin && !user.suspendedAt && otherActiveAdmins(doc, userId) === 0) {
+      throw new MemberError('LAST_ADMIN', 'The workspace needs at least one active admin');
+    }
+    if (suspended && !user.suspendedAt) {
+      user.suspendedAt = nowIso();
+      doc.sessions = doc.sessions.filter(entry => entry.userId !== userId);
+      this.write(doc);
+    } else if (!suspended && user.suspendedAt) {
+      delete user.suspendedAt;
+      this.write(doc);
+    }
+    return { ...this.publicUser(user), ...(user.suspendedAt ? { suspendedAt: user.suspendedAt } : {}) };
+  }
+
+  /**
+   * Remove a member (audit 06 §C.3): the account, its sessions and its open invites go in ONE write, together with a tombstone that
+   * keeps the previous owner nameable. Projects are not touched here (they become orphans); the caller revokes the member's tokens.
+   * A second call throws NOT_FOUND while `findTombstone(id)` still answers, which is how a retry recognises an earlier removal.
+   */
+  removeUser(userId: string, byUserId: string): Tombstone {
     const doc = this.read();
     const user = doc.users.find(entry => entry.id === userId);
     if (!user) throw new MemberError('NOT_FOUND', 'User not found');
     if (userId === byUserId) throw new MemberError('SELF', 'You cannot remove yourself');
-    if (user.isAdmin && doc.users.filter(entry => entry.isAdmin).length <= 1) {
+    if (user.isAdmin && !user.suspendedAt && otherActiveAdmins(doc, userId) === 0) {
       throw new MemberError('LAST_ADMIN', 'The workspace needs at least one admin');
     }
     const now = nowIso();
+    const tombstone: Tombstone = { id: user.id, email: user.email, removedAt: now, removedBy: byUserId };
     doc.users = doc.users.filter(entry => entry.id !== userId);
     doc.sessions = doc.sessions.filter(entry => entry.userId !== userId);
     for (const invite of doc.invites) {
@@ -301,7 +343,17 @@ export class UserAuthStore {
         invite.revokedAt = now;
       }
     }
+    doc.removedUsers = [...doc.removedUsers.filter(entry => entry.id !== userId), tombstone];
     this.write(doc);
+    return tombstone;
+  }
+
+  tombstones(): Tombstone[] {
+    return this.read().removedUsers;
+  }
+
+  findTombstone(id: string): Tombstone | undefined {
+    return this.read().removedUsers.find(entry => entry.id === id);
   }
 
   publicUser(user: AuthUser): { id: string; email: string; isAdmin: boolean; createdAt: string } {
@@ -318,7 +370,8 @@ export class UserAuthStore {
         version: 1,
         users: Array.isArray(doc.users) ? doc.users : [],
         invites: Array.isArray(doc.invites) ? doc.invites : [],
-        sessions: Array.isArray(doc.sessions) ? doc.sessions : []
+        sessions: Array.isArray(doc.sessions) ? doc.sessions : [],
+        removedUsers: Array.isArray(doc.removedUsers) ? doc.removedUsers : []
       };
     } catch {
       return emptyDocument();
