@@ -18,7 +18,19 @@ export type FlowAccount = {
   dailyCreditCap?: number;
   lastUsedAtMs?: number;
 };
-export type Member = { id: string; email: string; isAdmin: boolean; createdAt: string; lastSeenAt?: string };
+export type Member = { id: string; email: string; isAdmin: boolean; createdAt: string; lastSeenAt?: string; suspendedAt?: string };
+
+/** Admin console (audit 06 §A.3): metadata and numbers only — titles exist only for orphaned projects. */
+export type OwnerUsage = { userId: string; email: string; isAdmin: boolean; suspendedAt?: string; projects: number; bytes: number; lastActivityMs: number | null };
+export type Orphan = { id: string; title: string; ownerId: string | null; ownerEmail: string | null; bytes: number; createdAtMs: number; updatedAtMs: number; status: string };
+export type AdminProjects = { owners: OwnerUsage[]; orphans: Orphan[]; totals: { projects: number; bytes: number; orphans: number; orphanBytes: number; unreadable: number } };
+export type LimitKind = 'flowCredits' | 'openrouterUsd' | 'elevenChars' | 'llmTurns' | 'genCalls';
+export type Limit = { perDay?: number | null; per30d?: number | null; perRender?: number | null };
+export type UserLimits = Partial<Record<LimitKind, Limit>>;
+export type LimitsView = {
+  userId: string; email: string; isAdmin: boolean; limits: UserLimits; effective: UserLimits; defaults: UserLimits;
+  usage: Record<LimitKind, { day: number; d30: number; reserved: number }>;
+};
 export type Rotation = 'round-robin' | 'least-used' | 'priority';
 export type AccountPatch = { label?: string; enabled?: boolean; priority?: number; dailyCreditCap?: number | null };
 type Count = { jobs: number; done: number; failed: number };
@@ -43,7 +55,15 @@ export function settingsApi(fetchImpl: FetchLike) {
     removeFlowAccount: (id: string) => requestJson<{ ok: boolean }>(fetchImpl, `/api/flow/accounts/${encodeURIComponent(id)}`, del()),
     members: () => requestJson<{ members: Member[] }>(fetchImpl, '/api/auth/members'),
     setAdmin: (id: string, isAdmin: boolean) => requestJson<{ member: Member }>(fetchImpl, `/api/auth/members/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ isAdmin }) }),
-    removeMember: (id: string) => requestJson<{ ok: boolean }>(fetchImpl, `/api/auth/members/${encodeURIComponent(id)}`, del()),
+    removeMember: (id: string) => requestJson<{ ok: boolean; orphanedProjects?: number; alreadyRemoved?: boolean }>(fetchImpl, `/api/auth/members/${encodeURIComponent(id)}`, del()),
+    suspend: (id: string) => requestJson<{ member: Member }>(fetchImpl, `/api/admin/users/${encodeURIComponent(id)}/suspend`, post({})),
+    activate: (id: string) => requestJson<{ member: Member }>(fetchImpl, `/api/admin/users/${encodeURIComponent(id)}/activate`, post({})),
+    adminProjects: () => requestJson<AdminProjects>(fetchImpl, '/api/admin/projects'),
+    transferProject: (id: string, toUserId: string) => requestJson<{ ok: boolean; jobsReassigned: number }>(fetchImpl, `/api/admin/projects/${encodeURIComponent(id)}/transfer`, post({ toUserId })),
+    deleteProject: (id: string, confirmTitle: string) => requestJson<{ ok: boolean; freedBytes: number }>(fetchImpl, `/api/admin/projects/${encodeURIComponent(id)}`, { method: 'DELETE', body: JSON.stringify({ confirmTitle }) }),
+    cleanupStorage: () => requestJson<{ freedBytes: number; linked: number; removed: number }>(fetchImpl, '/api/storage/cleanup', post({})),
+    userLimits: (id: string) => requestJson<LimitsView>(fetchImpl, `/api/admin/users/${encodeURIComponent(id)}/limits`),
+    setUserLimits: (id: string, limits: UserLimits) => requestJson<LimitsView>(fetchImpl, `/api/admin/users/${encodeURIComponent(id)}/limits`, { method: 'PUT', body: JSON.stringify({ limits }) }),
     usage: (days: number) => requestJson<Usage>(fetchImpl, `/api/flow/usage?days=${days}`),
     pool: () => requestJson<{ pool: { rotation: Rotation } }>(fetchImpl, '/api/flow/pool'),
     setPool: (rotation: Rotation) => requestJson<{ pool: { rotation: Rotation } }>(fetchImpl, '/api/flow/pool', { method: 'PUT', body: JSON.stringify({ rotation }) }),
