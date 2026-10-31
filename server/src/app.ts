@@ -7,7 +7,7 @@ import { registerAuthRoutes } from './auth/routes.js';
 import { UserAuthStore } from './auth/store.js';
 import { registerFlowRoutes } from './flow/routes.js';
 import { registerFreeGenerateRoutes } from './generate/routes.js';
-import { PublisherService, registerPublisherRoutes } from './publisher/index.js';
+import { PublisherService, migratePublisherTokensAtBoot, registerPublisherRoutes } from './publisher/index.js';
 import { FlowStore } from './flow/store.js';
 import { pollinationsText } from './generate/pollinations.js';
 import type { TextGenerator } from './stories/draft.js';
@@ -163,6 +163,9 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
       balance: () => openRouterBalance(options.dataDir, { fetch: providerFetch })
     }
   });
+  // T7 (publisher): tokens saved before per-user storage were one global file per platform. Hand them to the main
+  // owner (backup + manifest + rollback; no-op once done) BEFORE the routes can answer a status request.
+  await migratePublisherTokensAtBoot({ dataDir: options.dataDir, users: userAuthStore.listUsers(), env, log: server.log });
   await registerPublisherRoutes(server, {
     service: new PublisherService({ dataDir: options.dataDir, env }),
     userAuthStore,
