@@ -167,6 +167,9 @@ export type StoryRecord = {
   events: Array<{ atMs: number; message: string }>;
   /** User id that created the story; every Flow job it queues is attributed to them. */
   createdBy?: string;
+  /** Set by the tenancy migration when it gave an ownerless project to the primary owner (`migrasi-tenancy-1`); never set for projects created with an owner. */
+  ownerAssignedBy?: string;
+  ownerAssignedAt?: string;
   /** Why the last assembly was refused (spec §4.4), so the UI can list the shots. */
   gate?: { message: string; shots: GateBlocker[] };
   /** Heads-up from the last assembly start (not a refusal): `dub-basi:<shot>` = that shot has text but no fresh dub, so it is silent in the video. */
@@ -420,6 +423,30 @@ export class StoryService {
   async get(id: string): Promise<StoryRecord | undefined> {
     if (!STORY_ID.test(id)) return undefined;
     return this.readRecord(id);
+  }
+
+  /** Tenancy (additive): the user a project belongs to; undefined for a missing or still ownerless project. */
+  async ownerOf(id: string): Promise<string | undefined> {
+    const record = await this.get(id).catch(() => undefined);
+    return record?.createdBy || undefined;
+  }
+
+  /** Tenancy (additive): the record when `userId` owns it; NOT_FOUND otherwise, the same error as for a project that does not exist (no oracle). */
+  async assertOwner(id: string, userId: string): Promise<StoryRecord> {
+    const record = await this.get(id);
+    if (!record || !userId || record.createdBy !== userId) throw new StoryError('NOT_FOUND', 'Story not found');
+    return record;
+  }
+
+  /** Tenancy (additive): only the projects `userId` owns, newest first. */
+  async listFor(userId: string): Promise<StoryRecord[]> {
+    if (!userId) return [];
+    return (await this.list()).filter(r => r.createdBy === userId);
+  }
+
+  /** Tenancy (additive): run `fn` under this story's mutation lock (the migration writes `story.json` under it, like every other writer). */
+  lockStory<T>(id: string, fn: () => Promise<T>): Promise<T> {
+    return this.withLock(id, fn);
   }
 
   async list(): Promise<StoryRecord[]> {

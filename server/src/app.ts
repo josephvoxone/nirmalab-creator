@@ -44,6 +44,7 @@ import { requireAdmin } from './auth/routes.js';
 import { parseTrustProxyHops, trustProxyFor, useCloudflareRanges } from './auth/proxy.js';
 import { registerCrossSiteGuard } from './auth/csrf.js';
 import { installPolicyGuard } from './tenancy/policy.js';
+import { ensureOwners } from './tenancy/migrate.js';
 import { StorageMeter } from './media/storage-meter.js';
 import { createOpenCodeModel, type TextModel } from './llm/opencode.js';
 
@@ -174,6 +175,21 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
       balance: () => openRouterBalance(options.dataDir, { fetch: providerFetch })
     }
   });
+  // T1 tenancy: every project gets an owner (ownerless -> primary owner), with backup + manifest; see tenancy/migrate.ts.
+  // TENANCY_MIGRATE=0 skips it, TENANCY_DRY_RUN=1 only reports, TENANCY_ENFORCE=1 stops the boot when a project cannot be given an owner.
+  if (env.TENANCY_MIGRATE !== '0') {
+    try {
+      const report = await ensureOwners({
+        dataDir: options.dataDir, users: userAuthStore.listUsers(), lock: stories.lockStory.bind(stories),
+        ...(env.TENANCY_DEFAULT_OWNER_EMAIL ? { defaultOwnerEmail: env.TENANCY_DEFAULT_OWNER_EMAIL } : {}),
+        dryRun: env.TENANCY_DRY_RUN === '1', enforce: env.TENANCY_ENFORCE === '1'
+      });
+      server.log.info({ tenancy: { dryRun: report.dryRun, owner: report.primaryOwner?.email, assigned: report.assigned.length, alreadyOwned: report.alreadyOwned, orphans: report.orphans.length, qaOwned: report.qaOwned.length, unassigned: report.unassigned.length, unreadable: report.unreadable.length, manifest: report.manifest } }, 'tenancy: pemilik proyek');
+    } catch (error) {
+      if (env.TENANCY_ENFORCE === '1') throw error;
+      server.log.error({ err: error }, 'tenancy: penetapan pemilik gagal (server tetap jalan; TENANCY_ENFORCE=1 menghentikan boot)');
+    }
+  }
   await registerPublisherRoutes(server, {
     service: new PublisherService({ dataDir: options.dataDir, env }),
     userAuthStore,
