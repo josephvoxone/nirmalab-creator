@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { isValidEmail, normalizeEmail } from './password.js';
 import { MemberError, UserAuthStore } from './store.js';
+import { isCloudflarePeer, resolveClientIp } from './proxy.js';
 
 export const SESSION_COOKIE = 'oc_session';
 const SESSION_MAX_AGE = 30 * 24 * 60 * 60;
@@ -15,7 +16,7 @@ const loginAttempts = new Map<string, Attempt>();
  * (see ./proxy.ts). Never read X-Forwarded-For here: its left side is written by the client.
  */
 function clientIp(request: FastifyRequest): string {
-  return request.ip || 'unknown';
+  return resolveClientIp(request.ip || 'unknown', request.headers['cf-connecting-ip']);
 }
 
 /** Expired windows are dropped once the table is this big, so many different keys cannot grow memory without bound. */
@@ -146,7 +147,10 @@ export async function registerAuthRoutes(
     if (!requireAdmin(store, request, reply)) return undefined;
     const forwarded = request.headers['x-forwarded-for'];
     return {
-      ip: request.ip,
+      ip: clientIp(request),
+      edge: request.ip,
+      viaCloudflare: isCloudflarePeer(request.ip),
+      cfConnectingIp: request.headers['cf-connecting-ip'] ?? null,
       hops: options.trustProxyHops ?? null,
       socket: request.socket.remoteAddress ?? null,
       xForwardedFor: Array.isArray(forwarded) ? forwarded.join(', ') : forwarded ?? null,

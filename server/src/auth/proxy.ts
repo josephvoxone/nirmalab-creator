@@ -42,3 +42,49 @@ export function trustProxyFor(hops: number): false | ((address: string, hop: num
   if (hops <= 0) return false;
   return (address, hop) => hop < hops && (hop > 0 || isPrivatePeer(address));
 }
+
+/**
+ * Cloudflare's published edge ranges (https://www.cloudflare.com/ips-v4 and /ips-v6, checked 2026-11-01).
+ * Behind Cloudflare → Traefik the address the app resolves is a Cloudflare EDGE node that differs from request to
+ * request; the real visitor is in the `CF-Connecting-IP` header Cloudflare writes. That header is only believable
+ * when the connection really came from one of these ranges (Traefik writes the TCP peer into X-Forwarded-For, so a
+ * direct hit on the origin cannot pretend to be Cloudflare). Override with env `CLOUDFLARE_IP_RANGES` (comma list)
+ * if Cloudflare ever changes them.
+ */
+export const CLOUDFLARE_RANGES = [
+  '173.245.48.0/20', '103.21.244.0/22', '103.22.200.0/22', '103.31.4.0/22', '141.101.64.0/18', '108.162.192.0/18',
+  '190.93.240.0/20', '188.114.96.0/20', '197.234.240.0/22', '198.41.128.0/17', '162.158.0.0/15', '104.16.0.0/13',
+  '104.24.0.0/14', '172.64.0.0/13', '131.0.72.0/22',
+  '2400:cb00::/32', '2606:4700::/32', '2803:f800::/32', '2405:b500::/32', '2405:8100::/32', '2a06:98c0::/29', '2c0f:f248::/32'
+];
+
+function rangeList(ranges: readonly string[]): BlockList {
+  const list = new BlockList();
+  for (const range of ranges) {
+    const [net, bits] = range.trim().split('/');
+    const family = isIP(net ?? '');
+    if (!net || !bits || family === 0 || !/^\d{1,3}$/.test(bits)) continue;
+    try { list.addSubnet(net, Number(bits), family === 4 ? 'ipv4' : 'ipv6'); } catch { /* skip a malformed range */ }
+  }
+  return list;
+}
+
+let cloudflare = rangeList(CLOUDFLARE_RANGES);
+export function useCloudflareRanges(ranges: readonly string[] | undefined): void {
+  cloudflare = rangeList(ranges && ranges.length ? ranges : CLOUDFLARE_RANGES);
+}
+
+export function isCloudflarePeer(address: string | undefined): boolean {
+  if (!address) return false;
+  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(address);
+  const plain = mapped ? mapped[1]! : address;
+  const family = isIP(plain);
+  return family !== 0 && cloudflare.check(plain, family === 4 ? 'ipv4' : 'ipv6');
+}
+
+/** The visitor's address: `CF-Connecting-IP` when the resolved peer is a Cloudflare node and the value is an IP; else the peer itself. */
+export function resolveClientIp(peer: string, cfConnectingIp: string | string[] | undefined): string {
+  if (!isCloudflarePeer(peer)) return peer;
+  const raw = (Array.isArray(cfConnectingIp) ? cfConnectingIp[0] : cfConnectingIp)?.trim();
+  return raw && isIP(raw) !== 0 ? raw : peer;
+}

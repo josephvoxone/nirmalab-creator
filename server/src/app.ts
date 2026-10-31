@@ -41,7 +41,7 @@ import { registerDubRoutes } from './dub/routes.js';
 import { createGeminiModel } from './llm/gemini.js';
 import { TextRoutingStore, createRoutedModel, limitedModel } from './llm/router.js';
 import { requireAdmin } from './auth/routes.js';
-import { parseTrustProxyHops, trustProxyFor } from './auth/proxy.js';
+import { parseTrustProxyHops, trustProxyFor, useCloudflareRanges } from './auth/proxy.js';
 import { registerCrossSiteGuard } from './auth/csrf.js';
 import { StorageMeter } from './media/storage-meter.js';
 import { createOpenCodeModel, type TextModel } from './llm/opencode.js';
@@ -90,6 +90,7 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   const env = options.env ?? process.env;
   // trustProxy is a hop COUNT (as a function, see auth/proxy.ts), never `true`: `true` trusts the whole X-Forwarded-For chain, i.e. whatever the client wrote.
   const trustProxyHops = options.trustProxyHops ?? parseTrustProxyHops(env.TRUST_PROXY_HOPS);
+  useCloudflareRanges(env.CLOUDFLARE_IP_RANGES?.split(','));
   const server = Fastify({ logger: options.logger ?? false, bodyLimit: 210 * 1024 * 1024, trustProxy: trustProxyFor(trustProxyHops) });
 
   // CSRF second layer: a cookie-carrying mutation that claims another site is refused (auth/csrf.ts).
