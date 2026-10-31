@@ -507,12 +507,20 @@ function validateBreakdown(board: Storyboard): string[] {
 /** The opening fade a video had before `edit.fadeIn` existed (seconds), and the longest one allowed. */
 export const DEFAULT_FADE_IN = 0.8;
 export const MAX_FADE_IN = 1.2;
+/** The shot-to-shot transitions the assembler may be told (ffmpeg xfade names that Debian's ffmpeg 5.1 has too). Anything else never reaches a filter graph. */
+export const XFADE_TRANSITIONS: readonly string[] = [
+  'fade', 'wipeleft', 'wiperight', 'wipeup', 'wipedown', 'slideleft', 'slideright', 'slideup', 'slidedown', 'circlecrop', 'rectcrop', 'distance',
+  'fadeblack', 'fadewhite', 'radial', 'smoothleft', 'smoothright', 'smoothup', 'smoothdown', 'circleopen', 'circleclose', 'vertopen', 'vertclose',
+  'horzopen', 'horzclose', 'dissolve', 'pixelize', 'diagtl', 'diagtr', 'diagbl', 'diagbr', 'hlslice', 'hrslice', 'vuslice', 'vdslice', 'hblur',
+  'fadegrays', 'wipetl', 'wipetr', 'wipebl', 'wipebr', 'squeezeh', 'squeezev', 'zoomin'
+];
 const isNum = (v: unknown, min: number, max: number) => typeof v === 'number' && Number.isFinite(v) && v >= min && v <= max;
 
 /** Trims and the timeline edit (music, clip volume, subtitles). */
 export function validateEdit(board: Storyboard): string[] {
   const errors: string[] = [];
   for (const shot of board.shots) {
+    if (shot.transition !== undefined && !(typeof shot.transition === 'string' && XFADE_TRANSITIONS.includes(shot.transition))) errors.push(`${shot.id}: transition must be one of: ${XFADE_TRANSITIONS.join(', ')}`);
     if (shot.zoom !== undefined && !isNum(shot.zoom, 1, 1.4)) errors.push(`${shot.id}: zoom must be a number from 1 to 1.4`);
     if (shot.zoomY !== undefined && !isNum(shot.zoomY, 0, 1)) errors.push(`${shot.id}: zoomY must be a number from 0 (top) to 1 (bottom)`);
     if (shot.caption !== undefined && (typeof shot.caption !== 'string' || shot.caption.length > 200)) errors.push(`${shot.id}: caption must be text of at most 200 characters`);

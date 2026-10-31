@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { editPrint, hashFor, validateStoryboard, type Storyboard } from '../src/stories/storyboard.js';
+import { XFADE_TRANSITIONS, editPrint, hashFor, validateStoryboard, type Storyboard } from '../src/stories/storyboard.js';
 import { finishQueued, serviceSetup } from './bible-board.js';
 
 const board = (): Storyboard => ({
@@ -131,5 +131,33 @@ describe('E3 edit.beatCuts: assembly only', () => {
     expect((await t.service.updateStoryboard(id, b)).videoStale).toBe(true);   // it was on a moment ago
     await t.service.assemble(id);
     expect(planOf(t, id).edit).toEqual({});
+  });
+});
+
+describe('E4 shot.transition: only the xfade names we allow reach ffmpeg', () => {
+  const withTransition = (t: unknown) => errors(b => { (b.shots[1] as { transition?: unknown }).transition = t; });
+
+  it('accepts no transition and every allowed name', () => {
+    expect(errors(() => undefined)).toBe('');
+    for (const name of ['fade', 'fadeblack', 'fadewhite', 'dissolve', 'wipeleft', 'slideup', 'circleopen', 'pixelize', 'zoomin']) expect(withTransition(name)).toBe('');
+    for (const name of XFADE_TRANSITIONS) expect(withTransition(name)).toBe('');
+  });
+
+  it('refuses anything that is not a plain allowed name — including text that would add ffmpeg filters', () => {
+    for (const bad of [
+      'fade;[0:v]movie=/etc/passwd[x]', 'fade:duration=0', 'fade,scale=1:1', 'fade\n', ' fade', 'FADE', 'Fade', '', 'custom', "fade'", 'fade[x]', 'fade=1',
+      'nonexistent', 'fade;', '../fade', 'a'.repeat(5000), 123, null, true, ['fade'], { a: 1 }
+    ]) expect(withTransition(bad), JSON.stringify(bad)).toMatch(/02-b: transition/);
+  });
+
+  it('the injection from the audit (PoC 4.5) no longer passes validation', () => {
+    expect(withTransition('fade:duration=0.3:offset=0,sendcmd=f=/etc/hostname,xfade=transition=fade')).toMatch(/transition/);
+  });
+
+  it('the list in the validator is the list the assembler guards with', () => {
+    const py = readFileSync(join(__dirname, '../../bridge/py/assemble.py'), 'utf8');
+    const block = /XFADE_TRANSITIONS\s*=\s*frozenset\(\s*'''([\s\S]*?)'''\.split\(\)\s*\)/.exec(py);
+    expect(block, 'XFADE_TRANSITIONS in assemble.py').toBeTruthy();
+    expect([...XFADE_TRANSITIONS].sort()).toEqual(block![1]!.split(/\s+/).filter(Boolean).sort());
   });
 });

@@ -93,6 +93,21 @@ def words_match_text(words, text):
 _SENTENCE_END = re.compile(r'[.!?;:][\"\u201d\u2019)]*$')
 
 
+# The shot-to-shot transitions a plan may name: ffmpeg's xfade names that Debian's ffmpeg 5.1 has as well. server/src/stories/storyboard.ts
+# validates against the same list (a test compares them); anything else is replaced by 'fade' before it can reach a filter graph.
+XFADE_TRANSITIONS = frozenset('''
+fade wipeleft wiperight wipeup wipedown slideleft slideright slideup slidedown circlecrop rectcrop distance
+fadeblack fadewhite radial smoothleft smoothright smoothup smoothdown circleopen circleclose vertopen vertclose
+horzopen horzclose dissolve pixelize diagtl diagtr diagbl diagbr hlslice hrslice vuslice vdslice hblur
+fadegrays wipetl wipetr wipebl wipebr squeezeh squeezev zoomin
+'''.split())
+
+
+def safe_transition(name):
+    """`name` when it is an allowed xfade transition, else 'fade' (a plan is raw JSON: never trust it inside a filter graph)."""
+    return name if isinstance(name, str) and name in XFADE_TRANSITIONS else 'fade'
+
+
 def _balanced(words, max_words, max_chars):
     """Cut a run of words into the fewest, evenly sized groups of at most max_words that also fit max_chars (4 -> 2+2, never 3+1)."""
     n = len(words)
@@ -404,7 +419,8 @@ def beat_windows(cuts, dur, zoom=BEAT_ZOOM):
 
 def filter_graph(durations, xf, transitions=None, title_input=None, total=None,
                  clip_volume=None, music_input=None, music=None, subtitles=None, fonts_dir=None, zooms=None,
-                 streams='av', zoom_ys=None, dubs=None, tail_hold=0.0, voice_end=None, fade_in=None):
+                 streams='av', zoom_ys=None, dubs=None, tail_hold=0.0, voice_end=None, fade_in=None, beats=None):
+    # beats: per shot, None or [(from, to, zoom, anchor)] punch-in windows on the clip's own clock (see beat_windows)
     """One ffmpeg filter graph.  streams: 'av' (both), 'v' (video chain only) or 'a' (audio chain only).
 
     Production renders 'v' and 'a' in two ffmpeg runs: in one graph, ffmpeg 5.1 reads every clip to feed the
@@ -420,11 +436,23 @@ def filter_graph(durations, xf, transitions=None, title_input=None, total=None,
         crop = f'crop={W}:{H}' if zy == 0.5 else f'crop={W}:{H}:(iw-{W})/2:(ih-{H})*{zy}'
         zoom = f'scale=trunc(iw*{z}/2)*2:trunc(ih*{z}/2)*2,{crop},' if z and z > 1.0 else ''
         if want_v:
-            parts.append(
-                f'[{i}:v]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},{zoom}'
-                f'fps={FPS},setsar=1,format=yuv420p,settb=AVTB'
-                + (f',tpad=stop_mode=clone:stop_duration={tail_hold}' if tail_hold and i == n - 1 else '') + f'[v{i}]'
-            )
+            base = (f'[{i}:v]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},{zoom}'
+                    f'fps={FPS},setsar=1,format=yuv420p,settb=AVTB')
+            hold = f',tpad=stop_mode=clone:stop_duration={tail_hold}' if tail_hold and i == n - 1 else ''
+            punches = (beats or [])[i] if beats and i < len(beats) else None
+            if not punches:
+                parts.append(base + hold + f'[v{i}]')
+            else:
+                # Beat cuts: the same clip, punched in for a while.  One decode feeds the plain picture and one scaled-up copy
+                # per punch-in; overlay (enable=between) shows each copy in its window.  Both sides run frame for frame, so
+                # nothing is buffered, and nothing moves in time.
+                parts.append(base + f',split={1 + len(punches)}[vb{i}]' + ''.join(f'[vp{i}_{k}]' for k in range(len(punches))))
+                src = f'vb{i}'
+                for k, (a, b, z_, zy_) in enumerate(punches):
+                    parts.append(f'[vp{i}_{k}]scale=trunc({W}*{z_}/2)*2:trunc({H}*{z_}/2)*2,crop={W}:{H}:(iw-{W})/2:(ih-{H})*{zy_},setsar=1[vz{i}_{k}]')
+                    last = k == len(punches) - 1
+                    parts.append(f"[{src}][vz{i}_{k}]overlay=0:0:enable='between(t,{a},{b})'" + (f',settb=AVTB{hold}[v{i}]' if last else f'[vo{i}_{k}]'))
+                    src = f'vo{i}_{k}'
         dub = (dubs or [])[i] if dubs and i < len(dubs) else None
         if want_a and dub:
             lead_ms = int(round(float(dub.get('lead', DUB_LEAD)) * 1000))
@@ -446,7 +474,7 @@ def filter_graph(durations, xf, transitions=None, title_input=None, total=None,
     offsets = xfade_offsets(durations, xf)
     vprev, aprev = 'v0', 'a0'
     for i in range(1, n):
-        tr = (transitions or [])[i - 1] if transitions and i - 1 < len(transitions) else 'fade'
+        tr = safe_transition((transitions or [])[i - 1]) if transitions and i - 1 < len(transitions) else 'fade'
         if want_v:
             parts.append(f'[{vprev}][v{i}]xfade=transition={tr}:duration={xf}:offset={offsets[i - 1]}[vx{i}]')
         if want_a:
@@ -542,7 +570,7 @@ def run_ffmpeg(cmd, label):
 def main(arg):
     story_path, out_dir = resolve(arg)
     story = json.load(open(story_path))
-    inputs, durations, transitions = [], [], []
+    inputs, durations, transitions, warnings = [], [], [], []
     zooms = [shot_zoom(s) for s in story['shots']]
     zoom_ys = [shot_zoom_y(s) for s in story['shots']]
     edit = story.get('edit') or {}
@@ -559,7 +587,11 @@ def main(arg):
             start, dur = clip_window(shot, probe_duration(src))
             inputs += (['-ss', str(start)] if start else []) + ['-t', f'{dur:.3f}', '-i', src]
         durations.append(round(dur, 3))
-        transitions.append(shot.get('transition', 'fade'))
+        tr = shot.get('transition', 'fade')
+        if safe_transition(tr) != tr and len(durations) > 1:
+            warnings.append(f"{shot['id']}: transition {str(tr)[:40]!r} is not allowed, 'fade' is used")
+        transitions.append(safe_transition(tr))
+    clip_durs = list(durations)   # what each clip really plays: beat cuts stay inside it (a held last frame is not cut)
     # keep crossfades shorter than the silence after each shot's narration (Veo lines end ~5.3-5.7 s of 6 s)
     xf = float(story.get('crossfade', 0.3))
     total = round(sum(durations) - xf * (len(durations) - 1), 3)
