@@ -69,7 +69,7 @@ export async function registerPublisherRoutes(server: FastifyInstance, options: 
   server.get('/api/publish/status', async (request, reply) => {
     const user = sessionUser(userAuthStore, request);
     if (!user) return reply.code(401).send({ error: { code: 'UNAUTHORIZED', message: 'Unauthorized' } });
-    return { publishers: await service.statuses() };
+    return { publishers: await service.statuses(user.id) };
   });
 
   // The publish preview: title + a caption generated from the story's own facts. Read-only and
@@ -85,11 +85,12 @@ export async function registerPublisherRoutes(server: FastifyInstance, options: 
   });
 
   server.post<{ Params: { platform: string } }>('/api/publish/:platform/connect', async (request, reply) => {
-    if (!requireAdmin(userAuthStore, request, reply)) return undefined;
+    const user = requireAdmin(userAuthStore, request, reply);
+    if (!user) return undefined;
     const platform = request.params.platform as PublisherPlatform;
     if (!PLATFORMS.includes(platform)) return reply.code(404).send({ error: { code: 'UNKNOWN_PLATFORM', message: 'Unknown platform' } });
     try {
-      return service.connectUrl(platform);
+      return service.connectUrl(user.id, platform);
     } catch (error) {
       return sendPublisherError(reply, error);
     }
@@ -116,7 +117,8 @@ export async function registerPublisherRoutes(server: FastifyInstance, options: 
     '/api/publish/:platform/publish',
     async (request, reply) => {
       // Admin only: a raw filePath is never accepted from non-admin callers.
-      if (!requireAdmin(userAuthStore, request, reply)) return undefined;
+      const user = requireAdmin(userAuthStore, request, reply);
+      if (!user) return undefined;
       const platform = request.params.platform as PublisherPlatform;
       if (!PLATFORMS.includes(platform)) return reply.code(404).send({ error: { code: 'UNKNOWN_PLATFORM', message: 'Unknown platform' } });
       const schedule = parsePublishAt(platform, request.body?.publishAt, Date.now());
@@ -141,7 +143,7 @@ export async function registerPublisherRoutes(server: FastifyInstance, options: 
         return reply.code(400).send({ error: { code: 'INVALID_INPUT', message: 'storyId (or filePath) and title are required' } });
       }
       try {
-        return await service.publish(platform, {
+        return await service.publish(user.id, platform, {
           filePath, title, description, visibility,
           ...(schedule.publishAt ? { publishAt: schedule.publishAt } : {})
         });
@@ -152,10 +154,11 @@ export async function registerPublisherRoutes(server: FastifyInstance, options: 
   );
 
   server.post<{ Params: { platform: string } }>('/api/publish/:platform/disconnect', async (request, reply) => {
-    if (!requireAdmin(userAuthStore, request, reply)) return undefined;
+    const user = requireAdmin(userAuthStore, request, reply);
+    if (!user) return undefined;
     const platform = request.params.platform as PublisherPlatform;
     if (!PLATFORMS.includes(platform)) return reply.code(404).send({ error: { code: 'UNKNOWN_PLATFORM', message: 'Unknown platform' } });
-    await service.disconnect(platform);
+    await service.disconnect(user.id, platform);
     return { ok: true };
   });
 }

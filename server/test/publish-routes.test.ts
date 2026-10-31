@@ -27,7 +27,7 @@ async function setup(resolveStoryVideo?: (id: string) => Promise<string | undefi
   await registerPublisherRoutes(server, { service, userAuthStore, env: {}, resolveStoryVideo });
   await server.ready();
   const cookie = (id: string) => `oc_session=${userAuthStore.createSession(id).token}`;
-  return { server, publish, adminCookie: cookie(admin.id), memberCookie: cookie(member.id) };
+  return { server, publish, adminId: admin.id, adminCookie: cookie(admin.id), memberCookie: cookie(member.id) };
 }
 
 const body = { title: 'Kucing Hilang', description: 'desc', visibility: 'public' };
@@ -35,11 +35,11 @@ const body = { title: 'Kucing Hilang', description: 'desc', visibility: 'public'
 describe('publish route with storyId', () => {
   it('publishes a done story by resolving its final video path', async () => {
     const resolve = vi.fn(async (id: string) => (id === DONE_ID ? '/data/stories/story_0123456789abcdef/final.mp4' : undefined));
-    const { server, publish, adminCookie } = await setup(resolve);
+    const { server, publish, adminCookie, adminId } = await setup(resolve);
     const res = await server.inject({ method: 'POST', url: '/api/publish/youtube/publish', headers: { cookie: adminCookie }, payload: { ...body, storyId: DONE_ID } });
     expect(res.statusCode).toBe(200);
     expect(resolve).toHaveBeenCalledWith(DONE_ID);
-    expect(publish).toHaveBeenCalledWith('youtube', {
+    expect(publish).toHaveBeenCalledWith(adminId, 'youtube', {
       filePath: '/data/stories/story_0123456789abcdef/final.mp4',
       title: 'Kucing Hilang',
       description: 'desc',
@@ -67,7 +67,7 @@ describe('publish route with storyId', () => {
   it('ignores a browser filePath when a storyId is given', async () => {
     const { server, publish, adminCookie } = await setup(async () => '/data/final.mp4');
     await server.inject({ method: 'POST', url: '/api/publish/youtube/publish', headers: { cookie: adminCookie }, payload: { ...body, storyId: DONE_ID, filePath: '/etc/passwd' } });
-    expect(publish.mock.calls[0]?.[1]).toMatchObject({ filePath: '/data/final.mp4' });
+    expect(publish.mock.calls[0]?.[2]).toMatchObject({ filePath: '/data/final.mp4' });
   });
 
   it('refuses a raw filePath from a non-admin caller', async () => {
@@ -109,13 +109,13 @@ describe('publish route with storyId', () => {
     const at = new Date(Date.now() + 3 * 86_400_000);
     const res = await server.inject({ method: 'POST', url: '/api/publish/youtube/publish', headers: { cookie: adminCookie }, payload: { ...body, storyId: DONE_ID, publishAt: at.toISOString() } });
     expect(res.statusCode).toBe(200);
-    expect(publish.mock.calls[0]?.[1]).toMatchObject({ publishAt: at.toISOString() });
+    expect(publish.mock.calls[0]?.[2]).toMatchObject({ publishAt: at.toISOString() });
   });
 
   it('omits publishAt when none is sent', async () => {
     const { server, publish, adminCookie } = await setup(async () => '/data/final.mp4');
     await server.inject({ method: 'POST', url: '/api/publish/youtube/publish', headers: { cookie: adminCookie }, payload: { ...body, storyId: DONE_ID } });
-    expect(publish.mock.calls[0]?.[1]).not.toHaveProperty('publishAt');
+    expect(publish.mock.calls[0]?.[2]).not.toHaveProperty('publishAt');
   });
 
   it('rejects a publishAt in the past or unparseable with 400', async () => {

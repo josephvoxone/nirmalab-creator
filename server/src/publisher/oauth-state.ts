@@ -3,6 +3,8 @@ import { createHash, randomBytes } from 'node:crypto';
 export type OAuthStateRecord = {
   state: string;
   platform: string;
+  /** The user who started the connection: the callback saves the token for this user and nobody else. */
+  userId: string;
   codeVerifier?: string;
   createdAtMs: number;
 };
@@ -13,10 +15,10 @@ const TTL_MS = 10 * 60 * 1000;
 export class OAuthStateStore {
   private readonly states = new Map<string, OAuthStateRecord>();
 
-  create(platform: string, codeVerifier?: string): string {
+  create(platform: string, userId: string, codeVerifier?: string): string {
     this.prune();
     const state = randomBytes(24).toString('hex');
-    this.states.set(state, { state, platform, codeVerifier, createdAtMs: Date.now() });
+    this.states.set(state, { state, platform, userId, codeVerifier, createdAtMs: Date.now() });
     return state;
   }
 

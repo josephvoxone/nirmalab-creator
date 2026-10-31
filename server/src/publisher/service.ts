@@ -85,8 +85,8 @@ export class PublisherService {
     return false;
   }
 
-  async getStatus(platform: PublisherPlatform): Promise<PublisherStatus> {
-    const record = await this.tokens.get(platform);
+  async getStatus(userId: string, platform: PublisherPlatform): Promise<PublisherStatus> {
+    const record = await this.tokens.get(userId, platform);
     const connected = !!record && (record.expiresAtMs === undefined || record.expiresAtMs > Date.now() + 60_000);
     return {
       platform,
@@ -99,17 +99,18 @@ export class PublisherService {
     };
   }
 
-  async statuses(): Promise<PublisherStatus[]> {
-    return Promise.all((['youtube', 'tiktok', 'meta'] as const).map(p => this.getStatus(p)));
+  /** The statuses of ONE user's own connections: nobody else's token is ever read for this answer. */
+  async statuses(userId: string): Promise<PublisherStatus[]> {
+    return Promise.all((['youtube', 'tiktok', 'meta'] as const).map(p => this.getStatus(userId, p)));
   }
 
-  connectUrl(platform: PublisherPlatform): { url: string; state: string } {
+  connectUrl(userId: string, platform: PublisherPlatform): { url: string; state: string } {
     if (platform === 'youtube') {
       const env = youtubeEnv(this.env);
       if (!env.clientId || !env.clientSecret) {
         throw new PublisherError('NOT_CONFIGURED', 'YouTube client id/secret missing (OPENCREATOR_PUBLISHER_YOUTUBE_*)');
       }
-      const state = this.states.create(platform);
+      const state = this.states.create(platform, userId);
       return { url: youtubeAuthorizeUrl({ clientId: env.clientId, redirectUri: this.redirectUri('youtube'), state }), state };
     }
     if (platform === 'tiktok') {
@@ -117,7 +118,7 @@ export class PublisherService {
       if (!env.clientKey || !env.clientSecret) {
         throw new PublisherError('NOT_CONFIGURED', 'TikTok client key/secret missing (OPENCREATOR_PUBLISHER_TIKTOK_*)');
       }
-      const state = this.states.create(platform);
+      const state = this.states.create(platform, userId);
       return { url: tiktokAuthorizeUrl({ clientKey: env.clientKey, redirectUri: this.redirectUri('tiktok'), state }), state };
     }
     if (platform === 'meta') {
@@ -125,7 +126,7 @@ export class PublisherService {
       if (!env.appId || !env.appSecret) {
         throw new PublisherError('NOT_CONFIGURED', 'Meta app id/secret missing (OPENCREATOR_PUBLISHER_META_*)');
       }
-      const state = this.states.create(platform);
+      const state = this.states.create(platform, userId);
       return { url: metaAuthorizeUrl({ appId: env.appId, redirectUri: this.redirectUri('meta'), state }), state };
     }
     throw new PublisherError('NOT_IMPLEMENTED', `${platform} publisher is not wired yet`);
@@ -146,7 +147,7 @@ export class PublisherService {
         code: query.code
       });
       const accountLabel = await youtubeChannelTitle(this.fetchImpl, tokens.accessToken).catch(() => undefined);
-      await this.tokens.save('youtube', { ...tokens, scopes: 'youtube.upload', accountLabel });
+      await this.tokens.save(record.userId, 'youtube', { ...tokens, scopes: 'youtube.upload', accountLabel });
       return { accountLabel };
     }
     if (platform === 'tiktok') {
@@ -160,7 +161,7 @@ export class PublisherService {
       });
       const info = await tiktokCreatorInfo(this.fetchImpl, tokens.accessToken).catch(() => undefined);
       const accountLabel = info?.nickname || info?.username;
-      await this.tokens.save('tiktok', {
+      await this.tokens.save(record.userId, 'tiktok', {
         accessToken: tokens.accessToken,
         refreshToken: tokens.refreshToken,
         expiresAtMs: tokens.expiresAtMs,
@@ -188,7 +189,7 @@ export class PublisherService {
       const page = pages[0];
       if (!page) throw new PublisherError('OAUTH_FAILED', 'Meta account has no Page to publish to');
       const igId = await metaInstagramAccountId(this.fetchImpl, { pageId: page.id, pageAccessToken: page.accessToken }).catch(() => undefined);
-      await this.tokens.save('meta', {
+      await this.tokens.save(record.userId, 'meta', {
         accessToken: long.accessToken,
         expiresAtMs: long.expiresAtMs,
         accountLabel: page.name ?? page.id,
@@ -204,12 +205,13 @@ export class PublisherService {
     throw new PublisherError('NOT_IMPLEMENTED', `${platform} publisher is not wired yet`);
   }
 
-  async publish(platform: PublisherPlatform, input: PublishInput): Promise<PublishResult> {
+  /** Publishes with the token of `userId` (the user who is publishing), never another user's. */
+  async publish(userId: string, platform: PublisherPlatform, input: PublishInput): Promise<PublishResult> {
     if (input.publishAt && platform !== 'youtube') {
       throw new PublisherError('INVALID_INPUT', 'Jadwal tayang hanya didukung untuk YouTube');
     }
     if (platform === 'youtube') {
-      const accessToken = await this.youtubeAccessToken();
+      const accessToken = await this.youtubeAccessToken(userId);
       const out = await youtubeUploadVideo(this.fetchImpl, {
         filePath: input.filePath,
         title: input.title,
@@ -221,9 +223,9 @@ export class PublisherService {
       return { ok: true, platform, externalId: out.videoId, url: out.url };
     }
     if (platform === 'tiktok') {
-      const record = await this.tokens.get('tiktok');
+      const record = await this.tokens.get(userId, 'tiktok');
       if (!record) throw new PublisherError('NOT_CONNECTED', 'TikTok is not connected');
-      const accessToken = await this.tiktokAccessToken(record);
+      const accessToken = await this.tiktokAccessToken(userId, record);
       const out = await tiktokPublishVideo(this.fetchImpl, {
         filePath: input.filePath,
         title: input.description ? `${input.title}\n${input.description}`.slice(0, 2200) : input.title,
@@ -233,7 +235,7 @@ export class PublisherService {
       return { ok: true, platform, externalId: out.publishId };
     }
     if (platform === 'meta') {
-      const record = await this.tokens.get('meta');
+      const record = await this.tokens.get(userId, 'meta');
       if (!record?.extra?.pageId || !record.extra.pageToken) {
         throw new PublisherError('NOT_CONNECTED', 'Meta is not connected');
       }
@@ -243,7 +245,7 @@ export class PublisherService {
           ?? await metaInstagramAccountId(this.fetchImpl, { pageId: record.extra.pageId, pageAccessToken: record.extra.pageToken });
         if (!igId) throw new PublisherError('NOT_CONNECTED', 'No Instagram business account linked to this Page');
         if (record.extra.igId !== igId) {
-          await this.tokens.save('meta', { ...record, extra: { ...record.extra, igId } });
+          await this.tokens.save(userId, 'meta', { ...record, extra: { ...record.extra, igId } });
         }
         const out = await metaPublishInstagramReel(this.fetchImpl, {
           igUserId: igId,
@@ -264,8 +266,8 @@ export class PublisherService {
     throw new PublisherError('NOT_IMPLEMENTED', `${platform} publisher is not wired yet`);
   }
 
-  private async youtubeAccessToken(): Promise<string> {
-    const record = await this.tokens.get('youtube');
+  private async youtubeAccessToken(userId: string): Promise<string> {
+    const record = await this.tokens.get(userId, 'youtube');
     if (!record) throw new PublisherError('NOT_CONNECTED', 'YouTube is not connected');
     if (record.expiresAtMs === undefined || record.expiresAtMs > Date.now() + 60_000) return record.accessToken;
     if (!record.refreshToken) throw new PublisherError('NEEDS_RECONNECT', 'YouTube session expired — reconnect');
@@ -276,11 +278,11 @@ export class PublisherService {
       clientSecret: env.clientSecret,
       refreshToken: record.refreshToken
     });
-    await this.tokens.save('youtube', { ...record, accessToken: fresh.accessToken, expiresAtMs: fresh.expiresAtMs });
+    await this.tokens.save(userId, 'youtube', { ...record, accessToken: fresh.accessToken, expiresAtMs: fresh.expiresAtMs });
     return fresh.accessToken;
   }
 
-  private async tiktokAccessToken(record: { accessToken: string; expiresAtMs?: number; refreshToken?: string }): Promise<string> {
+  private async tiktokAccessToken(userId: string, record: { accessToken: string; expiresAtMs?: number; refreshToken?: string }): Promise<string> {
     if (record.expiresAtMs === undefined || record.expiresAtMs > Date.now() + 60_000) return record.accessToken;
     if (!record.refreshToken) throw new PublisherError('NEEDS_RECONNECT', 'TikTok session expired — reconnect');
     const env = tiktokEnv(this.env);
@@ -290,7 +292,7 @@ export class PublisherService {
       clientSecret: env.clientSecret,
       refreshToken: record.refreshToken
     });
-    await this.tokens.save('tiktok', {
+    await this.tokens.save(userId, 'tiktok', {
       accessToken: fresh.accessToken,
       refreshToken: fresh.refreshToken ?? record.refreshToken,
       expiresAtMs: fresh.expiresAtMs,
@@ -300,7 +302,7 @@ export class PublisherService {
     return fresh.accessToken;
   }
 
-  async disconnect(platform: PublisherPlatform): Promise<void> {
-    await this.tokens.clear(platform);
+  async disconnect(userId: string, platform: PublisherPlatform): Promise<void> {
+    await this.tokens.clear(userId, platform);
   }
 }
