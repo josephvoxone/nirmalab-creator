@@ -1,6 +1,7 @@
 import { appendFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { FlowJob } from './store.js';
+import type { WorkspaceRole } from '../tenancy/workspace-role.js';
 import { jobCredits } from './store.js';
 
 /**
@@ -24,6 +25,29 @@ export function jobOwnerId(job: Pick<FlowJob, 'createdBy' | 'technique'>, mainOw
 
 export function ownsJob(job: Pick<FlowJob, 'createdBy' | 'technique'>, userId: string, mainOwnerId: string | undefined): boolean {
   return jobOwnerId(job, mainOwnerId) === userId;
+}
+
+/**
+ * WAVE 4: the caller's role on a job. A job of a PROJECT is reached through that project's workspace (owner/editor/viewer),
+ * and only through it: an editor who left keeps nothing, and a viewer sees the job but cannot cancel it. A Studio job (no
+ * project) stays the personal object of whoever queued it, with the pre-attribution fallback to the main owner.
+ */
+export type JobRoleDeps = {
+  /** `StoryService.roleFor`: the caller's workspace role on a project, undefined when not a member. */
+  roleForProject?: (storyId: string, userId: string) => Promise<WorkspaceRole | undefined>;
+  /** The account that owned the jobs of the time before attribution. */
+  mainOwnerId?: string | undefined;
+};
+
+export async function jobRole(
+  job: Pick<FlowJob, 'createdBy' | 'technique' | 'group'>,
+  userId: string,
+  deps: JobRoleDeps = {}
+): Promise<WorkspaceRole | undefined> {
+  if (!userId || isSystemJob(job)) return undefined;
+  if (job.group && job.group.startsWith('story_')) return deps.roleForProject?.(job.group, userId);
+  if (job.createdBy) return job.createdBy === userId ? 'owner' : undefined;
+  return deps.mainOwnerId && deps.mainOwnerId === userId ? 'owner' : undefined;
 }
 
 /** What an operator may see of a job: load, state, time and owner id; never the prompt, technique, group, characters or result. */

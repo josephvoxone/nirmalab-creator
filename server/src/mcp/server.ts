@@ -112,10 +112,13 @@ const text = (value: unknown, isError = false): CallToolResult => ({
 });
 const failure = (message: string) => text(message, true);
 
-/** The caller's own project (the token acts as its owner); somebody else's looks exactly like a missing one. */
-async function findStory(stories: StoryService, id: unknown, userId: string): Promise<StoryRecord | undefined> {
+/**
+ * The project when the token's user may act on it in its workspace. `editor` for anything that changes the project, `viewer`
+ * for a read: somebody else's (or a workspace they are not a member of) looks exactly like a missing one.
+ */
+async function findStory(stories: StoryService, id: unknown, userId: string, min: 'viewer' | 'editor' = 'editor'): Promise<StoryRecord | undefined> {
   if (typeof id !== 'string' || !id) return undefined;
-  try { return await stories.assertOwner(id, userId); } catch (error) { if (error instanceof StoryError && error.code === 'NOT_FOUND') return undefined; throw error; }
+  try { return await stories.assertAccess(id, userId, min); } catch (error) { if (error instanceof StoryError && error.code === 'NOT_FOUND') return undefined; throw error; }
 }
 
 async function listProjects(deps: McpDeps, caller: McpCaller): Promise<CallToolResult> {
@@ -156,7 +159,8 @@ async function createProject(deps: McpDeps, caller: McpCaller, args: Record<stri
 }
 
 async function runActionTool(deps: McpDeps, caller: McpCaller, name: ActionName, args: Record<string, unknown>, signal?: AbortSignal): Promise<CallToolResult> {
-  const record = await findStory(deps.stories, args.project_id, caller.userId);
+  // Reading (get_project) is open to a viewer of the workspace; every action tool needs owner/editor.
+  const record = await findStory(deps.stories, args.project_id, caller.userId, READ_ONLY.has(name) ? 'viewer' : 'editor');
   if (!record) return failure(typeof args.project_id === 'string' && args.project_id ? 'Proyek tidak ditemukan — cek project_id dari list_projects.' : 'project_id wajib diisi (dari list_projects).');
   const storyId = record.id;
   const action = ACTIONS[name];

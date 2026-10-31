@@ -1,5 +1,5 @@
 import { createReadStream, existsSync } from 'node:fs';
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { join } from 'node:path';
 import { requireAdmin, sessionUser } from '../auth/routes.js';
 import type { UserAuthStore } from '../auth/store.js';
@@ -8,7 +8,8 @@ import { AccountPoolStore } from './accounts.js';
 import { createBingProvider } from './bing.js';
 import { createPollinationsProvider, pollinationsEnv, pollinationsImage, pollinationsModels, pollinationsText } from './pollinations.js';
 import { GenerateRouter } from './pool.js';
-import { isFreeKind, legacyGenDir, userGenDir } from './user-files.js';
+import { isFreeKind, legacyGenDir, userGenDir, workspaceGenDir } from './user-files.js';
+import { VIEWER_READ_ONLY_BODY, canEdit, makeWorkspaceAccess, personalWorkspaceId } from '../tenancy/workspace-role.js';
 import { synthesizeTts, type TtsRunner } from './tts.js';
 import type { FetchLike } from './types.js';
 
@@ -40,9 +41,9 @@ const SERVED_KINDS = ['tts', 'images'] as const;
 const GENERATED_NAME = /^[a-z][a-z0-9-]{0,60}\.(mp3|jpg)$/;
 const TYPES: Record<string, string> = { mp3: 'audio/mpeg', jpg: 'image/jpeg' };
 
-/** Browser URL for a file written under <data>/free-generate/[users/<id>/]{tts,images}/ (the URL names no owner: the session decides). */
+/** Browser URL for a file written under <data>/free-generate/[users/<id>/|workspaces/<ws>/]{tts,images}/ (the URL names no owner: the session decides). */
 export function generatedFileUrl(filePath: string): string | undefined {
-  const m = filePath.match(/\/free-generate\/(?:users\/[A-Za-z0-9_-]+\/)?(tts|images)\/([^/]+)$/);
+  const m = filePath.match(/\/free-generate\/(?:users\/[A-Za-z0-9_-]+\/|workspaces\/ws_[A-Za-z0-9_-]+\/)?(tts|images)\/([^/]+)$/);
   return m && GENERATED_NAME.test(m[2]!) ? `/api/generate/files/${m[1]}/${m[2]}` : undefined;
 }
 
@@ -54,6 +55,22 @@ export async function registerFreeGenerateRoutes(server: FastifyInstance, option
     router.register(createBingProvider(pools));
   }
   const mainOwnerId = (): string | undefined => resolveMainOwner(options.userAuthStore.listUsers(), options.env ?? {}).owner?.user.id;
+  const workspaces = makeWorkspaceAccess(options.dataDir);
+
+  /**
+   * WAVE 4: generated output belongs to a workspace. The acting workspace is `?workspace=` / `workspaceId` when the caller
+   * names one, else their personal workspace. `undefined` = answered already (404 not a member, 403 viewer on a write).
+   */
+  const acting = async (request: FastifyRequest, reply: FastifyReply, user: { id: string }, write: boolean): Promise<string | undefined> => {
+    const query = (request.query ?? {}) as Record<string, unknown>;
+    const body = (request.body ?? {}) as Record<string, unknown>;
+    const named = typeof query.workspace === 'string' ? query.workspace : typeof body.workspaceId === 'string' ? body.workspaceId : undefined;
+    const workspaceId = named ?? personalWorkspaceId(user.id);
+    const role = await workspaces.roleOf(user.id, workspaceId);
+    if (!role) { void reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Workspace not found' } }); return undefined; }
+    if (write && !canEdit(role)) { void reply.code(403).send(VIEWER_READ_ONLY_BODY); return undefined; }
+    return workspaceId;
+  };
   let modelsCache: { at: number; models: string[] } | undefined;
   await registerPoolAccountRoutes(server, options, pools);
 
@@ -95,12 +112,15 @@ export async function registerFreeGenerateRoutes(server: FastifyInstance, option
     const user = sessionUser(options.userAuthStore, request);
     if (!user) return reply.code(401).send({ error: { code: 'UNAUTHORIZED', message: 'Unauthorized' } });
     const { kind, name } = request.params;
-    // Your own folder first; the folder from before per-user storage is the main owner's. Anyone else: 404, same as a missing file.
+    // WAVE 4: the folders of every workspace the caller follows (their own included); the pre-workspace per-user folder and
+    // the folder from before per-user storage stay the main owner's. Anyone else: 404, same as a missing file.
     let file = '';
     if ((SERVED_KINDS as readonly string[]).includes(kind) && isFreeKind(kind) && GENERATED_NAME.test(name)) {
+      const followed = await workspaces.workspacesFor(user.id);
+      const fromWorkspace = followed.map(w => join(workspaceGenDir(options.dataDir, w.id, kind), name)).find(candidate => existsSync(candidate));
       const own = join(userGenDir(options.dataDir, user.id, kind), name);
       const legacy = join(legacyGenDir(options.dataDir, kind), name);
-      file = existsSync(own) ? own : user.id === mainOwnerId() && existsSync(legacy) ? legacy : '';
+      file = fromWorkspace ?? (existsSync(own) ? own : user.id === mainOwnerId() && existsSync(legacy) ? legacy : '');
     }
     if (!file) return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Not found' } });
     reply.header('content-type', TYPES[name.split('.').pop()!]!).header('cache-control', 'private, max-age=86400');
@@ -127,13 +147,15 @@ export async function registerFreeGenerateRoutes(server: FastifyInstance, option
     }
   });
 
-  server.post<{ Body: { text?: unknown; voice?: unknown } }>('/api/generate/tts', async (request, reply) => {
-    const user = requireAdmin(options.userAuthStore, request, reply);
-    if (!user) return undefined;
+  server.post<{ Body: { text?: unknown; voice?: unknown; workspaceId?: unknown } }>('/api/generate/tts', async (request, reply) => {
+    const user = sessionUser(options.userAuthStore, request);
+    if (!user) return reply.code(401).send({ error: { code: 'UNAUTHORIZED', message: 'Unauthorized' } });
+    const workspaceId = await acting(request, reply, user, true);
+    if (!workspaceId) return undefined;
     const text = typeof request.body?.text === 'string' ? request.body.text : '';
     const voice = typeof request.body?.voice === 'string' ? request.body.voice : undefined;
     try {
-      const out = await synthesizeTts({ text, voice }, userGenDir(options.dataDir, user.id, 'tts'), options.ttsRun);
+      const out = await synthesizeTts({ text, voice }, workspaceGenDir(options.dataDir, workspaceId, 'tts'), options.ttsRun);
       return { ok: true, filePath: out.filePath, bytes: out.bytes, url: generatedFileUrl(out.filePath) };
     } catch (error) {
       const code = error instanceof Error && 'code' in error ? String((error as { code: string }).code) : 'TTS_FAILED';
@@ -143,12 +165,14 @@ export async function registerFreeGenerateRoutes(server: FastifyInstance, option
     }
   });
 
-  server.post<{ Body: { prompt?: unknown } }>('/api/generate/image', async (request, reply) => {
-    const user = requireAdmin(options.userAuthStore, request, reply);
-    if (!user) return undefined;
+  server.post<{ Body: { prompt?: unknown; workspaceId?: unknown } }>('/api/generate/image', async (request, reply) => {
+    const user = sessionUser(options.userAuthStore, request);
+    if (!user) return reply.code(401).send({ error: { code: 'UNAUTHORIZED', message: 'Unauthorized' } });
+    const workspaceId = await acting(request, reply, user, true);
+    if (!workspaceId) return undefined;
     const prompt = typeof request.body?.prompt === 'string' ? request.body.prompt : '';
     try {
-      const out = await pollinationsImage(options.fetch ?? fetch, { prompt, apiKey: pollinationsEnv().apiKey }, userGenDir(options.dataDir, user.id, 'images'));
+      const out = await pollinationsImage(options.fetch ?? fetch, { prompt, apiKey: pollinationsEnv().apiKey }, workspaceGenDir(options.dataDir, workspaceId, 'images'));
       return { ok: true, filePath: out.filePath, bytes: out.bytes, url: generatedFileUrl(out.filePath) };
     } catch (error) {
       const code = error instanceof Error && 'code' in error ? String((error as { code: string }).code) : 'GENERATE_FAILED';
@@ -158,16 +182,18 @@ export async function registerFreeGenerateRoutes(server: FastifyInstance, option
     }
   });
 
-  server.post<{ Body: { prompt?: unknown; durationSec?: unknown; aspect?: unknown } }>('/api/generate/clip', async (request, reply) => {
-    const user = requireAdmin(options.userAuthStore, request, reply);
-    if (!user) return undefined;
+  server.post<{ Body: { prompt?: unknown; durationSec?: unknown; aspect?: unknown; workspaceId?: unknown } }>('/api/generate/clip', async (request, reply) => {
+    const user = sessionUser(options.userAuthStore, request);
+    if (!user) return reply.code(401).send({ error: { code: 'UNAUTHORIZED', message: 'Unauthorized' } });
+    const workspaceId = await acting(request, reply, user, true);
+    if (!workspaceId) return undefined;
     const prompt = typeof request.body?.prompt === 'string' ? request.body.prompt : '';
     const durationSec = typeof request.body?.durationSec === 'number' ? request.body.durationSec : undefined;
     const aspect = request.body?.aspect === '16:9' ? '16:9' : '9:16';
     try {
       const out = await router.generate(
         { prompt, durationSec, aspect },
-        { outDir: userGenDir(options.dataDir, user.id, 'clips'), pools }
+        { outDir: workspaceGenDir(options.dataDir, workspaceId, 'clips'), pools }
       );
       return out;
     } catch (error) {

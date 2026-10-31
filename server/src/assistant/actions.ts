@@ -207,11 +207,11 @@ function toFailure(error: unknown): ActionResult {
  * depth — chat and MCP come here directly, without the HTTP gate). Not a member and not there look the same (404);
  * a viewer answers VIEWER_READ_ONLY with the gate's own words.
  */
-async function guarded(ctx: ActionContext, storyId: string, fn: (record: StoryRecord) => Promise<ActionResult>): Promise<ActionResult> {
+async function guarded(ctx: ActionContext, storyId: string, fn: (record: StoryRecord) => Promise<ActionResult>, min: 'viewer' | 'editor' = 'editor'): Promise<ActionResult> {
   try {
     let record: StoryRecord;
     try {
-      record = await ctx.stories.assertAccess(storyId, ctx.userId, 'editor');
+      record = await ctx.stories.assertAccess(storyId, ctx.userId, min);
     } catch (error) {
       if (error instanceof StoryError && error.code === 'NOT_FOUND') return fail('Proyek tidak ditemukan.', 'NOT_FOUND');
       if (error instanceof StoryError && error.code === 'FORBIDDEN') return fail(error.message, 'FORBIDDEN');
@@ -606,6 +606,7 @@ export const ACTIONS: Record<ActionName, Action> = {
     description: 'Read a compact summary of this project: title, status, revision, engine, look, scenes (numbered), shots (numbered 1..N across scenes, with intent or prompt, narration, render and keyframe status), characters (tokens, anchors, sheet status, reference), locations and the estimated cost of what is left. Call this first.',
     schema: obj({}),
     spends: false,
+    // A viewer of the workspace may read the project (get_project is a read); every other action changes it.
     run: (ctx, storyId) => guarded(ctx, storyId, async record => {
       const board = await ctx.stories.readStoryboard(storyId);
       const estimate = await estimateLeft(ctx, board, record);
@@ -616,7 +617,7 @@ export const ACTIONS: Record<ActionName, Action> = {
         data = summary(board, record, estimate, SUMMARY_LEVELS[level]!, level);
       }
       return { ok: true, label: `Proyek "${clip(board.title, 60)}" dibaca`, data };
-    })
+    }, 'viewer')
   },
 
   edit_shot: {

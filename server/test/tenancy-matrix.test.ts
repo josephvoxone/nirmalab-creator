@@ -22,6 +22,7 @@ import { McpTokenStore } from '../src/mcp/tokens.js';
 import { StoryService } from '../src/stories/service.js';
 import { SnapshotStore } from '../src/stories/snapshots.js';
 import { ROUTE_POLICY } from '../src/tenancy/policy.js';
+import { createWorkspaceRecord, personalWorkspaceId, setMembership } from '../src/tenancy/workspace-role.js';
 import { bibleBoard } from './bible-board.js';
 import { makePng } from './media-helpers.js';
 
@@ -83,6 +84,8 @@ async function makeWorld() {
   const b = await mk('b', true);
   const m = await mk('m', false);
   const am = await mk('am', false);
+  const ae = await mk('ae', false);
+  const av = await mk('av', false);
 
   const flow = new FlowStore(join(dataDir, 'flow'));
   const service = new StoryService({ dataDir, flow, probe: async () => ({ durationSec: 6, hasAudio: true }), assemble: async () => undefined });
@@ -112,7 +115,8 @@ async function makeWorld() {
 
   const mine = await seedProject(a);
   // Flow: a Studio job of A (createdBy) with a finished file, and a queued project job (group = A's project).
-  const job = await flow.createJob({ prompt: 'rahasia prompt A', durationSec: 6, createdBy: a.id });
+  // A finished job OF the project (a project job is reached through its workspace; a Studio job stays personal).
+  const job = await flow.createJob({ prompt: 'rahasia prompt A', durationSec: 6, createdBy: a.id, group: mine.id });
   await flow.claimJob('mac');
   mkdirSync(join(dataDir, 'flow', 'clips'), { recursive: true });
   const jobFile = join(dataDir, 'flow', 'clips', `${job.id}.mp4`);
@@ -121,7 +125,7 @@ async function makeWorld() {
   const queued = await flow.createJob({ prompt: 'antre A', durationSec: 6, createdBy: a.id, group: mine.id });
 
   const memberOwned = await seedProject(am);
-  return { server, dataDir, users, a, b, m, am, flow, service, counters, mine, jobId: job.id, queuedJobId: queued.id, memberOwned, seedProject };
+  return { server, dataDir, users, a, b, m, am, ae, av, flow, service, counters, mine, jobId: job.id, queuedJobId: queued.id, memberOwned, seedProject };
 }
 
 // ------------------------------------------------------------------ fixtures: one request per registry route
@@ -364,6 +368,63 @@ describe('T3 matrix: sibling spellings of the same route do not open a side door
     // The owner through the same doors: HEAD works, the encoded id is the same project.
     expect((await w.server.inject({ method: 'HEAD', url: S(p, '/video'), headers: { cookie: w.a.cookie } })).statusCode).toBe(200);
     expect((await w.server.inject({ url: `/api/stories/${encoded}`, headers: { cookie: w.a.cookie } })).statusCode).toBe(200);
+  });
+});
+
+// ------------------------------------------------------------------ WAVE 4: the role matrix (workspace members, not creators)
+
+describe('W4 matrix: viewer reads everything, writes nothing; editor works like the owner; a non-member is a 404', () => {
+  /** The read half of the fixture set: the same routes with a GET (the write fixtures of those URLs are POST/PUT). */
+  const READS = (keys: string[]): string[] => keys.filter(k => k.startsWith('GET '));
+  const WRITES = (keys: string[]): string[] => keys.filter(k => !k.startsWith('GET '));
+
+  it('a viewer of the project\'s workspace reads every read route exactly like the owner and gets 403 VIEWER_READ_ONLY on every write, and nothing moves', async () => {
+    const mineToo = await w.seedProject(w.a);
+    const p = ids(w, mineToo);
+    const workspaceId = personalWorkspaceId(w.a.id);
+    await setMembership(w.dataDir, { workspaceId, userId: w.av.id, role: 'viewer' });
+    const keys = ordered(gateRoutes());
+    const bad: string[] = [];
+
+    // Reads: byte-for-byte the status the owner gets (the gate does not narrow what a member may see).
+    for (const key of READS(keys)) {
+      const viewer = await send(w, FIXTURES[key]!(p), w.av);
+      const owner = await send(w, FIXTURES[key]!(p), w.a);
+      if (viewer.statusCode === 401 || viewer.statusCode === 403) bad.push(`read ${key} as viewer → ${viewer.statusCode}`);
+      else if (viewer.statusCode !== owner.statusCode) bad.push(`read ${key}: viewer ${viewer.statusCode} vs owner ${owner.statusCode}`);
+    }
+
+    const before = await footprint(w);
+    for (const key of WRITES(keys)) {
+      const res = await send(w, FIXTURES[key]!(p), w.av);
+      if (res.statusCode !== 403) bad.push(`write ${key} as viewer → ${res.statusCode} ${res.body.slice(0, 60)}`);
+      else if (JSON.parse(res.body)?.error?.code !== 'VIEWER_READ_ONLY') bad.push(`write ${key} as viewer: code ${JSON.parse(res.body)?.error?.code}`);
+    }
+    expect(bad).toEqual([]);
+    expect(await footprint(w), 'a refused write moved something').toBe(before);
+  }, 180_000);
+
+  it('an editor of the workspace passes every project route like the owner (only member management is out of reach: no such route here)', async () => {
+    const mineToo = await w.seedProject(w.a);
+    const p = ids(w, mineToo);
+    await setMembership(w.dataDir, { workspaceId: personalWorkspaceId(w.a.id), userId: w.ae.id, role: 'editor' });
+    const blocked: string[] = [];
+    for (const key of ordered(gateRoutes())) {
+      const res = await send(w, FIXTURES[key]!(p), w.ae);
+      const gate404 = res.statusCode === 404 && ['Story not found', 'Job not found'].includes(JSON.parse(res.body)?.error?.message);
+      if (res.statusCode === 401 || res.statusCode === 403 || (gate404 && !OWN_404_ALLOWED.has(key))) blocked.push(`${key} → ${res.statusCode} ${res.body.slice(0, 80)}`);
+    }
+    expect(blocked).toEqual([]);
+  }, 180_000);
+
+  it('access follows the workspace, not the creator: an editor of one workspace sees nothing in another, and the platform admin who is not a member still gets 404', async () => {
+    // A second workspace A owns; `ae` (editor of A's personal workspace by the test above) is not invited to this one.
+    const other = await createWorkspaceRecord(w.dataDir, { name: 'Tim Lain', ownerId: w.a.id });
+    await setMembership(w.dataDir, { workspaceId: other.id, userId: w.a.id, role: 'owner' });
+    const elsewhere = await w.service.create(bibleBoard(), { createdBy: w.a.id, workspaceId: other.id });
+    expect((await w.server.inject({ url: `/api/stories/${elsewhere.id}`, headers: { cookie: w.ae.cookie } })).statusCode).toBe(404);
+    expect((await w.server.inject({ url: `/api/stories/${elsewhere.id}`, headers: { cookie: w.b.cookie } })).statusCode).toBe(404);
+    expect((await w.server.inject({ url: `/api/stories/${elsewhere.id}`, headers: { cookie: w.a.cookie } })).statusCode).toBe(200);
   });
 });
 

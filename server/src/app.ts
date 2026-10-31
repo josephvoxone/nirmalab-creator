@@ -309,10 +309,9 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
     service: publisherService,
     userAuthStore,
     env,
-    // T7: only the project's owner may preview/publish it (isStoryOwner is the small replaceable decision; the
-    // formal ownership helper of the tenancy area can take its place here).
-    canAccessStory: async (id, user) =>
-      isStoryOwner(await stories.get(id), user.id, resolveMainOwner(userAuthStore.listUsers(), env).owner?.user.id),
+    // WAVE 4: publishing is a write on the project, so it needs owner/editor of the project's WORKSPACE (a viewer may still
+    // preview); the preview and the publish answer 404 for anyone who is not a member. The OAuth token stays the presser's own.
+    canAccessStory: async (id, user) => stories.roleFor(id, user.id),
     resolveStoryVideo: async id => ((await stories.get(id))?.status === 'done' ? stories.videoPath(id) : undefined),
     // P4: the preview caption comes from the story's own facts, never from a blank field.
     resolveStoryPreview: async id => {
@@ -340,6 +339,8 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
     store: flowStore,
     media,
     env,
+    // WAVE 4: a project's jobs belong to that project's workspace (the gate and the list/cancel routes use this role).
+    stories,
     bridgeToken: env.OPENCREATOR_FLOW_BRIDGE_TOKEN?.trim() || undefined,
     openRouter: {
       usdPerClip: async model => { try { return (await catalog.find('video', model))?.usdPerClip ?? null; } catch { return null; } },

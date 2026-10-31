@@ -12,7 +12,8 @@ import { usdLabel } from '../providers/catalog.js';
 import { AXCEL_MODELS, isAxcelModel } from '../providers/axcel.js';
 import { isModelId } from '../providers/config.js';
 import { QuotaError } from '../quota/errors.js';
-import { adminJobView, appendTenancyLog, jobOwnerId, ownsJob } from './job-access.js';
+import { adminJobView, appendTenancyLog, jobOwnerId, jobRole, ownsJob } from './job-access.js';
+import { VIEWER_READ_ONLY_BODY, canEdit, type WorkspaceRole } from '../tenancy/workspace-role.js';
 import { FLOW_ROTATIONS, FlowInputError, FlowStore, type FlowAccountPatch, type FlowRotation } from './store.js';
 
 export type FlowRouteOptions = {
@@ -35,6 +36,11 @@ export type FlowRouteOptions = {
   media?: MediaCache;
   /** Process env (`TENANCY_DEFAULT_OWNER_EMAIL` picks the main owner, who inherits jobs made before attribution). */
   env?: NodeJS.ProcessEnv;
+  /**
+   * WAVE 4: the project jobs are reached through their workspace, so the job routes ask the story service for the caller's
+   * role there. Structural (not the class) to keep the flow module free of a runtime cycle with stories.
+   */
+  stories?: { roleFor(id: string, userId: string): Promise<WorkspaceRole | undefined> };
 };
 
 const MIN_CLIP_BYTES = 1024;
@@ -190,7 +196,9 @@ export async function registerFlowRoutes(server: FastifyInstance, options: FlowR
     if (!user) return undefined;
     const main = mainOwnerId();
     const all = await store.listJobs(Number.MAX_SAFE_INTEGER);
-    return { jobs: all.filter(job => ownsJob(job, user.id, main)).slice(0, 100) };
+    // WAVE 4: the jobs of every workspace the caller follows (a project job) plus their own Studio jobs. A viewer may see them.
+    const roles = await Promise.all(all.map(job => jobRole(job, user.id, { roleForProject: async (id, by) => options.stories ? options.stories.roleFor(id, by) : undefined, mainOwnerId: main })));
+    return { jobs: all.filter((_job, i) => roles[i] !== undefined).slice(0, 100) };
   });
 
   // Operators see queue LOAD, never content: no prompt, technique, group, characters or result (T4 / audit 06 §A.3).
@@ -272,12 +280,18 @@ export async function registerFlowRoutes(server: FastifyInstance, options: FlowR
   );
 
   server.post<{ Params: { id: string }; Body: { force?: unknown } | undefined }>('/api/flow/jobs/:id/cancel', async (request, reply) => {
-    const user = requireAdmin(auth, request, reply);
+    // WAVE 4: cancelling is a write, so any member who may CHANGE the project (owner/editor) may stop its job; role checked below.
+    const user = requireUser(request, reply);
     if (!user) return undefined;
     if (!JOB_ID.test(request.params.id)) return bad(reply, 404, 'NOT_FOUND', 'Job not found');
-    // Your own jobs only (another owner's job answers exactly like a missing one); stuck queued jobs: POST /api/admin/flow/jobs/:id/cancel.
+    // Jobs of your workspaces only (anyone else's answers exactly like a missing one) and never as a viewer (403 READ_ONLY);
+    // stuck queued jobs: POST /api/admin/flow/jobs/:id/cancel.
     const target = await store.getJob(request.params.id);
-    if (target && !ownsJob(target, user.id, mainOwnerId())) return notFound(reply);
+    if (target) {
+      const role = await jobRole(target, user.id, { roleForProject: async (id, by) => options.stories ? options.stories.roleFor(id, by) : undefined, mainOwnerId: mainOwnerId() });
+      if (!role) return notFound(reply);
+      if (!canEdit(role)) return reply.code(403).send(VIEWER_READ_ONLY_BODY);
+    }
     const outcome = await store.cancelJob(request.params.id, user.email, { force: request.body?.force === true });
     if (outcome.ok) return { job: outcome.job };
     if (outcome.code === 'NOT_FOUND') return bad(reply, 404, 'NOT_FOUND', 'Job not found');
@@ -289,8 +303,8 @@ export async function registerFlowRoutes(server: FastifyInstance, options: FlowR
     if (!user) return undefined;
     if (!JOB_ID.test(request.params.id)) return notFound(reply);
     const job = await store.getJob(request.params.id);
-    // Not yours = not found, word for word the same as a job that does not exist (no oracle for ids).
-    if (!job || !ownsJob(job, user.id, mainOwnerId())) return notFound(reply);
+    // Not in a workspace you follow = not found, word for word the same as a job that does not exist (no oracle for ids).
+    if (!job || !(await jobRole(job, user.id, { roleForProject: async (id, by) => options.stories ? options.stories.roleFor(id, by) : undefined, mainOwnerId: mainOwnerId() }))) return notFound(reply);
     if (job.status !== 'done') return bad(reply, 404, 'NOT_FOUND', 'Clip not ready');
     const path = join(clipsDir, `${job.id}.${job.kind === 'video' ? 'mp4' : 'png'}`);
     const query = request.query as Record<string, unknown> | undefined;

@@ -33,7 +33,7 @@ const counts = (): Record<string, Record<string, number>> => {
 };
 
 const PINNED: Record<string, Record<string, number>> = {
-  'app.ts': { get: 4, videoPath: 1, readStoryboard: 2, storyDir: 1, list: 1 },
+  'app.ts': { get: 3, videoPath: 1, readStoryboard: 2, storyDir: 1, list: 1 },
   'assistant/actions.ts': { readStoryboard: 8, get: 3, storyDir: 3, framePath: 1, castPath: 1 },
   'assistant/chat.ts': { get: 1, storyDir: 6, readStoryboard: 3 },
   'assistant/routes.ts': { get: 4, storyDir: 2 },
@@ -52,21 +52,59 @@ describe('T3 no path around the gate (static)', () => {
     expect(users).toEqual(['app.ts']);
   });
 
-  it('the service layers keep their own owner check (assertOwner / listFor / assertProjectOwner)', () => {
+  it('the service layers keep their own workspace-role check (assertAccess / listFor, never createdBy)', () => {
     const read = (rel: string) => readFileSync(join(SRC, rel), 'utf8');
-    expect(read('assistant/actions.ts')).toMatch(/ctx\.stories\.assertOwner\(storyId, ctx\.userId\)/);
-    expect((read('assistant/chat.ts').match(/assertProjectOwner\(/g) ?? []).length).toBeGreaterThanOrEqual(5);
-    expect(read('mcp/server.ts')).toMatch(/stories\.assertOwner\(id, userId\)/);
+    expect(read('assistant/actions.ts')).toMatch(/ctx\.stories\.assertAccess\(storyId, ctx\.userId, min\)/);
+    expect((read('assistant/chat.ts').match(/assertProjectEditor\(/g) ?? []).length).toBeGreaterThanOrEqual(5);
+    expect(read('assistant/chat.ts')).toMatch(/stories\.assertAccess\(storyId, userId, 'editor'\)/);
+    expect(read('mcp/server.ts')).toMatch(/stories\.assertAccess\(id, userId, min\)/);
     expect(read('mcp/server.ts')).toMatch(/stories\.listFor\(caller\.userId\)/);
-    expect(read('stories/routes.ts')).toMatch(/stories\.listFor\(user\.id\)/);
+    expect(read('stories/routes.ts')).toMatch(/stories\.listFor\(user\.id, workspace\)/);
+    // WAVE 4: the gate decides by ROLE in the project's workspace, and a viewer never writes.
+    const gate = read('tenancy/ownership.ts');
+    expect(gate).toMatch(/deps\.stories\(\)\.roleFor\(id, userId\)/);
+    expect(gate).toMatch(/isWrite\(request\) && !canEdit\(role\)/);
+    expect(gate).toMatch(/VIEWER_READ_ONLY_BODY/);
   });
 
-  it('the gate is installed in app.ts before any scope is registered (hooks of the root are inherited only by later scopes)', () => {
-    const app = readFileSync(join(SRC, 'app.ts'), 'utf8');
-    const gate = app.indexOf('installOwnershipGate(server');
-    expect(gate).toBeGreaterThan(0);
-    expect(gate).toBeLessThan(app.indexOf('await server.register('));
-    expect(gate).toBeLessThan(app.indexOf('registerStoryRoutes('));
-    expect(gate).toBeGreaterThan(app.indexOf('registerCrossSiteGuard('));
+  it('the owner axis is the workspace: a project access decision never compares `createdBy`, and only the known files mention it', () => {
+    // `createdBy` stays as HISTORY and as the attribution of things that are not in a project (Flow jobs, Studio, invites,
+    // quota ledger rows). Anything else must decide by workspaceRole. A new file here needs a review.
+    const PINNED = [
+      'app.ts', 'auth/routes.ts', 'auth/store.ts', 'flow/backfill.ts', 'flow/job-access.ts', 'flow/routes.ts', 'flow/store.ts',
+      'mcp/server.ts', 'providers/axcel.ts', 'publisher/owner.ts', 'quota/gates.ts',
+      'stories/routes.ts', 'stories/service.ts', 'tenancy/admin-routes.ts', 'tenancy/migrate.ts', 'tenancy/project-meta.ts',
+      'tenancy/ownership.ts', 'tenancy/workspace-role.ts', 'trends/routes.ts'
+    ].map(r => join(...r.split('/')));
+    const users: string[] = [];
+    for (const file of files(SRC)) {
+      const rel = relative(SRC, file);
+      if (rel.endsWith('.test.ts')) continue;
+      if (/\bcreatedBy\b/.test(readFileSync(file, 'utf8'))) users.push(rel);
+    }
+    expect(users.sort()).toEqual(PINNED.sort());
+
+    // The project gate has no `ownerOf`/`createdBy` comparison at all: roleFor is the only key to a project.
+    const gate = readFileSync(join(SRC, 'tenancy', 'ownership.ts'), 'utf8');
+    expect(gate).not.toMatch(/ownerOf\(/);
+    // And the service decides access through the workspace store, not through the creator.
+    const service = readFileSync(join(SRC, 'stories', 'service.ts'), 'utf8');
+    const assertAccess = service.slice(service.indexOf('async assertAccess('), service.indexOf('/** Kept for the tenancy hotfixes'));
+    expect(assertAccess).toMatch(/this\.roleFor\(id, userId\)/);
+    expect(assertAccess).not.toMatch(/createdBy/);
+  });
+
+  it('every direct reader of story.json outside StoryService is a known system reader (a new one must go through the service)', () => {
+    // Why each is allowed: snapshots = undo, under the service lock and reachable only through StoryService;
+    // project-meta / admin-routes = the SYSTEM admin's metadata whitelist (never content); storage = sizes on disk;
+    // migrate = the boot migration that gives old projects their owner/workspace.
+    const ALLOWED = ['stories/snapshots.ts', 'tenancy/project-meta.ts', 'tenancy/admin-routes.ts', 'media/storage.ts', 'tenancy/migrate.ts'];
+    const readers: string[] = [];
+    for (const file of files(SRC)) {
+      const rel = relative(SRC, file);
+      if (rel === join('stories', 'service.ts')) continue;
+      if (/\bstory\.json\b/.test(readFileSync(file, 'utf8'))) readers.push(rel);
+    }
+    expect(readers.sort()).toEqual(ALLOWED.map(r => join(...r.split('/'))).sort());
   });
 });

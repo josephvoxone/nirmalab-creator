@@ -98,7 +98,9 @@ describe('T7.4 — preview/publish only for the owner of the project', () => {
   it('a story whose creator account no longer exists (orphan) is nobody\'s to publish — not even an admin\'s', async () => {
     const w = await world();
     const id = await w.newStory(w.cookies.joseph);
-    w.patchRecord(id, r => ({ ...r, createdBy: 'u_deletedAccount1', status: 'done' }));
+    // WAVE 4: ownership is the WORKSPACE, so an orphan means no workspace either (a record that still names a workspace is
+    // still that workspace's, whoever `createdBy` says — that field is history now).
+    w.patchRecord(id, r => ({ ...r, createdBy: 'u_deletedAccount1', workspaceId: undefined, status: 'done' }));
     for (const who of ['joseph', 'bina', 'mira'] as const) expect((await w.preview(w.cookies[who], id)).statusCode).toBe(404);
     for (const who of ['joseph', 'bina'] as const) expect((await w.publish(w.cookies[who], id)).statusCode).toBe(404);
     // T3 gate: a project that is not hers is a 404 for a member too (the project is checked before the role).
@@ -123,7 +125,8 @@ describe('T7.4 — preview/publish only for the owner of the project', () => {
     const bina = await login('bina@example.com', 'bina-pass-123');
     const id = (await server.inject({ method: 'POST', url: '/api/stories', headers: { cookie: joseph }, payload: { storyboard: board } })).json().story.id as string;
     const path = join(dataDir, 'stories', id, 'story.json');
-    const { createdBy: _drop, ...rest } = JSON.parse(readFileSync(path, 'utf8'));
+    // A project from before workspaces: neither an owner nor a workspace recorded, so the main owner inherits it.
+    const { createdBy: _drop, workspaceId: _ws, ...rest } = JSON.parse(readFileSync(path, 'utf8'));
     writeFileSync(path, JSON.stringify({ ...rest, status: 'done' }));
     expect((await server.inject({ url: `/api/publish/preview/${id}`, headers: { cookie: bina } })).statusCode).toBe(200);
     expect((await server.inject({ url: `/api/publish/preview/${id}`, headers: { cookie: joseph } })).statusCode).toBe(404);

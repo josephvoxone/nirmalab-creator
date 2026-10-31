@@ -13,6 +13,17 @@ const USER_ID = /^[A-Za-z0-9_-]{1,80}$/;
 
 export const isFreeKind = (kind: string): kind is FreeKind => (FREE_KINDS as readonly string[]).includes(kind);
 
+/**
+ * WAVE 4: output belongs to the WORKSPACE that asked for it — `<data>/free-generate/workspaces/<workspaceId>/<kind>`.
+ * Access is the workspace role, not the folder name alone: the route lists only the workspaces the caller follows.
+ */
+const WORKSPACE_ID = /^ws_[A-Za-z0-9_-]{1,80}$/;
+
+export function workspaceGenDir(dataDir: string, workspaceId: string, kind: FreeKind): string {
+  if (!WORKSPACE_ID.test(workspaceId)) throw new Error('Invalid workspace id for generated files');
+  return join(dataDir, 'free-generate', 'workspaces', workspaceId, kind);
+}
+
 /** `<data>/free-generate/users/<userId>/<kind>`; throws on an id that could leave the folder (auth ids never do). */
 export function userGenDir(dataDir: string, userId: string, kind: FreeKind): string {
   if (!USER_ID.test(userId)) throw new Error('Invalid user id for generated files');

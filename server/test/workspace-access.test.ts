@@ -14,6 +14,10 @@ import { buildApp } from '../src/app.js';
 import { UserAuthStore } from '../src/auth/store.js';
 import { FlowStore } from '../src/flow/store.js';
 import { StoryService } from '../src/stories/service.js';
+import type { AddressInfo } from 'node:net';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { McpTokenStore } from '../src/mcp/tokens.js';
 import { bibleBoard } from './bible-board.js';
 import { makePng } from './media-helpers.js';
 import {
@@ -154,6 +158,58 @@ describe('workspace access at the HTTP gate', () => {
   }, 60_000);
 });
 
+describe('MCP acts as the token owner in the workspaces they follow', () => {
+  it('an editor token reads and changes a project of the workspace; a viewer token reads it but every action is refused', async () => {
+    const w = await world();
+    let base = '';
+    try {
+      const created = await w.server.inject({ method: 'POST', url: '/api/stories', headers: { cookie: w.a.cookie }, payload: { storyboard: bibleBoard() } });
+      const project = created.json().story as { id: string };
+      // MCP tokens are only issued to accounts that may hold one (an admin); the workspace role still decides the project.
+      const editorUser = await w.users.createUser({ email: 'mcp-editor@x.io', password: PASS, isAdmin: true });
+      const viewerUser = await w.users.createUser({ email: 'mcp-viewer@x.io', password: PASS, isAdmin: true });
+      await setMembership(w.dataDir, { workspaceId: personalWorkspaceId(w.a.id), userId: editorUser.id, role: 'editor' });
+      await setMembership(w.dataDir, { workspaceId: personalWorkspaceId(w.a.id), userId: viewerUser.id, role: 'viewer' });
+      await w.server.listen({ port: 0, host: '127.0.0.1' });
+      base = `http://127.0.0.1:${(w.server.server.address() as AddressInfo).port}`;
+      const tokens = new McpTokenStore(w.dataDir, w.users);
+      const connect = async (userId: string) => {
+        const token = (await tokens.create(userId, 'ws')).token;
+        const client = new Client({ name: 'ws-access', version: '1.0.0' });
+        await client.connect(new StreamableHTTPClientTransport(new URL(`${base}/mcp`), { requestInit: { headers: { authorization: `Bearer ${token}` } } }));
+        return client;
+      };
+      const call = async (client: Client, name: string, args: Record<string, unknown>) => {
+        const res = (await client.callTool({ name, arguments: args })) as { isError?: boolean; content: Array<{ text: string }> };
+        return { isError: res.isError === true, text: res.content[0]!.text };
+      };
+
+      const editor = await connect(editorUser.id);
+      const listed = await call(editor, 'list_projects', {});
+      expect(listed.text).toContain(project.id); // the editor follows the workspace: the project is theirs to see
+      expect((await call(editor, 'get_project', { project_id: project.id })).isError).toBe(false);
+      // A change lands (the editor may edit a project they did not create).
+      const edited = await call(editor, 'move_shot', { project_id: project.id, shot: 1, after: 2 });
+      expect(edited.isError, edited.text).toBe(false);
+      await editor.close();
+
+      const viewer = await connect(viewerUser.id);
+      const viewerRead = await call(viewer, 'get_project', { project_id: project.id });
+      expect(viewerRead.isError, viewerRead.text).toBe(false); // reading is allowed
+      const refused = await call(viewer, 'move_shot', { project_id: project.id, shot: 1, after: 2 });
+      expect(refused.isError).toBe(true);
+      expect(refused.text).toContain('penonton');
+      await viewer.close();
+
+      // A platform admin with a token but no membership sees nothing.
+      const stranger = await connect(w.n.id);
+      expect((await call(stranger, 'list_projects', {})).text).not.toContain(project.id);
+      expect((await call(stranger, 'get_project', { project_id: project.id })).isError).toBe(true);
+      await stranger.close();
+    } finally { await w.server.close(); }
+  }, 60_000);
+});
+
 describe('projects belong to workspaces', () => {
   it('GET /api/stories lists the projects of every followed workspace with the workspace name; ?workspace= scopes; a stranger workspace is 404', async () => {
     const w = await world();
@@ -202,6 +258,32 @@ describe('projects belong to workspaces', () => {
       expect(own.statusCode, own.body).toBe(201);
       expect(own.json().story.workspaceId).toBe(personalWorkspaceId(w.e.id));
       expect((await w.server.inject({ url: S(own.json().story), headers: { cookie: w.a.cookie } })).statusCode).toBe(404);
+    } finally { await w.server.close(); }
+  }, 60_000);
+
+  it('generated files belong to the workspace: every member reads them, a non-member gets 404, and output lands in that workspace', async () => {
+    const w = await world();
+    try {
+      const team = await createWorkspaceRecord(w.dataDir, { name: 'Tim Lentera', ownerId: w.a.id });
+      await setMembership(w.dataDir, { workspaceId: team.id, userId: w.a.id, role: 'owner' });
+      await setMembership(w.dataDir, { workspaceId: team.id, userId: w.e.id, role: 'editor' });
+      await setMembership(w.dataDir, { workspaceId: team.id, userId: w.v.id, role: 'viewer' });
+      // A file of the team (written by the route into free-generate/workspaces/<id>/tts, here placed directly).
+      const dir = join(w.dataDir, 'free-generate', 'workspaces', team.id, 'tts');
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, 'tts-1-2.mp3'), Buffer.from('MP3:tim'));
+      const url = '/api/generate/files/tts/tts-1-2.mp3';
+      for (const who of [w.a, w.e, w.v]) {
+        const res = await w.server.inject({ url, headers: { cookie: who.cookie } });
+        expect(res.statusCode, `${who.email}: ${res.body}`).toBe(200);
+      }
+      expect((await w.server.inject({ url, headers: { cookie: w.n.cookie } })).statusCode).toBe(404);
+      // A viewer cannot write into the workspace; a member of another workspace sees nothing of this one.
+      const up = await w.server.inject({ method: 'POST', url: '/api/generate/image', headers: { cookie: w.v.cookie }, payload: { prompt: 'x', workspaceId: team.id } });
+      expect(up.statusCode, up.body).toBe(403);
+      expect(up.json().error.code).toBe('VIEWER_READ_ONLY');
+      const foreign = await w.server.inject({ method: 'POST', url: '/api/generate/image', headers: { cookie: w.n.cookie }, payload: { prompt: 'x', workspaceId: team.id } });
+      expect(foreign.statusCode, foreign.body).toBe(404);
     } finally { await w.server.close(); }
   }, 60_000);
 

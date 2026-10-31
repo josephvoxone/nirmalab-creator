@@ -96,11 +96,13 @@ describe('T7: generated files belong to the user who made them', () => {
     expect((await t.get('/api/generate/files/tts/tts-9-9.mp3', t.M)).statusCode).toBe(404);
   });
 
-  it('clips are rendered into the caller\'s own folder', async () => {
+  it('clips are rendered into the folder of the acting workspace (the caller\'s personal one by default)', async () => {
     const t = await setup();
     expect((await t.post('/api/generate/clip', t.B, { prompt: 'ombak' })).statusCode).toBe(200);
-    expect(t.clipDirs).toEqual([join(t.dataDir, 'free-generate', 'users', t.B.id, 'clips')]);
-    expect(readdirSync(join(t.dataDir, 'free-generate', 'users', t.B.id, 'clips'))).toHaveLength(1);
+    // WAVE 4: output belongs to a workspace, not to a person: the personal workspace of B is where B's Studio output lives.
+    const dir = join(t.dataDir, 'free-generate', 'workspaces', `ws_personal_${t.B.id}`, 'clips');
+    expect(t.clipDirs).toEqual([dir]);
+    expect(readdirSync(dir)).toHaveLength(1);
   });
 
   it('never leaves the generated folders (traversal, other kinds, the users folder itself)', async () => {
