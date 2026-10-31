@@ -37,9 +37,13 @@ export function auditTooltip(shot: Pick<ShotState, 'audit'>): string {
   return issues.length ? issues.join('; ') : `Lolos audit (${auditLabel(shot.audit.score)}/100)`;
 }
 
-/** A human sign-off recorded after the take was audited overrides a failing score. */
-export const auditSigned = (shot: Pick<ShotState, 'audit' | 'approvedAtMs'>): boolean =>
-  typeof shot.approvedAtMs === 'number' && !!shot.audit && shot.approvedAtMs >= shot.audit.atMs;
+/**
+ * A human sign-off recorded after the take was audited overrides a failing score — but only what the human saw:
+ * a failing motion verdict made after the sign-off blocks again (the server's gate says the same).
+ */
+export const auditSigned = (shot: Pick<ShotState, 'audit' | 'approvedAtMs' | 'motion'>): boolean =>
+  typeof shot.approvedAtMs === 'number' && !!shot.audit && shot.approvedAtMs >= shot.audit.atMs
+  && !(shot.motion?.status === 'fail' && shot.motion.at > shot.approvedAtMs);
 
 export type CheckShot = { id: string; score?: number; needsReview: boolean; issues: string[]; repair: string };
 
@@ -51,7 +55,7 @@ export function shotsToCheck(story: Pick<Story, 'shots'>): CheckShot[] {
       id: s.id,
       ...(typeof s.audit?.score === 'number' ? { score: s.audit.score } : {}),
       needsReview: !!s.needsReview,
-      issues: s.audit?.issues ?? [],
+      issues: [...(s.audit?.issues ?? []), ...(s.motion?.status === 'fail' ? s.motion.reasons : [])],
       repair: s.audit?.repair?.trim() ?? ''
     }));
 }

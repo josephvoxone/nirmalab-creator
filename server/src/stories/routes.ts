@@ -288,6 +288,19 @@ export async function registerStoryRoutes(
     } catch (error) { return fail(reply, error); }
   });
 
+  /**
+   * Free motion check of the clips that are already done (projects made before the check existed). Admin only; one
+   * run per story at a time; nothing is queued or spent and the project is not gated by it. Answers when it is done.
+   */
+  server.post<{ Params: { id: string } }>('/api/stories/:id/motion-check', async (request, reply) => {
+    if (!requireAdmin(auth, request, reply)) return undefined;
+    try {
+      if (!(await stories.get(request.params.id))) return notFound(reply, 'Story');
+      const result = await stories.checkMotions(request.params.id);
+      return { ...result, story: await stories.get(request.params.id) };
+    } catch (error) { return fail(reply, error); }
+  });
+
   server.get<{ Params: { id: string; token: string } }>('/api/stories/:id/cast/:token/image', async (request, reply) => {
     if (!member(request, reply)) return undefined;
     if (!TOKEN.test(request.params.token)) return notFound(reply, 'Character');

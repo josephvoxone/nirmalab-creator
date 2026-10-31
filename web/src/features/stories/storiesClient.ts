@@ -14,6 +14,14 @@ export type ShotAudit = {
   costUsd: number;
   target?: 'frame' | 'clip';
 };
+/** Free motion QC of a finished clip (server: bridge/py/clipqc.py). `suggest` = only edits the editor already has. */
+export type ShotMotion = {
+  status: 'ok' | 'warn' | 'fail';
+  score: number;
+  reasons: string[];
+  at: number;
+  suggest?: { trimOut?: number; trimIn?: number; zoom?: number };
+};
 export type ShotState = {
   id: string; frame?: TakeState; status: 'pending' | 'queued' | 'done' | 'failed'; attempts: number; jobId?: string; lastError?: string; error?: string; durationSec?: number;
   /** Live phase of `jobId` in the flow queue: `queued` = bridge belum ambil, `running` = sedang dirender. */
@@ -23,6 +31,12 @@ export type ShotState = {
   audit?: ShotAudit;
   /** The shot must be repaired or approved before the video is assembled. */
   needsReview?: boolean;
+  /** Motion QC of the current clip; absent = not checked (yet). */
+  motion?: ShotMotion;
+  /** The take `motion` was made for (`jobId`): a verdict of another take is not shown. */
+  motionJobId?: string;
+  /** `needsReview` came from a failing motion verdict. */
+  motionReview?: boolean;
   approvedBy?: string;
   approvedAtMs?: number;
 };

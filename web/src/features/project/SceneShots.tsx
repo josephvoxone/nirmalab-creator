@@ -13,6 +13,7 @@ import type { Story } from '../stories/storiesClient.js';
 import type { Board, Scene } from './model.js';
 import { TONE_TEXT, dragId, shotStatus, snippet } from './SceneHelpers.js';
 import { AUDIT_BADGE, auditLabel, auditTooltip, auditTone } from './audit.js';
+import { motionView } from './motion.js';
 import { media } from './useProject.js';
 import { poster, sizedImg } from '../../lib/media.js';
 
@@ -96,6 +97,7 @@ function ShotCard(props: {
   const status = shotStatus(story, shotId);
   const size = thumbSize(board.aspect);
   const st = story.shots.find(s => s.id === shotId);
+  const motion = st ? motionView(st, story.events) : undefined;
   const others = (board.scenes ?? []).map((s, i) => ({ s, i })).filter(x => x.s.id !== scene.id);
   const { setNodeRef, setActivatorNodeRef, attributes, listeners, transform, transition, isDragging } = useSortable({ id: dragId.shot(shotId), disabled: props.locked });
   return (
@@ -114,6 +116,13 @@ function ShotCard(props: {
             className={cn('ml-auto shrink-0 rounded px-1 text-[10px] leading-4 tabular-nums', AUDIT_BADGE[auditTone(st?.audit?.score)])}>
             {auditLabel(st?.audit?.score)}
           </span>
+          {/* Motion QC: only a warn or a fail earns a chip (ok and unchecked stay quiet). */}
+          {motion && (motion.state === 'warn' || motion.state === 'fail') && (
+            <span data-motion={motion.state} aria-label={`Cek gerak ${shotId}`} title={motion.motion!.reasons.join('; ')}
+              className={cn('shrink-0 rounded px-1 text-[10px] leading-4', AUDIT_BADGE[motion.state])}>
+              Gerak
+            </span>
+          )}
         </span>
         <span className="line-clamp-2 min-h-[2lh] text-[11.5px] leading-snug">
           {shot.silent ? <Badge variant="outline" className="h-4 px-1.5 text-[10px] text-muted-foreground">Tanpa narasi</Badge> : (snippet(shot.narration, 7) || <span className="text-muted-foreground">Narasi kosong</span>)}
