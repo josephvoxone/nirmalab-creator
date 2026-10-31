@@ -257,6 +257,7 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
     dataDir: options.dataDir,
     store: flowStore,
     media,
+    env,
     bridgeToken: env.OPENCREATOR_FLOW_BRIDGE_TOKEN?.trim() || undefined,
     openRouter: {
       usdPerClip: async model => { try { return (await catalog.find('video', model))?.usdPerClip ?? null; } catch { return null; } },
