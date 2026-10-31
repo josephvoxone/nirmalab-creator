@@ -111,7 +111,7 @@ class Ass(unittest.TestCase):
 def gold_pixels(frame_png):
     from PIL import Image
     im = Image.open(frame_png).convert('RGB')
-    return sum(1 for r, g, b in im.getdata() if r > 230 and 170 < g < 235 and b < 140)
+    return sum(1 for r, g, b in im.getdata() if r > 230 and 170 < g < 215 and b < 120)   # the amber (255, 190, 40)
 
 
 def white_pixels(frame_png):

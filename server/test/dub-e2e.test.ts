@@ -106,7 +106,7 @@ from PIL import Image
 f, t = sys.argv[1], sys.argv[2]
 subprocess.run(['ffmpeg','-v','error','-y','-ss',t,'-i',f,'-frames:v','1',f+'.png'], check=True)
 im = Image.open(f+'.png').convert('RGB')
-print(sum(1 for r,g,b in im.getdata() if r > 230 and 170 < g < 235 and b < 140))`, file, String(t)]).toString().trim());
+print(sum(1 for r,g,b in im.getdata() if r > 230 and 170 < g < 215 and b < 120))`, file, String(t)]).toString().trim());
     planFile(true);
     await assembleStory(dir);
     const final = join(dir, 'final.mp4');

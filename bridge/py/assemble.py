@@ -61,7 +61,7 @@ def _ass_time(t):
     return f'{cs // 360000}:{cs // 6000 % 60:02d}:{cs // 100 % 60:02d}.{cs % 100:02d}'
 
 
-SUNG = '&H005AD6FF'     # spoken words: warm gold (ASS colours are BGR)
+SUNG = '&H0028BEFF'     # spoken words: saturated amber (255, 190, 40); paler gold vanished on a cream painted sky (ASS colours are BGR)
 UNSUNG = '&H00EAF4FA'   # words still to come: warm white
 KARAOKE_PRE = 0.15      # a cue appears a beat before its first word
 KARAOKE_POST = 0.35     # and lingers a moment after its last
