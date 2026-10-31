@@ -369,7 +369,10 @@ def filter_graph(durations, xf, transitions=None, title_input=None, total=None,
         )
         parts.append(audio.rstrip(',') + ('[clipa]' if audio != f'[{aprev}]' else 'anull[clipa]'))
         if duck:
-            parts.append('[clipa]asplit=2[clipm][clipk]')
+            # The key only steers the compressor, so lift it +6 dB: dubs sit around -25..-30 dBFS before the final loudness pass
+            # and the ducking depth must not depend on how quiet the voice happens to be.
+            parts.append('[clipa]asplit=2[clipm][clipk0]')
+            parts.append('[clipk0]volume=2[clipk]')
             parts.append('[mus][clipk]sidechaincompress=threshold=0.015:ratio=9:attack=40:release=700:makeup=1[musd]')
             parts.append('[clipm][musd]amix=inputs=2:duration=first:normalize=0[mixa]')
         else:

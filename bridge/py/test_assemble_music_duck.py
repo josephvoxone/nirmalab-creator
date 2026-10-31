@@ -51,5 +51,30 @@ class EndToEnd(unittest.TestCase):
             shutil.rmtree(d, ignore_errors=True)
 
 
+    def test_a_quiet_dub_still_ducks_the_music_as_deeply(self):
+        # ElevenLabs lines sit around -25..-30 dBFS RMS before the final loudness pass; the ducking depth must not depend on that
+        d = tempfile.mkdtemp(prefix='asm-duck-')
+        try:
+            tone(os.path.join(d, 's0.mp4'), 330, 9, video=True)
+            subprocess.run(['ffmpeg', '-v', 'error', '-y', '-f', 'lavfi', '-i', 'sine=frequency=880:duration=3', '-af', 'volume=0.32', '-c:a', 'libmp3lame', os.path.join(d, 'voice.mp3')], check=True)
+            subprocess.run(['ffmpeg', '-v', 'error', '-y', '-f', 'lavfi', '-i', 'sine=frequency=220:duration=12', os.path.join(d, 'bed.wav')], check=True)
+            json.dump({'slug': 'final', 'crossfade': 0.3,
+                       'shots': [{'id': 's0', 'narration': 'x', 'dub': {'file': os.path.join(d, 'voice.mp3'), 'seconds': 3.0}}],
+                       'edit': {'music': {'path': os.path.join(d, 'bed.wav'), 'volume': 0.3, 'at': 0}}}, open(os.path.join(d, 'assemble.json'), 'w'))
+            out = subprocess.run(['python3', os.path.join(os.path.dirname(os.path.abspath(__file__)), 'assemble.py'), d], capture_output=True, text=True)
+            self.assertEqual(out.returncode, 0, out.stderr)
+            final = os.path.join(d, 'final.mp4')
+            f1, m1 = spectrum(final, 1.2, 2.8)
+            f2, m2 = spectrum(final, 5.0, 6.8)
+            drop = 20 * math.log10(level(f1, m1, 220) / level(f2, m2, 220))
+            self.assertLess(drop, -8, f'music drop under a quiet voice: {drop:.1f} dB')
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
+    def test_the_key_is_lifted_before_the_compressor(self):
+        g = filter_graph([5.0, 5.0], 0.3, total=9.7, streams='a', music_input=3, music={'at': 0, 'volume': 0.7}, dubs=dubs_for())
+        self.assertIn('[clipk0]volume=2[clipk]', g)
+
+
 if __name__ == '__main__':
     unittest.main()
