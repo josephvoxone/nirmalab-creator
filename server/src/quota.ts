@@ -3,7 +3,7 @@ import type { FastifyInstance } from 'fastify';
 import { sessionUser } from './auth/routes.js';
 import type { UserAuthStore } from './auth/store.js';
 import type { FlowStore } from './flow/store.js';
-import { measureStorage } from './media/storage.js';
+import { StorageMeter } from './media/storage-meter.js';
 import { AuditLedger } from './audit/ledger.js';
 import type { OpenRouterBalance } from './providers/client.js';
 import { OpenRouterConfigStore } from './providers/config.js';
@@ -13,10 +13,14 @@ export type QuotaRouteOptions = {
   dataDir: string;
   flow: FlowStore;
   balance: () => Promise<OpenRouterBalance | null>;
+  /** Cached disk scan shared with the storage routes (the janitor invalidates it). Default: a private one. */
+  storage?: StorageMeter;
 };
 
 export async function registerQuotaRoutes(server: FastifyInstance, options: QuotaRouteOptions): Promise<void> {
   const config = new OpenRouterConfigStore(options.dataDir);
+  // Every member polls this route each minute: the volume is walked once per cache window, not once per call.
+  const storageMeter = options.storage ?? new StorageMeter(options.dataDir);
   server.get('/api/quota', async (request, reply) => {
     if (!sessionUser(options.userAuthStore, request)) return reply.code(401).send({ error: { code: 'UNAUTHENTICATED', message: 'Masuk dulu' } });
     const accounts = (await options.flow.listAccounts()).filter(a => a.enabled !== false);
@@ -25,7 +29,7 @@ export async function registerQuotaRoutes(server: FastifyInstance, options: Quot
     const configured = (await config.view()).configured;
     const balance = configured ? await options.balance().catch(() => null) : null;
     const queue = await options.flow.queueStatus();
-    const storage = await measureStorage(options.dataDir).catch(() => ({ usedBytes: 0, diskFreeBytes: null }));
+    const storage = await storageMeter.get().catch(() => ({ usedBytes: 0, diskFreeBytes: null }));
     return {
       flow: {
         credits: known.length ? known.reduce((sum, a) => sum + (a.credits ?? 0), 0) : null,

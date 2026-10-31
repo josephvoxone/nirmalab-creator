@@ -43,6 +43,7 @@ import { TextRoutingStore, createRoutedModel, limitedModel } from './llm/router.
 import { requireAdmin } from './auth/routes.js';
 import { parseTrustProxyHops, trustProxyFor } from './auth/proxy.js';
 import { registerCrossSiteGuard } from './auth/csrf.js';
+import { StorageMeter } from './media/storage-meter.js';
 import { createOpenCodeModel, type TextModel } from './llm/opencode.js';
 
 export type AppOptions = {
@@ -203,7 +204,9 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   // The model every feature uses: primary + automatic fallback, with a cap on simultaneous provider calls.
   const textModel = options.text?.model ?? limitedModel(createRoutedModel({ opencode: openCodeModel, gemini: geminiModel, routing: () => textRouting.view() }), llmQueue);
   await registerProviderRoutes(server, { userAuthStore, dataDir: options.dataDir, flow: flowStore, fetch: providerFetch, catalog, text: { store: textStore, model: openCodeModel } });
-  await registerQuotaRoutes(server, { userAuthStore, dataDir: options.dataDir, flow: flowStore, balance: () => openRouterBalance(options.dataDir, { fetch: providerFetch }) });
+  // One cached disk scan for the sidebar quota; the storage janitor drops it when it has changed the volume.
+  const storageMeter = new StorageMeter(options.dataDir);
+  await registerQuotaRoutes(server, { userAuthStore, dataDir: options.dataDir, flow: flowStore, balance: () => openRouterBalance(options.dataDir, { fetch: providerFetch }), storage: storageMeter });
   const workerMs = options.providers?.workerMs ?? 5000;
   if (workerMs > 0) {
     const stopWorker = new OpenRouterWorker({ dataDir: options.dataDir, store: flowStore, fetch: providerFetch, catalog }).start(workerMs);
@@ -275,8 +278,9 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
     server.addHook('onClose', async () => clearInterval(timer));
   }
 
-  const cleanup = serialCleanup(options.dataDir, { jobs: () => flowStore.listJobs(Number.MAX_SAFE_INTEGER) });
-  await registerStorageRoutes(server, { userAuthStore, dataDir: options.dataDir, cleanup });
+  const sweepOnce = serialCleanup(options.dataDir, { jobs: () => flowStore.listJobs(Number.MAX_SAFE_INTEGER) });
+  const cleanup = async () => { try { return await sweepOnce(); } finally { storageMeter.invalidate(); } };
+  await registerStorageRoutes(server, { userAuthStore, dataDir: options.dataDir, cleanup, meter: storageMeter });
   const cleanupMs = options.media?.cleanupMs ?? 24 * 3_600_000;
   if (cleanupMs > 0) {
     const sweep = () => void cleanup().then(

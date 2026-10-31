@@ -208,11 +208,12 @@ export async function cleanupStorage(dataDir: string, deps: CleanupDeps): Promis
 
 export async function registerStorageRoutes(
   server: FastifyInstance,
-  options: { userAuthStore: UserAuthStore; dataDir: string; cleanup: () => Promise<CleanupResult> }
+  options: { userAuthStore: UserAuthStore; dataDir: string; cleanup: () => Promise<CleanupResult>; meter?: { get: (force?: boolean) => Promise<StorageReport> } }
 ): Promise<void> {
   server.get('/api/storage', async (request, reply) => {
     if (!requireAdmin(options.userAuthStore, request, reply)) return undefined;
-    return measureStorage(options.dataDir);
+    // Always a fresh scan for the admin; when the quota cache exists it takes this figure too.
+    return options.meter ? options.meter.get(true) : measureStorage(options.dataDir);
   });
 
   server.post('/api/storage/cleanup', async (request, reply) => {
