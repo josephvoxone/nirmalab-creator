@@ -75,7 +75,7 @@ describe('key pool routes', () => {
     expect(added.json()).toMatchObject({ verified: true, key: { label: 'Utama', source: 'store', state: 'ready' } });
     expect(secretsIn(added.body)).toEqual([]);
     const list = await t.req('GET', '/api/providers/keypool');
-    expect(list.json().elevenlabs).toMatchObject({ max: 10, keys: [{ label: 'Utama' }] });
+    expect(list.json().elevenlabs).toMatchObject({ max: 1, keys: [{ label: 'Utama' }], dormant: [] });
     expect(list.json().gemini.keys).toEqual([]);
     expect(secretsIn(list.body)).toEqual([]);
   });
@@ -111,14 +111,17 @@ describe('key pool routes', () => {
     expect((await t.req('POST', '/api/providers/keypool/openai', { key: GEM_KEY })).statusCode).toBe(404);
   });
 
-  it('holds at most 10 keys per provider and refuses duplicates', async () => {
+  it('Gemini holds at most 10 keys and refuses duplicates; ElevenLabs holds exactly one (more in eleven-single-key.test.ts)', async () => {
     const t = await setup();
-    expect((await t.req('POST', '/api/providers/keypool/elevenlabs', { key: EL_KEY })).statusCode).toBe(201);
-    expect((await t.req('POST', '/api/providers/keypool/elevenlabs', { key: EL_KEY })).statusCode).toBe(400);
-    for (let i = 2; i <= 10; i++) expect((await t.req('POST', '/api/providers/keypool/elevenlabs', { key: `sk_test_eleven_${String(i).padStart(2, '0')}_0123456789abcdef01` })).statusCode).toBe(201);
-    const over = await t.req('POST', '/api/providers/keypool/elevenlabs', { key: EL_KEY2 });
+    const gem = (i: number) => `gemini_test_key_${String(i).padStart(2, '0')}_0123456789abcdef`;
+    expect((await t.req('POST', '/api/providers/keypool/gemini', { key: gem(1) })).statusCode).toBe(201);
+    expect((await t.req('POST', '/api/providers/keypool/gemini', { key: gem(1) })).statusCode).toBe(400);
+    for (let i = 2; i <= 10; i++) expect((await t.req('POST', '/api/providers/keypool/gemini', { key: gem(i) })).statusCode).toBe(201);
+    const over = await t.req('POST', '/api/providers/keypool/gemini', { key: gem(11) });
     expect(over.statusCode).toBe(400);
     expect(over.json().error.message).toMatch(/maksimal 10/i);
+    expect((await t.req('POST', '/api/providers/keypool/elevenlabs', { key: EL_KEY })).statusCode).toBe(201);
+    expect((await t.req('POST', '/api/providers/keypool/elevenlabs', { key: EL_KEY2 })).statusCode).toBe(409);
   });
 
   it('removes a key; an unknown id is 404', async () => {
@@ -132,11 +135,13 @@ describe('key pool routes', () => {
   it('keys from the server environment are listed (masked), usable, and cannot be deleted from the UI', async () => {
     const t = await setup({ env: { ELEVENLABS_API_KEYS: `${EL_KEY},${EL_KEY2}` } });
     const list = (await t.req('GET', '/api/providers/keypool')).json();
-    expect(list.elevenlabs.keys.map((k: any) => k.source)).toEqual(['env', 'env']);
+    expect(list.elevenlabs.keys.map((k: any) => k.source)).toEqual(['env']); // ONE active key: the first
+    expect(list.elevenlabs.dormant.map((k: any) => k.source)).toEqual(['env']); // the second is listed, never used
     expect(secretsIn(JSON.stringify(list))).toEqual([]);
     const del = await t.req('DELETE', `/api/providers/keypool/elevenlabs/${list.elevenlabs.keys[0].id}`);
     expect(del.statusCode).toBe(409);
-    expect((await t.req('GET', '/api/providers/keypool')).json().elevenlabs.keys).toHaveLength(2);
+    expect((await t.req('DELETE', `/api/providers/keypool/elevenlabs/${list.elevenlabs.dormant[0].id}`)).statusCode).toBe(409);
+    expect((await t.req('GET', '/api/providers/keypool')).json().elevenlabs.keys).toHaveLength(1);
   });
 
   it('test: reports the credits left of one key without spending any', async () => {
@@ -180,10 +185,10 @@ describe('dub routes', () => {
     expect(res.json().voices[0]).toMatchObject({ id: 'VOICE_ARYA_123456', name: 'Arya', gender: 'male' });
   });
 
-  it('the whole flow: settings → plan → refuse without confirmation → render with it → audio, using each key in turn', async () => {
+  it('the whole flow: settings → plan → refuse without confirmation → render with it → audio, always with the one key', async () => {
     const t = await setup();
     await t.req('POST', '/api/providers/keypool/elevenlabs', { key: EL_KEY });
-    await t.req('POST', '/api/providers/keypool/elevenlabs', { key: EL_KEY2 });
+    expect((await t.req('POST', '/api/providers/keypool/elevenlabs', { key: EL_KEY2 })).statusCode).toBe(409); // one key only
     expect((await t.req('PUT', `/api/stories/${t.id}/dub/settings`, { voiceId: 'VOICE_ARYA_123456', modelId: 'eleven_multilingual_v2', voice: { speed: 0.9 } })).json().dub.settings).toMatchObject({ voiceId: 'VOICE_ARYA_123456', voice: { speed: 0.9 } });
     const plan = (await t.req('POST', `/api/stories/${t.id}/dub/plan`, { scope: { kind: 'all' } })).json().plan;
     expect(plan).toMatchObject({ shotIds: [t.a, t.b], chars: 'Aku menunggu.'.length + 'Lalu tersenyum.'.length });
@@ -196,7 +201,7 @@ describe('dub routes', () => {
     expect(started.statusCode).toBe(202);
     const done = await settle(t, t.id);
     expect(done.shots.map((s: any) => s.status)).toEqual(['done', 'done']);
-    expect(new Set(t.calls.tts.map(c => c.key))).toEqual(new Set([EL_KEY, EL_KEY2])); // round-robin over the pool
+    expect(new Set(t.calls.tts.map(c => c.key))).toEqual(new Set([EL_KEY])); // no rotation across accounts
     expect(t.calls.tts[0]!.body.voice_settings.speed).toBe(0.9);
     const audio = await t.req('GET', `/api/stories/${t.id}/dub/shots/${t.a}/audio`);
     expect(audio.statusCode).toBe(200);

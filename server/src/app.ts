@@ -160,7 +160,11 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   const envInt = (name: string, fallback: number) => { const n = Number(env[name]); return Number.isFinite(n) && n >= 1 ? Math.floor(n) : fallback; };
   // ffmpeg takes ~1.2 GB and several cores per assembly: two at once on a 4-core / 16 GB VPS.
   const assemblyQueue = new FairQueue({ concurrency: options.queues?.assembly ?? envInt('ASSEMBLY_CONCURRENCY', Math.min(2, Math.max(1, Math.floor(availableParallelism() / 2)))), maxWaiting: 500 });
-  const dubQueue = new FairQueue({ concurrency: options.queues?.dub ?? options.dub?.concurrency ?? envInt('DUB_CONCURRENCY', 6), maxWaiting: 5000 });
+  // ElevenLabs: ONE active key (their terms forbid sharing/rotating accounts); extra keys are dormant. Gemini: a pool of up to 10.
+  const elevenKeys = new ProviderKeys(options.dataDir, 'elevenlabs', { env });
+  // More shots in flight than one key can carry would only wait FIFO inside the key pool (and time out); the fair queue
+  // is where the waiting belongs, so its concurrency is what the single key can serve.
+  const dubQueue = new FairQueue({ concurrency: Math.min(options.queues?.dub ?? options.dub?.concurrency ?? envInt('DUB_CONCURRENCY', 6), elevenKeys.concurrencyLimit()), maxWaiting: 5000 });
   const llmQueue = new FairQueue({ concurrency: options.queues?.llm ?? envInt('LLM_CONCURRENCY', 8), maxWaiting: 200 });
   let dubService: DubService | undefined;
   const dubRef = () => dubService!;
@@ -224,8 +228,7 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   // One text-model store + client per process; later features (project assistant, MCP) take `textModel` from here.
   const textStore = new TextModelConfigStore(options.dataDir);
   const openCodeModel = options.text?.model ?? createOpenCodeModel({ store: textStore, fetch: options.text?.fetch ?? providerFetch });
-  // API-key pools (round-robin, max 10 each): ElevenLabs for dubbing, Gemini as a text model next to OpenCode Go.
-  const elevenKeys = new ProviderKeys(options.dataDir, 'elevenlabs', { env });
+  // API keys: ElevenLabs for dubbing (ONE active key, no rotation across accounts), Gemini as a text model next to OpenCode Go (pool of up to 10).
   const geminiKeys = new ProviderKeys(options.dataDir, 'gemini', { env });
   await Promise.all([elevenKeys.load(), geminiKeys.load()]);
   const textRouting = new TextRoutingStore(options.dataDir);

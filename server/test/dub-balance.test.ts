@@ -15,7 +15,9 @@ const KEYS = ['sk_balance_key_number_one_0001', 'sk_balance_key_number_two_0002'
 
 let seq = 0;
 async function client(answer: (key: string) => Response | Promise<Response>, keys = KEYS) {
-  const pool = new ProviderKeys(join(dir, `p${seq++}`), 'elevenlabs', { env: {} });
+  // These tests exercise the pool's rotation across keys (429 -> next key). ElevenLabs itself is limited to ONE key in the app
+  // (see eleven-single-key.test.ts); `maxKeys: 10` here lifts that on purpose so the rotation machinery stays covered.
+  const pool = new ProviderKeys(join(dir, `p${seq++}`), 'elevenlabs', { env: {}, maxKeys: 10 });
   await pool.load();
   for (const key of keys) await pool.add({ key });
   const fetch = (async (_url: unknown, init?: RequestInit) => answer((init?.headers as Record<string, string>)['xi-api-key']!)) as unknown as typeof globalThis.fetch;

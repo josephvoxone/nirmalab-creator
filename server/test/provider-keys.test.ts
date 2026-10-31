@@ -51,20 +51,20 @@ describe('ProviderKeys', () => {
   });
 
   it('removes a key from the file and the pool', async () => {
-    const keys = new ProviderKeys(dir, 'elevenlabs');
+    const keys = new ProviderKeys(dir, 'gemini');
     await keys.load();
     const one = await keys.add({ key: secret(1) });
     await keys.add({ key: secret(2) });
     expect(await keys.remove(one.id)).toBe(true);
     expect(await keys.remove(one.id)).toBe(false);
     expect(keys.pool.size()).toBe(1);
-    const again = new ProviderKeys(dir, 'elevenlabs');
+    const again = new ProviderKeys(dir, 'gemini');
     await again.load();
     expect(again.view()).toHaveLength(1);
   });
 
   it('merges keys from the server environment (comma separated), read-only, counted in the max', async () => {
-    const keys = new ProviderKeys(dir, 'elevenlabs', { env: { ELEVENLABS_API_KEYS: ` ${secret(7)} , ${secret(8)} ,,` } });
+    const keys = new ProviderKeys(dir, 'gemini', { env: { GEMINI_API_KEYS: ` ${secret(7)} , ${secret(8)} ,,` } });
     await keys.load();
     expect(keys.view().map(v => v.source)).toEqual(['env', 'env']);
     await keys.add({ key: secret(1) });
@@ -93,10 +93,10 @@ describe('ProviderKeys', () => {
   });
 
   it('concurrent adds do not lose keys', async () => {
-    const keys = new ProviderKeys(dir, 'elevenlabs');
+    const keys = new ProviderKeys(dir, 'gemini');
     await keys.load();
     await Promise.all([1, 2, 3, 4, 5].map(n => keys.add({ key: secret(n) })));
-    const again = new ProviderKeys(dir, 'elevenlabs');
+    const again = new ProviderKeys(dir, 'gemini');
     await again.load();
     expect(again.view()).toHaveLength(5);
   });
