@@ -15,7 +15,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type { FlowStore } from '../flow/store.js';
 import { linkOrCopy } from '../media/link.js';
-import { AXCEL_PROJECT_RESOLUTION, CREDITS_PER_SHOT, axcelClipSec, subtitleOf, bibleSceneFor, editPrint, isSilent, narrationOf, castOf, frameHashFor, framePromptFor, hashFor, normalizeScenes, sceneOf, sheetHashFor, sheetPromptFor, shotCast, shotPromptFor, validateStoryboard, type Shot, type Storyboard } from './storyboard.js';
+import { AXCEL_PROJECT_RESOLUTION, CREDITS_PER_SHOT, axcelClipSec, subtitleOf, bibleSceneFor, editPrint, isSilent, narrationOf, castOf, frameHashFor, framePromptFor, hashFor, lookFor, normalizeScenes, sceneOf, sheetHashFor, sheetPromptFor, shotCast, shotPromptFor, validateStoryboard, type Shot, type Storyboard } from './storyboard.js';
 import { ShotCompileError } from '../bible/compiler.js';
 import { bibleSceneErrors, syncBible } from '../bible/sync.js';
 import { SnapshotStore, type RestoreAttention, type RestoreOutcome } from './snapshots.js';
@@ -76,6 +76,24 @@ export type AuditRecord = {
 /** A shot the gate refuses: under 70, or flagged for a human. */
 export type GateBlocker = { id: string; score?: number; needsReview: boolean };
 
+/**
+ * Free motion QC of a finished clip (bridge/py/clipqc.py): deterministic checks on the pixels, no credits.
+ * `reasons` are plain Indonesian sentences (with the second the thing happens at); `suggest` only ever names
+ * edits the assembler already supports (`shot.trim`, `shot.zoom`), never a paid re-render.
+ * It only sees the painterly look's known failures (a scene melting into another, a pale border growing in, a
+ * frozen or near-still clip, the camera drifting back); a small identity glitch (a hood going up in 0.2 s) is NOT found.
+ */
+export type ShotMotion = {
+  status: 'ok' | 'warn' | 'fail';
+  score: number;
+  reasons: string[];
+  at: number;
+  suggest?: { trimOut?: number; trimIn?: number; zoom?: number };
+};
+export type MotionVerdict = Omit<ShotMotion, 'at'>;
+/** What the checker needs to know about one clip. */
+export type MotionInput = { file: string; move: string; look: string; keyframe?: string; zoom?: number };
+
 export type ShotState = {
   id: string;
   /** konsisten mode: the approved still this shot is animated from. */
@@ -103,6 +121,12 @@ export type ShotState = {
   auditRepair?: string;
   /** A human must look at this shot before the video is assembled. */
   needsReview?: boolean;
+  /** Motion QC of the current clip (absent: not checked yet, or the checker was unavailable). Dropped when a new take replaces the clip. */
+  motion?: ShotMotion;
+  /** The take `motion` describes (`jobId`, or the reuse hash): a verdict is never trusted for another take. */
+  motionJobId?: string;
+  /** `needsReview` was set by a failing `motion` verdict (so only that verdict, or a human, may clear it). */
+  motionReview?: boolean;
   approvedBy?: string;
   approvedAtMs?: number;
 };
@@ -143,6 +167,9 @@ export type StoryRecord = {
 /** Displaced done takes kept per shot/frame/cast entry. */
 export const MAX_ARCHIVED = 5;
 
+/** What a motion backfill did: clips checked now, already up to date, or whose checker gave no answer. */
+export type MotionBackfill = { checked: number; skipped: number; unavailable: number };
+
 export type AssembleContext = { owner?: string; onPosition?: (position: number, total: number) => void };
 
 export type StoryDeps = {
@@ -173,6 +200,11 @@ export type StoryDeps = {
     run: (input: { images: string[]; expectation: AuditExpectation; model: string }) => Promise<AuditResult>;
     frames: (clip: string, dir: string, shotId: string) => Promise<string[]>;
   };
+  /**
+   * Free motion QC of a finished clip. `undefined` (or a throw) = no verdict: the clip stays usable, the event log says
+   * so. Absent dependency = nothing is checked. It never renders, queues or spends anything.
+   */
+  motion?: { check: (input: MotionInput) => Promise<MotionVerdict | undefined> };
 };
 
 export class StoryError extends Error {
@@ -220,6 +252,8 @@ export class StoryService {
   private locks = new Map<string, Promise<unknown>>();
   /** Background assemblies started by `startAssembly`, per story. */
   private assembling = new Map<string, Promise<void>>();
+  /** Motion backfills in flight, per story (a second request joins the first). */
+  private motionRuns = new Map<string, Promise<MotionBackfill>>();
   private readonly root: string;
   /** Undo snapshots; they share this service's per-story lock. */
   readonly snapshots: SnapshotStore;
@@ -286,6 +320,7 @@ export class StoryService {
   }
 
   private async save(record: StoryRecord, message?: string): Promise<void> {
+    this.dropStaleMotion(record);
     record.updatedAtMs = Date.now();
     if (message) {
       // A repeated progress line ("0/20 shot siap" after every re-queued take) refreshes its time
@@ -842,6 +877,8 @@ export class StoryService {
         state.lastError = undefined;
         // cepat: the clip is the only enforcement point (spec §9.3) — sample it and audit it now.
         if (record.mode !== 'konsisten') changed = (await this.auditClip(record, board, state, shot, target)) || changed;
+        // motion QC (free, never queues a render): after the audit, which may re-queue the clip itself
+        await this.checkMotion(record, board, state, shot);
       }
       changed = true;
     }
@@ -1396,6 +1433,130 @@ export class StoryService {
     return true;
   }
 
+  /** The take a motion verdict belongs to. */
+  private motionKey(state: ShotState): string {
+    return state.jobId ?? state.promptHash ?? '';
+  }
+
+  /** A verdict of a clip that is gone (re-queued, replaced, failed) must not show on its successor, nor keep its flag. */
+  private dropStaleMotion(record: StoryRecord): void {
+    for (const s of record.shots) {
+      if (s.motionJobId === undefined && !s.motion) continue;
+      if (s.status === 'done' && s.motionJobId === this.motionKey(s)) continue;
+      s.motion = undefined;
+      s.motionJobId = undefined;
+      if (s.motionReview) { s.needsReview = undefined; s.motionReview = undefined; }
+    }
+  }
+
+  private motionInput(record: StoryRecord, board: Storyboard, state: ShotState, shot: Shot): MotionInput {
+    const frame = this.framePath(record.id, state.id);
+    // konsisten: the clip must open on its approved keyframe (unverified on real clips: only synthetic tests).
+    const keyframe = record.mode === 'konsisten' && state.frame?.status === 'done' && existsSync(frame) ? frame : undefined;
+    return {
+      file: this.shotPath(record.id, state.id),
+      move: shot.intent?.move?.trim() ?? '',
+      look: lookFor(board).family,
+      ...(keyframe ? { keyframe } : {}),
+      ...(typeof shot.zoom === 'number' && shot.zoom > 1 ? { zoom: shot.zoom } : {})
+    };
+  }
+
+  /** Never throws: a checker that is missing, crashes or times out simply gives no verdict. */
+  private async askMotion(input: MotionInput): Promise<MotionVerdict | undefined> {
+    try {
+      return await this.deps.motion?.check(input);
+    } catch {
+      return undefined;
+    }
+  }
+
+  private note(record: StoryRecord, message: string): void {
+    record.events = [...record.events, { atMs: Date.now(), message: message.slice(0, 200) }].slice(-60);
+  }
+
+  private applyMotion(record: StoryRecord, state: ShotState, v: MotionVerdict, gate: boolean): void {
+    state.motion = {
+      status: v.status, score: v.score, reasons: v.reasons, at: Date.now(),
+      ...(v.suggest && Object.keys(v.suggest).length ? { suggest: v.suggest } : {})
+    };
+    state.motionJobId = this.motionKey(state);
+    if (!gate) return;
+    // Only a failing verdict asks for a human, through the same flag the audit uses. Never a re-render.
+    if (v.status === 'fail') {
+      state.needsReview = true;
+      state.motionReview = true;
+    } else if (state.motionReview) {
+      state.needsReview = undefined;
+      state.motionReview = undefined;
+    }
+    if (v.status !== 'ok') this.note(record, `Cek gerak ${state.id}: ${v.reasons[0] ?? (v.status === 'fail' ? 'perlu dicek' : 'ada catatan')}${v.reasons.length > 1 ? ` (+${v.reasons.length - 1} lagi)` : ''}`);
+  }
+
+  /** collect(): a clip just came in. Free; flags a failing shot for a human; NEVER queues or spends. */
+  private async checkMotion(record: StoryRecord, board: Storyboard, state: ShotState, shot: Shot): Promise<void> {
+    if (!this.deps.motion || state.status !== 'done' || state.motionJobId === this.motionKey(state)) return;
+    const verdict = await this.askMotion(this.motionInput(record, board, state, shot));
+    if (!verdict) {
+      this.note(record, `Cek gerak ${state.id} dilewati: tidak bisa dijalankan (klip tetap dipakai)`);
+      return;
+    }
+    this.applyMotion(record, state, verdict, true);
+  }
+
+  /**
+   * Backfill (admin): check the done clips that have no verdict for their take. Free. Idempotent. It stores the
+   * verdicts only — a finished project is never gated behind a new check — and it does not hold the story lock while
+   * the checks run (they take a second each): it reads under the lock, checks outside, and merges under the lock.
+   */
+  async checkMotions(id: string): Promise<MotionBackfill> {
+    if (!this.deps.motion) throw new StoryError('INVALID', 'Cek gerak belum tersedia di server ini');
+    const running = this.motionRuns.get(id);
+    if (running) return running;
+    const run = this.runMotionBackfill(id).finally(() => { this.motionRuns.delete(id); });
+    this.motionRuns.set(id, run);
+    return run;
+  }
+
+  private async runMotionBackfill(id: string): Promise<MotionBackfill> {
+    const { items, skipped } = await this.withLock(id, async () => {
+      const record = await this.require(id);
+      const board = await this.readStoryboard(id);
+      const items: Array<{ id: string; key: string; input: MotionInput }> = [];
+      let skipped = 0;
+      for (const state of record.shots) {
+        const shot = board.shots.find(x => x.id === state.id);
+        if (!shot || state.status !== 'done' || !existsSync(this.shotPath(id, state.id))) continue;
+        if (state.motionJobId === this.motionKey(state)) { skipped += 1; continue; }
+        items.push({ id: state.id, key: this.motionKey(state), input: this.motionInput(record, board, state, shot) });
+      }
+      return { items, skipped };
+    });
+    const verdicts = new Map<string, { key: string; verdict: MotionVerdict }>();
+    let unavailable = 0;
+    for (const item of items) {
+      const verdict = await this.askMotion(item.input);
+      if (verdict) verdicts.set(item.id, { key: item.key, verdict }); else unavailable += 1;
+    }
+    if (verdicts.size) {
+      await this.withLock(id, async () => {
+        const record = await this.require(id);
+        let stored = 0;
+        let bad = 0;
+        for (const state of record.shots) {
+          const got = verdicts.get(state.id);
+          // The take may have changed while we were checking: a verdict is only stored for the take it was made for.
+          if (!got || state.status !== 'done' || this.motionKey(state) !== got.key || state.motionJobId === got.key) continue;
+          this.applyMotion(record, state, got.verdict, false);
+          stored += 1;
+          if (got.verdict.status !== 'ok') bad += 1;
+        }
+        if (stored) await this.save(record, `Cek gerak ${stored} klip: ${bad ? `${bad} perlu perhatian` : 'semua baik'}`);
+      });
+    }
+    return { checked: verdicts.size, skipped, unavailable };
+  }
+
   /** A Flow clip repair must fit in the account's daily credit cap (unknown cap = no limit). */
   private async withinDailyCap(cost = CREDITS_PER_SHOT): Promise<boolean> {
     const capped = (await this.deps.flow.listAccounts()).filter(a => a.enabled !== false && typeof a.dailyCreditCap === 'number');
@@ -1409,7 +1570,9 @@ export class StoryService {
   gateBlockers(record: Pick<StoryRecord, 'shots'>): GateBlocker[] {
     return record.shots
       .filter(s => {
-        if (typeof s.approvedAtMs === 'number' && s.audit && s.approvedAtMs >= s.audit.atMs) return false;
+        // A sign-off covers what the human saw: a failing motion verdict made after it blocks again.
+        const motionAfter = s.motion?.status === 'fail' && typeof s.approvedAtMs === 'number' && s.motion.at > s.approvedAtMs;
+        if (typeof s.approvedAtMs === 'number' && s.audit && s.approvedAtMs >= s.audit.atMs && !motionAfter) return false;
         return s.needsReview || (typeof s.audit?.score === 'number' && s.audit.score < AUDIT_GATE);
       })
       .map(s => ({ id: s.id, ...(typeof s.audit?.score === 'number' ? { score: s.audit.score } : {}), needsReview: !!s.needsReview }));
@@ -1434,6 +1597,7 @@ export class StoryService {
       const state = record.shots.find(s => s.id === shotId);
       if (!state) throw new StoryError('NOT_FOUND', 'Shot tidak ditemukan');
       state.needsReview = undefined;
+      state.motionReview = undefined;
       state.approvedAtMs = Date.now();
       if (options.by) state.approvedBy = options.by;
       this.setGate(record);

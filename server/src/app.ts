@@ -50,7 +50,7 @@ export type AppOptions = {
   env?: NodeJS.ProcessEnv;
   logger?: boolean;
   version?: string;
-  stories?: Partial<Pick<StoryDeps, 'probe' | 'assemble' | 'imageSize' | 'audit'>> & {
+  stories?: Partial<Pick<StoryDeps, 'probe' | 'assemble' | 'imageSize' | 'audit' | 'motion'>> & {
     generateText?: TextGenerator;
     /** Background reconcile interval; 0 disables (tests). Default 5 s. */
     reconcileMs?: number;
@@ -137,6 +137,8 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
     dub: { for: id => dubRef().dubFor(id) },
     imageSize: options.stories?.imageSize ?? imageSize,
     audit,
+    // Free motion QC of finished clips. Wired by main.ts (production); absent here = nothing is checked (tests stay inert).
+    ...(options.stories?.motion ? { motion: options.stories.motion } : {}),
     openRouter: {
       usdPerClip: async model => {
         try { return (await catalog.find('video', model))?.usdPerClip ?? null; } catch { return null; }
