@@ -63,7 +63,8 @@ describe('POST /api/stories/:id/motion-check', () => {
     const t = await setup();
     const id = await doneStory(t);
     expect((await server!.inject({ method: 'POST', url: `/api/stories/${id}/motion-check` })).statusCode).toBe(401);
-    expect((await t.req('POST', `/api/stories/${id}/motion-check`, t.memberCookie)).statusCode).toBe(403);
+    // T3 gate: a member who does not own the project gets the 404 of a missing one (the project is checked before the role).
+    expect((await t.req('POST', `/api/stories/${id}/motion-check`, t.memberCookie)).statusCode).toBe(404);
     expect((await t.req('POST', '/api/stories/story_0000000000000000/motion-check')).statusCode).toBe(404);
   });
 

@@ -173,7 +173,7 @@ export async function registerDubRoutes(server: FastifyInstance, options: DubRou
   });
 
   server.put<{ Params: { id: string }; Body: Record<string, unknown> | undefined }>('/api/stories/:id/dub/settings', async (request, reply) => {
-    if (!requireAdmin(auth, request, reply)) return undefined;
+    if (!member(request, reply)) return undefined;
     const b = request.body ?? {};
     const voice = b.voice && typeof b.voice === 'object' ? b.voice as Record<string, unknown> : undefined;
     try {
@@ -193,7 +193,7 @@ export async function registerDubRoutes(server: FastifyInstance, options: DubRou
   });
 
   server.put<{ Params: { id: string; shotId: string }; Body: { text?: unknown; voiceId?: unknown } | undefined }>('/api/stories/:id/dub/shots/:shotId', async (request, reply) => {
-    if (!requireAdmin(auth, request, reply)) return undefined;
+    if (!member(request, reply)) return undefined;
     const b = request.body ?? {};
     try {
       return { dub: await dub.setShot(request.params.id, request.params.shotId, {
@@ -204,7 +204,7 @@ export async function registerDubRoutes(server: FastifyInstance, options: DubRou
   });
 
   server.delete<{ Params: { id: string; shotId: string } }>('/api/stories/:id/dub/shots/:shotId', async (request, reply) => {
-    if (!requireAdmin(auth, request, reply)) return undefined;
+    if (!member(request, reply)) return undefined;
     try { return { dub: await dub.remove(request.params.id, request.params.shotId) }; } catch (error) { return fail(reply, error); }
   });
 
@@ -216,7 +216,7 @@ export async function registerDubRoutes(server: FastifyInstance, options: DubRou
   });
 
   server.post<{ Params: { id: string }; Body: { scope?: unknown; confirmCredits?: unknown; force?: unknown; acceptTooLong?: unknown } | undefined }>('/api/stories/:id/dub/render', async (request, reply) => {
-    const user = requireAdmin(auth, request, reply);
+    const user = member(request, reply);
     if (!user) return undefined;
     const scope = parseScope(request.body?.scope);
     if (!scope) return send(reply, 400, 'INVALID_INPUT', 'scope harus all, scene, atau shots');
@@ -233,7 +233,7 @@ export async function registerDubRoutes(server: FastifyInstance, options: DubRou
   });
 
   server.post<{ Params: { id: string } }>('/api/stories/:id/dub/cancel', async (request, reply) => {
-    if (!requireAdmin(auth, request, reply)) return undefined;
+    if (!member(request, reply)) return undefined;
     try { return { dub: await dub.cancel(request.params.id) }; } catch (error) { return fail(reply, error); }
   });
 

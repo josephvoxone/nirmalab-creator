@@ -101,13 +101,14 @@ describe('T7.4 — preview/publish only for the owner of the project', () => {
     w.patchRecord(id, r => ({ ...r, createdBy: 'u_deletedAccount1', status: 'done' }));
     for (const who of ['joseph', 'bina', 'mira'] as const) expect((await w.preview(w.cookies[who], id)).statusCode).toBe(404);
     for (const who of ['joseph', 'bina'] as const) expect((await w.publish(w.cookies[who], id)).statusCode).toBe(404);
-    expect((await w.publish(w.cookies.mira, id)).statusCode).toBe(403); // members cannot publish at all yet (opened later, with the creator role)
+    // T3 gate: a project that is not hers is a 404 for a member too (the project is checked before the role).
+    expect((await w.publish(w.cookies.mira, id)).statusCode).toBe(404);
   });
 
-  it('anonymous callers still get 401, and bad ids still get 400, before any ownership lookup', async () => {
+  it('anonymous callers still get 401; a malformed id is the same 404 as a missing project (T3 gate: nothing about ids leaks)', async () => {
     const w = await world();
     expect((await w.server.inject({ url: `/api/publish/preview/${MISSING}` })).statusCode).toBe(401);
-    expect((await w.preview(w.cookies.bina, 'nope')).statusCode).toBe(400);
+    expect((await w.preview(w.cookies.bina, 'nope')).statusCode).toBe(404);
   });
 
   it('the TENANCY_DEFAULT_OWNER_EMAIL account is the owner of attribution-less stories', async () => {

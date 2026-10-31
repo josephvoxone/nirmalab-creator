@@ -165,7 +165,7 @@ export type PolicyGuardOptions = {
 const NEEDS_LOGIN: ReadonlySet<Policy> = new Set(['PENGGUNA-PEMILIK', 'PENGGUNA-BERSAMA', 'SISTEM-ADMIN']);
 
 /** Routes of `@fastify/static` carry the file they serve (`config.file` + `config.rootPath`): the SPA files are public by nature. */
-const isStaticFile = (config: unknown): boolean => {
+export const isStaticFile = (config: unknown): boolean => {
   const c = config as { file?: unknown; rootPath?: unknown } | undefined;
   return typeof c?.file === 'string' && typeof c?.rootPath === 'string';
 };

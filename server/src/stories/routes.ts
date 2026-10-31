@@ -107,8 +107,10 @@ export async function registerStoryRoutes(
   };
 
   server.get('/api/stories', async (request, reply) => {
-    if (!member(request, reply)) return undefined;
-    return { stories: await stories.list() };
+    const user = member(request, reply);
+    if (!user) return undefined;
+    // Only the caller's own projects (admin included): another user's titles never leave the server.
+    return { stories: await stories.listFor(user.id) };
   });
 
   server.post<{ Body: { storyboard?: unknown } }>('/api/stories', async (request, reply) => {
@@ -179,7 +181,7 @@ export async function registerStoryRoutes(
   });
 
   server.put<{ Params: { id: string }; Body: { storyboard?: unknown; rev?: unknown } }>('/api/stories/:id', async (request, reply) => {
-    if (!requireAdmin(auth, request, reply)) return undefined;
+    if (!member(request, reply)) return undefined;
     // `rev` = the revision this client read; absent = no check (clients from before revisions).
     const rev = request.body?.rev ?? undefined;
     if (rev !== undefined && !(typeof rev === 'number' && Number.isInteger(rev))) return badRequest(reply, 'rev must be a number');
@@ -190,7 +192,7 @@ export async function registerStoryRoutes(
 
   /** Preview the compiled prompts of one shot against the saved board (nothing is saved). */
   server.post<{ Params: { id: string }; Body: { shot?: unknown } }>('/api/stories/:id/compile-shot', async (request, reply) => {
-    if (!requireAdmin(auth, request, reply)) return undefined;
+    if (!member(request, reply)) return undefined;
     const shot = request.body?.shot as Shot | undefined;
     if (!shot || typeof shot !== 'object' || Array.isArray(shot) || typeof shot.id !== 'string' || !SHOT_ID.test(shot.id)) {
       return badRequest(reply, 'shot with a valid id is required');
@@ -213,7 +215,7 @@ export async function registerStoryRoutes(
   });
 
   server.post<{ Params: { id: string }; Body: { force?: unknown; scene?: unknown; shot?: unknown } }>('/api/stories/:id/render', async (request, reply) => {
-    if (!requireAdmin(auth, request, reply)) return undefined;
+    if (!member(request, reply)) return undefined;
     const target = runTarget(request.body);
     if (typeof target === 'string') return badRequest(reply, target);
     // A shot is the narrower target: it wins when both are sent.
@@ -224,7 +226,7 @@ export async function registerStoryRoutes(
   });
 
   server.post<{ Params: { id: string }; Body: { scene?: unknown } }>('/api/stories/:id/prepare', async (request, reply) => {
-    if (!requireAdmin(auth, request, reply)) return undefined;
+    if (!member(request, reply)) return undefined;
     const target = runTarget({ scene: request.body?.scene });
     if (typeof target === 'string') return badRequest(reply, target);
     try {
@@ -233,7 +235,7 @@ export async function registerStoryRoutes(
   });
 
   server.post<{ Params: { id: string } }>('/api/stories/:id/assemble', async (request, reply) => {
-    if (!requireAdmin(auth, request, reply)) return undefined;
+    if (!member(request, reply)) return undefined;
     try {
       // Returns at once; the assembly waits its turn in the shared queue and finishes in the background (the page polls).
       return reply.code(202).send({ story: await stories.startAssembly(request.params.id) });
@@ -245,7 +247,7 @@ export async function registerStoryRoutes(
   });
 
   server.post<{ Params: { id: string }; Body: { look?: unknown } }>('/api/stories/:id/look', async (request, reply) => {
-    if (!requireAdmin(auth, request, reply)) return undefined;
+    if (!member(request, reply)) return undefined;
     const look = request.body?.look;
     if (!look || typeof look !== 'object') return reply.code(400).send({ error: { code: 'INVALID', message: 'look is required' } });
     try {
@@ -263,7 +265,7 @@ export async function registerStoryRoutes(
   });
 
   server.post<{ Params: { id: string; shotId: string }; Body: { prompt?: unknown } }>('/api/stories/:id/shots/:shotId/frame', async (request, reply) => {
-    if (!requireAdmin(auth, request, reply)) return undefined;
+    if (!member(request, reply)) return undefined;
     if (!SHOT_ID.test(request.params.shotId)) return notFound(reply);
     const prompt = typeof request.body?.prompt === 'string' && request.body.prompt.trim() ? request.body.prompt.slice(0, 2000) : undefined;
     try {
@@ -272,7 +274,7 @@ export async function registerStoryRoutes(
   });
 
   server.post<{ Params: { id: string; shotId: string } }>('/api/stories/:id/shots/:shotId/repair', async (request, reply) => {
-    const user = requireAdmin(auth, request, reply);
+    const user = member(request, reply);
     if (!user) return undefined;
     if (!SHOT_ID.test(request.params.shotId)) return notFound(reply);
     try {
@@ -282,7 +284,7 @@ export async function registerStoryRoutes(
 
   /** Human sign-off on a shot the audit refused (spec §4.4): records who approved it. */
   server.post<{ Params: { id: string; shotId: string } }>('/api/stories/:id/shots/:shotId/approve-audit', async (request, reply) => {
-    const user = requireAdmin(auth, request, reply);
+    const user = member(request, reply);
     if (!user) return undefined;
     if (!SHOT_ID.test(request.params.shotId)) return notFound(reply);
     try {
@@ -295,7 +297,7 @@ export async function registerStoryRoutes(
    * run per story at a time; nothing is queued or spent and the project is not gated by it. Answers when it is done.
    */
   server.post<{ Params: { id: string } }>('/api/stories/:id/motion-check', async (request, reply) => {
-    if (!requireAdmin(auth, request, reply)) return undefined;
+    if (!member(request, reply)) return undefined;
     try {
       if (!(await stories.get(request.params.id))) return notFound(reply, 'Story');
       const result = await stories.checkMotions(request.params.id);
@@ -314,7 +316,7 @@ export async function registerStoryRoutes(
 
   /** "Pecah jadi shot": the AI shot planner for one scene (same action the assistant uses). */
   server.post<{ Params: { id: string; sceneId: string }; Body: { count?: unknown; brief?: unknown; mode?: unknown } }>('/api/stories/:id/scenes/:sceneId/breakdown', async (request, reply) => {
-    const user = requireAdmin(auth, request, reply);
+    const user = member(request, reply);
     if (!user) return undefined;
     try {
       if (!(await stories.get(request.params.id))) return notFound(reply, 'Story');
@@ -337,7 +339,7 @@ export async function registerStoryRoutes(
 
   /** "Buat sheet": one sheet job for one character. Without `confirm: true` (the user's click) it only answers the estimate. */
   server.post<{ Params: { id: string; token: string }; Body: { confirm?: unknown; reference?: unknown; rev?: unknown } }>('/api/stories/:id/cast/:token/sheet', async (request, reply) => {
-    const user = requireAdmin(auth, request, reply);
+    const user = member(request, reply);
     if (!user) return undefined;
     try {
       if (!(await stories.get(request.params.id))) return notFound(reply, 'Story');
@@ -363,8 +365,7 @@ export async function registerStoryRoutes(
     });
     scope.post<{ Params: { id: string } }>('/api/stories/:id/uploads', {
       bodyLimit: MAX_UPLOAD_BYTES,
-      // Checked before the body is read: nobody but an admin gets to stream 10 MB at the server.
-      onRequest: async (request, reply) => { if (!requireAdmin(auth, request, reply)) return reply; return undefined; }
+      // The 10 MB is read only after the global gate (tenancy/ownership.ts, onRequest) let the project's owner through.
     }, async (request, reply) => {
       try {
         if (!(await stories.get(request.params.id))) return notFound(reply, 'Story');
@@ -390,8 +391,7 @@ export async function registerStoryRoutes(
       return fail(reply, error);
     });
     scope.post<{ Params: { id: string } }>('/api/stories/:id/music', {
-      bodyLimit: MAX_MUSIC_BYTES,
-      onRequest: async (request, reply) => { if (!requireAdmin(auth, request, reply)) return reply; return undefined; }
+      bodyLimit: MAX_MUSIC_BYTES
     }, async (request, reply) => {
       try {
         if (!(await stories.get(request.params.id))) return notFound(reply, 'Story');
@@ -415,7 +415,7 @@ export async function registerStoryRoutes(
   });
 
   server.get<{ Params: { id: string; file: string } }>('/api/stories/:id/uploads/:file', async (request, reply) => {
-    if (!requireAdmin(auth, request, reply)) return undefined;
+    if (!member(request, reply)) return undefined;
     if (!UPLOAD_FILE.test(request.params.file)) return notFound(reply, 'Upload');
     try {
       if (!(await stories.get(request.params.id))) return notFound(reply, 'Story');
@@ -431,7 +431,7 @@ export async function registerStoryRoutes(
   });
 
   server.post<{ Params: { id: string } }>('/api/stories/:id/retry', async (request, reply) => {
-    if (!requireAdmin(auth, request, reply)) return undefined;
+    if (!member(request, reply)) return undefined;
     try {
       await stories.retry(request.params.id);
       return { story: await stories.reconcile(request.params.id, { wait: false }) };
@@ -439,7 +439,7 @@ export async function registerStoryRoutes(
   });
 
   server.delete<{ Params: { id: string } }>('/api/stories/:id', async (request, reply) => {
-    if (!requireAdmin(auth, request, reply)) return undefined;
+    if (!member(request, reply)) return undefined;
     try {
       if (!(await stories.remove(request.params.id))) return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Story not found' } });
       return { ok: true };

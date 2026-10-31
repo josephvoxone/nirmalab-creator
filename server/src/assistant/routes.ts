@@ -8,7 +8,7 @@
  * closing the connection (every 15 s).
  */
 import type { FastifyInstance, FastifyReply } from 'fastify';
-import { requireAdmin } from '../auth/routes.js';
+import { sessionUser } from '../auth/routes.js';
 import type { UserAuthStore } from '../auth/store.js';
 import type { TextModel } from '../llm/opencode.js';
 import { StoryError, type StoryService } from '../stories/service.js';
@@ -41,19 +41,26 @@ export async function registerAssistantRoutes(
   /** Stories with a turn, a confirmed run or an undo in flight. */
   const inFlight = new Set<string>();
 
+  // The global gate (tenancy/ownership.ts) already refused every non-owner; the user is needed here to act as him.
+  const member = (request: Parameters<typeof sessionUser>[1], reply: FastifyReply) => {
+    const user = sessionUser(auth, request);
+    if (!user) void reply.code(401).send({ error: { code: 'UNAUTHORIZED', message: 'Unauthorized' } });
+    return user;
+  };
+
   const exists = async (id: string) => {
     try { return !!(await stories.get(id)); } catch (error) { if (error instanceof StoryError && error.code === 'NOT_FOUND') return false; throw error; }
   };
 
   server.get<{ Params: { id: string } }>('/api/stories/:id/assistant', async (request, reply) => {
-    if (!requireAdmin(auth, request, reply)) return undefined;
+    if (!member(request, reply)) return undefined;
     if (!(await exists(request.params.id))) return send(reply, 404, 'NOT_FOUND', 'Story not found');
     const configured = options.textModel ? await options.textModel.configured().catch(() => false) : false;
     return { turns: await listTurns(stories.storyDir(request.params.id)), configured };
   });
 
   server.post<{ Params: { id: string }; Body: { message?: unknown; attachments?: unknown; confirm?: unknown; rev?: unknown } }>('/api/stories/:id/assistant', async (request, reply) => {
-    const user = requireAdmin(auth, request, reply);
+    const user = member(request, reply);
     if (!user) return undefined;
     const id = request.params.id;
     if (!(await exists(id))) return send(reply, 404, 'NOT_FOUND', 'Story not found');
@@ -115,7 +122,7 @@ export async function registerAssistantRoutes(
   });
 
   server.post<{ Params: { id: string; undoId: string }; Body: { rev?: unknown } | undefined }>('/api/stories/:id/assistant/undo/:undoId', async (request, reply) => {
-    if (!requireAdmin(auth, request, reply)) return undefined;
+    if (!member(request, reply)) return undefined;
     const { id, undoId } = request.params;
     const record = await stories.get(id).catch(() => undefined);
     if (!record) return send(reply, 404, 'NOT_FOUND', 'Story not found');

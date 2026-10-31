@@ -48,6 +48,7 @@ import { requireAdmin } from './auth/routes.js';
 import { parseTrustProxyHops, trustProxyFor, useCloudflareRanges } from './auth/proxy.js';
 import { registerCrossSiteGuard } from './auth/csrf.js';
 import { installPolicyGuard } from './tenancy/policy.js';
+import { installOwnershipGate } from './tenancy/ownership.js';
 import { ensureOwners, resolvePrimaryOwner } from './tenancy/migrate.js';
 import { StorageMeter } from './media/storage-meter.js';
 import { createOpenCodeModel, type TextModel } from './llm/opencode.js';
@@ -112,6 +113,12 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   // CSRF second layer: a cookie-carrying mutation that claims another site is refused (auth/csrf.ts).
   registerCrossSiteGuard(server, env.ALLOWED_ORIGINS);
 
+  // T3 tenancy gate (tenancy/ownership.ts): enforces the registry on every request before the body is read; the services it needs
+  // do not exist yet, so it reaches them lazily. It must sit here: hooks of the root are inherited only by scopes registered after it.
+  const userAuthStore = new UserAuthStore(options.dataDir);
+  const legacyOwnerId = (): string | undefined => { try { return resolvePrimaryOwner(userAuthStore.listUsers(), env.TENANCY_DEFAULT_OWNER_EMAIL)?.id; } catch { return undefined; } };
+  installOwnershipGate(server, { auth: userAuthStore, stories: () => stories, flow: () => flowStore, legacyOwnerId, ...(options.tenancy?.policyRegistry ? { registry: options.tenancy.policyRegistry } : {}) });
+
   server.addHook('onSend', async (_request, reply, payload) => {
     reply.header('x-content-type-options', 'nosniff');
     reply.header('x-frame-options', 'DENY');
@@ -124,7 +131,6 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
 
   server.get('/api/health', async () => ({ ok: true, app: 'nirmalab-creator', version: options.version ?? 'dev' }));
 
-  const userAuthStore = new UserAuthStore(options.dataDir);
   await server.register(async scoped => {
     await registerAuthRoutes(scoped, userAuthStore, {
       bootstrapAdminEmail: env.OPENCREATOR_ADMIN_EMAIL,
@@ -189,7 +195,7 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
     assemble: (dir, ctx) => assemblyQueue.run(ctx?.owner ?? dir, () => (options.stories?.assemble ?? assembleStory)(dir, ctx), ctx?.onPosition ? { onPosition: ctx.onPosition } : {}),
     dub: { for: id => dubRef().dubFor(id) },
     // Tenancy: the account that owned everything before ownership was recorded may keep reusing its unattributed clips (shot.reuse).
-    legacyOwnerId: () => { try { return resolvePrimaryOwner(userAuthStore.listUsers(), env.TENANCY_DEFAULT_OWNER_EMAIL)?.id; } catch { return undefined; } },
+    legacyOwnerId,
     imageSize: options.stories?.imageSize ?? imageSize,
     audit,
     // Free motion QC of finished clips. Wired by main.ts (production); absent here = nothing is checked (tests stay inert).
