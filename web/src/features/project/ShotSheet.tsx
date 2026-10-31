@@ -23,6 +23,7 @@ import { mentionTriggers } from './mentions.js';
 import { readSetup, setShotSetup, type Catalog } from '../stories/catalog.js';
 import { STATUS_LABEL, isActive, type TakeState } from '../stories/storiesClient.js';
 import { removeShot, sceneOf, updateShot } from './model.js';
+import { MotionNote } from './MotionNote.js';
 import { ClipPreview } from './Player.js';
 import { SceneCastChips } from './SceneCast.js';
 import { CREDITS_PER_SHOT, TONE_TEXT, castInText, shotStatus, wordCount } from './SceneHelpers.js';
@@ -213,6 +214,7 @@ function ShotEditor(props: { shotId: string; catalog?: Catalog; onClose: () => v
           <span>Klip: <span className="text-foreground/80">{takeLabel(st)}</span></span>
           {!!st?.attempts && <span className="tabular-nums">Take {st.attempts}</span>}
         </div>
+        <MotionNote shot={st} events={story.events} />
         {error && <p className="rounded-md bg-destructive/10 px-2.5 py-1.5 text-[12px] text-destructive">{error}</p>}
         {retake && <p className="rounded-md bg-muted px-2.5 py-1.5 text-[12px]">Take ulang: {retake}</p>}
         {p.error && <p role="alert" className="rounded-md bg-destructive/10 px-2.5 py-1.5 text-[12px] text-destructive">{p.error}</p>}
