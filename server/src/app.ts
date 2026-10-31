@@ -44,7 +44,7 @@ import { requireAdmin } from './auth/routes.js';
 import { parseTrustProxyHops, trustProxyFor, useCloudflareRanges } from './auth/proxy.js';
 import { registerCrossSiteGuard } from './auth/csrf.js';
 import { installPolicyGuard } from './tenancy/policy.js';
-import { ensureOwners } from './tenancy/migrate.js';
+import { ensureOwners, resolvePrimaryOwner } from './tenancy/migrate.js';
 import { StorageMeter } from './media/storage-meter.js';
 import { createOpenCodeModel, type TextModel } from './llm/opencode.js';
 
@@ -164,6 +164,8 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
     // start a hundred ffmpeg that the kernel then kills). The wait is shown to the user as "antre".
     assemble: (dir, ctx) => assemblyQueue.run(ctx?.owner ?? dir, () => (options.stories?.assemble ?? assembleStory)(dir, ctx), ctx?.onPosition ? { onPosition: ctx.onPosition } : {}),
     dub: { for: id => dubRef().dubFor(id) },
+    // Tenancy: the account that owned everything before ownership was recorded may keep reusing its unattributed clips (shot.reuse).
+    legacyOwnerId: () => { try { return resolvePrimaryOwner(userAuthStore.listUsers(), env.TENANCY_DEFAULT_OWNER_EMAIL)?.id; } catch { return undefined; } },
     imageSize: options.stories?.imageSize ?? imageSize,
     audit,
     // Free motion QC of finished clips. Wired by main.ts (production); absent here = nothing is checked (tests stay inert).

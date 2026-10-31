@@ -219,6 +219,12 @@ export type StoryDeps = {
     frames: (clip: string, dir: string, shotId: string) => Promise<string[]>;
   };
   /**
+   * Tenancy: the account that owns every project and Flow job made before ownership was recorded (the primary owner the
+   * migration assigns; env TENANCY_DEFAULT_OWNER_EMAIL / oldest non-QA admin). Only used to keep a legacy `shot.reuse` of an
+   * unattributed clip working for that one account; absent = no such account, an owned project cannot reuse an unattributed clip.
+   */
+  legacyOwnerId?: () => string | undefined | Promise<string | undefined>;
+  /**
    * Free motion QC of a finished clip. `undefined` (or a throw) = no verdict: the clip stays usable, the event log says
    * so. Absent dependency = nothing is checked. It never renders, queues or spends anything.
    */
@@ -393,9 +399,45 @@ export class StoryService {
     if (errors.length) throw new StoryError('INVALID', errors.join('; '));
   }
 
+  /**
+   * Tenancy hotfix: may a project owned by `owner` (id `selfId`; none while it is being created) take this Flow job's clip through
+   * `shot.reuse`? Yes for: the project's own jobs (`group` = its id), jobs made by the same user, jobs of another project of the same
+   * owner, and — legacy — an unattributed job (no `createdBy`) when the owner is the account that owned everything before attribution
+   * (or the project has no owner either). Everything else is another user's paid clip.
+   */
+  private async mayReuse(job: FlowJob, owner: string | undefined, selfId?: string): Promise<boolean> {
+    if (selfId && job.group === selfId) return true;
+    if (owner && job.createdBy === owner) return true;
+    if (!owner) return !job.createdBy;
+    if (job.group && STORY_ID.test(job.group)) {
+      const groupOwner = (await this.get(job.group).catch(() => undefined))?.createdBy;
+      if (groupOwner === owner) return true;
+    }
+    if (!job.createdBy) return (await this.deps.legacyOwnerId?.()) === owner;
+    return false;
+  }
+
+  /**
+   * Save-time check of `shot.reuse.jobId` (HOTFIX T3-reuse): a jobId this board did not already hold must be a clip the owner may use,
+   * else 400 INVALID in plain Indonesian. A jobId already in the stored board is not asked again (an existing board keeps saving; the
+   * render-time check in `collect` still refuses a foreign clip), and a job that does not exist is accepted here as before (it fails at
+   * render with "tidak tersedia", the same words as for a foreign clip, so a save cannot be used to probe other users' job ids).
+   */
+  private async assertReusable(board: Storyboard, owner: string | undefined, selfId: string | undefined, before?: Storyboard): Promise<void> {
+    const errors: string[] = [];
+    for (const shot of board.shots) {
+      if (!shot.reuse) continue;
+      if (before?.shots.find(s => s.id === shot.id)?.reuse?.jobId === shot.reuse.jobId) continue;
+      const job = await this.deps.flow.getJob(shot.reuse.jobId);
+      if (job && !(await this.mayReuse(job, owner, selfId))) errors.push(`${shot.id}: klip ${shot.reuse.jobId} tidak bisa dipakai ulang — hanya klip milik Anda sendiri (dari proyek Anda) yang boleh`);
+    }
+    if (errors.length) throw new StoryError('INVALID', errors.join('; '));
+  }
+
   async create(input: Storyboard, options: { createdBy?: string } = {}): Promise<StoryRecord> {
     this.assertValid(input);
     const board = normalizeScenes(input);
+    await this.assertReusable(board, options.createdBy, undefined);
     const id = `story_${randomBytes(8).toString('hex')}`;
     await mkdir(this.storyDir(id), { recursive: true, mode: 0o700 });
     const now = Date.now();
@@ -482,6 +524,7 @@ export class StoryService {
         const errors = [...bibleSceneErrors(board, before), ...validateStoryboard(board)];
         if (errors.length) throw new StoryError('INVALID', errors.join('; '));
       }
+      await this.assertReusable(board, record.createdBy, id, before);
       const changed = !before || canonical({ ...before, slug: id }) !== canonical({ ...board, slug: id });
       const previous = new Map(record.shots.map(s => [s.id, s]));
       const konsisten = board.mode === 'konsisten';
@@ -893,7 +936,7 @@ export class StoryService {
       if (shot.reuse) {
         if (!run.has(state.id)) continue;
         const job = await this.deps.flow.getJob(shot.reuse.jobId);
-        if (job?.status === 'done' && job.resultPath && existsSync(job.resultPath)) {
+        if (job?.status === 'done' && job.resultPath && existsSync(job.resultPath) && await this.mayReuse(job, record.createdBy, record.id)) {
           await linkOrCopy(job.resultPath, this.shotPath(record.id, shot.id));
           state.status = 'done';
           state.promptHash = hash(JSON.stringify(shot.reuse));
