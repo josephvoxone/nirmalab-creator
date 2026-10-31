@@ -65,6 +65,7 @@ describe('template covers are generated through the app queue', () => {
     const { server, cookie, flow } = await setup();
     await server.inject({ method: 'POST', url: '/api/stories/templates/drama-hewan/cover', headers: { cookie }, payload: {} });
     const job = (await flow.listJobs())[0]!;
+    await flow.addAccount({ label: 'A', email: 'a@x' }); // a job can only fail while a bridge is running it (failJob guards the status)
     for (let i = 0; i < 3; i++) { await flow.claimJob(`b${i}`); await flow.failJob(job.id, 'Flow agent quote 2 credits is above the cap of 0'); }
     const cat = (await server.inject({ url: '/api/stories/catalog', headers: { cookie } })).json();
     expect(cat.covers['drama-hewan']).toMatchObject({ pending: false });

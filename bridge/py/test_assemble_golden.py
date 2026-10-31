@@ -13,6 +13,9 @@ from fixtures import golden_cases as G
 FROZEN = json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'fixtures', 'old_graphs.json')))
 
 
+FROZEN_FONT_ROOT = '/Users/joseph/tools/nirmalab-creator/.worktrees/w1-asm/bridge/py'
+
+
 class OldPlansAreIdentical(unittest.TestCase):
     def test_every_filter_graph_case_is_the_same_string(self):
         for name, case in FROZEN['filter'].items():
@@ -23,7 +26,10 @@ class OldPlansAreIdentical(unittest.TestCase):
         for name, graphs in FROZEN['main'].items():
             with self.subTest(plan=name):
                 self.assertEqual(len(graphs), 2)
-                self.assertEqual(G.capture(name, None), graphs)
+                # The frozen file was captured in another checkout: only the absolute fonts directory differs.
+                here = os.path.dirname(os.path.abspath(__file__))
+                frozen = [g.replace(FROZEN_FONT_ROOT, here) for g in graphs]
+                self.assertEqual(G.capture(name, None), frozen)
 
     def test_the_frozen_file_is_not_trivial(self):
         self.assertGreaterEqual(len(FROZEN['filter']), 13)
