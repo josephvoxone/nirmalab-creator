@@ -27,6 +27,8 @@ export type Workspace = {
   ownerId: string;
   createdAtMs: number;
   personal: boolean;
+  /** Set when the owner account was removed and the workspace still holds projects: an orphan the admin may transfer. */
+  ownerRemovedAtMs?: number;
   archivedAtMs?: number;
 };
 
@@ -195,6 +197,35 @@ export class WorkspaceStore {
       doc.workspaces.push(workspace);
       doc.memberships.push({ workspaceId: workspace.id, userId: input.userId, role: 'owner', joinedAtMs: workspace.createdAtMs });
       return { workspace, created: true };
+    });
+  }
+
+  /** Platform admin removed an account: its membership rows go (no dangling members in any workspace). */
+  removeMembershipsOf(userId: string): Promise<number> {
+    return this.run(doc => {
+      const before = doc.memberships.length;
+      doc.memberships = doc.memberships.filter(m => m.userId !== userId);
+      return before - doc.memberships.length;
+    });
+  }
+
+  /** Remove a workspace record and everything that pointed at it (used only by the account-removal cleanup of an EMPTY one). */
+  forceDelete(workspaceId: string): Promise<boolean> {
+    return this.run(doc => {
+      const exists = doc.workspaces.some(w => w.id === workspaceId);
+      if (!exists) return false;
+      doc.workspaces = doc.workspaces.filter(w => w.id !== workspaceId);
+      doc.memberships = doc.memberships.filter(m => m.workspaceId !== workspaceId);
+      doc.invites = doc.invites.filter(i => i.workspaceId !== workspaceId);
+      return true;
+    });
+  }
+
+  /** The owner account is gone but the workspace still holds projects: keep it, marked, so an admin can transfer it. */
+  markOwnerRemoved(workspaceId: string): Promise<void> {
+    return this.run(doc => {
+      const workspace = doc.workspaces.find(w => w.id === workspaceId);
+      if (workspace && workspace.ownerRemovedAtMs === undefined) workspace.ownerRemovedAtMs = this.now();
     });
   }
 

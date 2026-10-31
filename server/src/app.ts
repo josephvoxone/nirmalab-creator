@@ -158,7 +158,9 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
         await publisherService.revokeAllFor(member.id);
         await quotaLimits.set(member.id, {});
         const { projects } = await scanProjects(options.dataDir, { withBytes: false });
-        return { orphanedProjects: projects.filter(project => project.ownerId === member.id).length };
+        // Wave 4: the account also leaves every workspace it joined, and its own empty workspace goes with it.
+        const cleaned = await workspaceService.cleanupRemovedUser(member.id).catch(() => ({ removedWorkspaces: 0, orphanedWorkspaces: 0 }));
+        return { orphanedProjects: projects.filter(project => project.ownerId === member.id).length + cleaned.orphanedWorkspaces };
       },
       bootstrapAdminEmail: env.OPENCREATOR_ADMIN_EMAIL,
       bootstrapAdminPassword: env.OPENCREATOR_ADMIN_PASSWORD,

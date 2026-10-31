@@ -82,6 +82,31 @@ export class WorkspaceService {
     };
   }
 
+  /**
+   * Platform admin removed an account (wired into `onMemberRemoved`).
+   *
+   *  - every membership of that person goes, in every workspace (no dangling members, no access left anywhere);
+   *  - their workspaces that hold no project are deleted with their invites (a dead empty "Ruang kerja X" is noise);
+   *  - one that still holds projects is KEPT and marked `ownerRemovedAtMs`, so the projects are never lost and the
+   *    admin console can transfer them. Nothing here deletes a project.
+   */
+  async cleanupRemovedUser(userId: string): Promise<{ removedWorkspaces: number; orphanedWorkspaces: number }> {
+    const counts = await this.projectCounts();
+    const owned = this.options.store.list().filter(w => w.ownerId === userId);
+    await this.options.store.removeMembershipsOf(userId);
+    let removedWorkspaces = 0;
+    let orphanedWorkspaces = 0;
+    for (const workspace of owned) {
+      if ((counts.get(workspace.id) ?? 0) === 0) {
+        if (await this.options.store.forceDelete(workspace.id)) removedWorkspaces += 1;
+      } else {
+        await this.options.store.markOwnerRemoved(workspace.id);
+        orphanedWorkspaces += 1;
+      }
+    }
+    return { removedWorkspaces, orphanedWorkspaces };
+  }
+
   /** Projects per workspace, from `workspaceId` in story.json only (one pass, no cache: the tree is small). */
   async projectCounts(): Promise<Map<string, number>> {
     const counts = new Map<string, number>();
