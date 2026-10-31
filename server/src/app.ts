@@ -232,7 +232,9 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
     markStale: id => stories.markVideoStale(id),
     client: elevenClient,
     queue: dubQueue,
-    probe: async file => (await (options.stories?.probe ?? probeClip)(file)).durationSec
+    probe: async file => (await (options.stories?.probe ?? probeClip)(file)).durationSec,
+    // Real clip lengths give the dub-fit check its window; a story with no rendered clip yet falls back to the 6 s Flow clip.
+    clipSeconds: async id => Object.fromEntries(((await stories.get(id))?.shots ?? []).flatMap(s => (typeof s.durationSec === 'number' && s.durationSec > 0 ? [[s.id, s.durationSec] as const] : [])))
   });
   await registerDubRoutes(server, { userAuthStore, stories, dub: dubService, client: elevenClient, keys: { elevenlabs: elevenKeys, gemini: geminiKeys }, routing: textRouting, fetch: providerFetch });
   // Shots the user already confirmed before a restart are queued again.

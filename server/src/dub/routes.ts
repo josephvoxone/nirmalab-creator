@@ -184,7 +184,7 @@ export async function registerDubRoutes(server: FastifyInstance, options: DubRou
     try { return { plan: await dub.plan(request.params.id, scope, request.body?.force === true ? { force: true } : {}) }; } catch (error) { return fail(reply, error); }
   });
 
-  server.post<{ Params: { id: string }; Body: { scope?: unknown; confirmCredits?: unknown; force?: unknown } | undefined }>('/api/stories/:id/dub/render', async (request, reply) => {
+  server.post<{ Params: { id: string }; Body: { scope?: unknown; confirmCredits?: unknown; force?: unknown; acceptTooLong?: unknown } | undefined }>('/api/stories/:id/dub/render', async (request, reply) => {
     const user = requireAdmin(auth, request, reply);
     if (!user) return undefined;
     const scope = parseScope(request.body?.scope);
@@ -194,7 +194,8 @@ export async function registerDubRoutes(server: FastifyInstance, options: DubRou
       const state = await dub.render(request.params.id, scope, {
         owner: user.id,
         ...(typeof confirm === 'number' ? { confirmCredits: confirm } : {}),
-        ...(request.body?.force === true ? { force: true } : {})
+        ...(request.body?.force === true ? { force: true } : {}),
+        ...(request.body?.acceptTooLong === true ? { acceptTooLong: true } : {})
       });
       return reply.code(202).send({ dub: state });
     } catch (error) { return fail(reply, error); }

@@ -15,6 +15,7 @@ import { DEFAULT_DUB_MODEL, DUB_MODELS, DubError, MAX_TEXT_CHARS, estimateCredit
 import type { FairQueue } from '../lib/fair-queue.js';
 import { estimateWords, type Word } from './words.js';
 import { normalizeText } from './text.js';
+import { DEFAULT_CLIP_SEC, clipSeconds, fitFor, windowSeconds, type FitView } from './fit.js';
 import { SHOT_ID, narrationOf, type Shot, type Storyboard } from '../stories/storyboard.js';
 
 export type DubSettings = { voiceId?: string; modelId: string; languageCode: string; voice: Required<VoiceSettings>; keepAmbient: boolean };
@@ -32,13 +33,16 @@ type Doc = { version: 1; settings: DubSettings; shots: Record<string, ShotDub> }
 export type ShotView = {
   shotId: string; sceneId?: string; text: string; textSource: 'narration' | 'override'; voiceId?: string; chars: number;
   status: ShotStatus; skipped: boolean; tooLong: boolean; error?: string; seconds?: number; audio?: string;
+  /** Does the line fit the shot (free estimate, or the real length of a finished dub)? Absent for a shot without text. */
+  fit?: FitView;
 };
 export type DubState = {
   configured: boolean; settings: DubSettings; models: DubModel[];
   shots: ShotView[];
   totals: { dubbable: number; done: number; stale: number; failed: number; active: number; chars: number };
 };
-export type DubPlan = { shotIds: string[]; chars: number; credits: number; modelId: string };
+/** `blocked`: chosen shots whose line is far too long for their clip: `render` refuses them unless `acceptTooLong`. */
+export type DubPlan = { shotIds: string[]; chars: number; credits: number; modelId: string; blocked: string[] };
 /** `words`: when each word is spoken (seconds into the file), for the karaoke subtitles. */
 export type AssemblyDub = {
   keepAmbient: boolean; shots: Record<string, { file: string; seconds: number; words?: Word[] }>;
@@ -57,6 +61,8 @@ export type DubDeps = {
   };
   queue: FairQueue;
   probe: (file: string) => Promise<number>;
+  /** Length of each rendered clip of the story (seconds by shot id); unknown shots count as DEFAULT_CLIP_SEC. */
+  clipSeconds?: (storyId: string) => Promise<Record<string, number>>;
 };
 
 export const DEFAULT_VOICE: Required<VoiceSettings> = { stability: 0.5, similarityBoost: 0.75, style: 0, speed: 1, speakerBoost: true };
@@ -138,8 +144,25 @@ export class DubService {
     return own.status === 'failed' ? 'failed' : 'none';
   }
 
+  /** Fit of every spoken shot to the window the assembler will give its dub. */
+  private async fitsOf(id: string, doc: Doc, board: Storyboard): Promise<Map<string, FitView>> {
+    const clips = (await this.deps.clipSeconds?.(id).catch(() => undefined)) ?? {};
+    const crossfade = typeof board.crossfade === 'number' && board.crossfade >= 0 ? board.crossfade : undefined;
+    const out = new Map<string, FitView>();
+    board.shots.forEach((shot, i) => {
+      const e = this.effective(doc, shot);
+      if (!e.text) return;
+      const isLast = i === board.shots.length - 1;
+      const full = clips[shot.id] && clips[shot.id]! > 0 ? clips[shot.id]! : DEFAULT_CLIP_SEC;
+      const windowSec = windowSeconds({ clipSec: clipSeconds(shot.trim, full), isLast, ...(crossfade !== undefined ? { crossfade } : {}) });
+      out.set(shot.id, fitFor({ text: e.text, windowSec, isLast, speed: doc.settings.voice.speed, ...(e.fresh && typeof e.entry.seconds === 'number' ? { measuredSec: e.entry.seconds } : {}) }));
+    });
+    return out;
+  }
+
   async state(id: string): Promise<DubState> {
     const [doc, board] = await Promise.all([this.read(id), this.deps.board(id)]);
+    const fits = await this.fitsOf(id, doc, board);
     const sceneOf = new Map<string, string>();
     for (const sc of board.scenes ?? []) for (const sid of sc.shots) sceneOf.set(sid, sc.id);
     const shots: ShotView[] = board.shots.map(shot => {
@@ -148,7 +171,7 @@ export class DubService {
       return {
         shotId: shot.id, ...(sceneOf.has(shot.id) ? { sceneId: sceneOf.get(shot.id)! } : {}),
         text: e.text, textSource: e.textSource, ...(e.voiceId ? { voiceId: e.voiceId } : {}), chars: e.text.length,
-        status, skipped: !e.text, tooLong: e.text.length > MAX_TEXT_CHARS,
+        status, skipped: !e.text, tooLong: e.text.length > MAX_TEXT_CHARS, ...(fits.has(shot.id) ? { fit: fits.get(shot.id)! } : {}),
         ...(e.entry.status === 'failed' && e.entry.error ? { error: e.entry.error } : {}),
         ...(e.entry.seconds !== undefined && e.entry.file ? { seconds: e.entry.seconds } : {}),
         ...(e.entry.file ? { audio: `${shot.id}-${(e.entry.hash ?? '').slice(0, 8)}` } : {})
@@ -242,8 +265,9 @@ export class DubService {
     return (await this.planWithHashes(id, scope, options)).plan;
   }
 
-  private async planWithHashes(id: string, scope: DubScope, options: { force?: boolean } = {}): Promise<{ plan: DubPlan; hashes: Map<string, string> }> {
+  private async planWithHashes(id: string, scope: DubScope, options: { force?: boolean } = {}): Promise<{ plan: DubPlan; hashes: Map<string, string>; fits: Map<string, FitView> }> {
     const [doc, board] = await Promise.all([this.read(id), this.deps.board(id)]);
+    const fits = await this.fitsOf(id, doc, board);
     let ids: string[];
     if (scope.kind === 'all') ids = board.shots.map(s => s.id);
     else if (scope.kind === 'scene') {
@@ -269,7 +293,8 @@ export class DubService {
       const status = this.statusOf(doc, shot);
       if (options.force || status === 'none' || status === 'stale' || status === 'failed') { chosen.push(sid); texts.push(e.text); hashes.set(sid, e.hash); }
     }
-    return { plan: { shotIds: chosen, chars: texts.reduce((n, t) => n + t.length, 0), credits: estimateCredits(texts, doc.settings.modelId), modelId: doc.settings.modelId }, hashes };
+    const blocked = chosen.filter(sid => fits.get(sid)?.level === 'block');
+    return { plan: { shotIds: chosen, chars: texts.reduce((n, t) => n + t.length, 0), credits: estimateCredits(texts, doc.settings.modelId), modelId: doc.settings.modelId, blocked }, hashes, fits };
   }
 
   /** Runs `fn` after every earlier decision of the same story has finished. */
@@ -281,13 +306,17 @@ export class DubService {
     return next;
   }
 
-  async render(id: string, scope: DubScope, opts: { owner: string; confirmCredits?: number; force?: boolean }): Promise<DubState> {
+  async render(id: string, scope: DubScope, opts: { owner: string; confirmCredits?: number; force?: boolean; acceptTooLong?: boolean }): Promise<DubState> {
     // Estimate, checks and the "queued" mark are ONE step per story: a second click waits for it and then sees the shots as taken.
     const started = await this.exclusive(id, async () => {
       await this.adopt(id);
-      const { plan, hashes } = await this.planWithHashes(id, scope, opts.force ? { force: true } : {});
+      const { plan, hashes, fits } = await this.planWithHashes(id, scope, opts.force ? { force: true } : {});
       if (!plan.shotIds.length) return undefined;
       if (!this.deps.client.configured()) throw new DubError('NOT_CONFIGURED', 'API key ElevenLabs belum diisi. Isi di Pengaturan › Provider › ElevenLabs.');
+      if (plan.blocked.length && opts.acceptTooLong !== true) {
+        const lines = plan.blocked.map(sid => { const f = fits.get(sid)!; return `${sid} (≈${f.predictedSec} dtk untuk jendela ${f.windowSec} dtk, ringkas ±${f.suggestChars ?? 0} karakter)`; });
+        throw new DubError('TOO_LONG', `Teks terlalu panjang untuk klipnya: ${lines.join('; ')}. Ringkas dulu, atau pilih "Dub tetap" bila memang mau dipercepat/dipotong.`);
+      }
       if (typeof opts.confirmCredits !== 'number' || Math.abs(opts.confirmCredits - plan.credits) > 0.01) {
         throw new DubError('CONFIRM_REQUIRED', `Dubbing ${plan.shotIds.length} shot memakai ±${plan.credits} kredit ElevenLabs (${plan.chars} karakter, model ${plan.modelId}). Konfirmasi dulu.`);
       }

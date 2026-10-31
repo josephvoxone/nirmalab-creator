@@ -1,0 +1,1290 @@
+{
+ "about": "Lentera (story_83dc8016d54e4974): 21 real ElevenLabs dubs (eleven_multilingual_v2, speed 1) with the measured length (ffprobe) and the clip window facts the assembler uses. No keys, no tokens.",
+ "modelId": "eleven_multilingual_v2",
+ "speed": 1,
+ "shots": [
+  {
+   "id": "01-dua-jalan",
+   "text": "Tuhan menunjukkan dua jalan.",
+   "chars": 28,
+   "seconds": 2.403,
+   "clipSeconds": 6.037333,
+   "trim": {
+    "out": 3.2
+   },
+   "last": false,
+   "words": [
+    [
+     "Tuhan",
+     0,
+     0.337
+    ],
+    [
+     "menunjukkan",
+     0.395,
+     1.022
+    ],
+    [
+     "dua",
+     1.091,
+     1.37
+    ],
+    [
+     "jalan.",
+     1.451,
+     2.368
+    ]
+   ]
+  },
+  {
+   "id": "02-aku-mau",
+   "text": "Satu penuh bunga, satunya gelap dan tidak berujung. Bayu memilih yang mudah.",
+   "chars": 76,
+   "seconds": 6.034,
+   "clipSeconds": 6.037333,
+   "last": false,
+   "words": [
+    [
+     "Satu",
+     0,
+     0.441
+    ],
+    [
+     "penuh",
+     0.534,
+     0.778
+    ],
+    [
+     "bunga,",
+     0.824,
+     1.37
+    ],
+    [
+     "satunya",
+     1.614,
+     2.032
+    ],
+    [
+     "gelap",
+     2.09,
+     2.415
+    ],
+    [
+     "dan",
+     2.531,
+     2.694
+    ],
+    [
+     "tidak",
+     2.74,
+     2.961
+    ],
+    [
+     "berujung.",
+     2.995,
+     3.634
+    ],
+    [
+     "Bayu",
+     4.017,
+     4.412
+    ],
+    [
+     "memilih",
+     4.493,
+     4.911
+    ],
+    [
+     "yang",
+     4.992,
+     5.12
+    ],
+    [
+     "mudah.",
+     5.155,
+     5.991
+    ]
+   ]
+  },
+  {
+   "id": "03-dibelokkan",
+   "text": "Tapi tangan Tuhan menggiringnya masuk ke dalam kegelapan.",
+   "chars": 57,
+   "seconds": 3.997,
+   "clipSeconds": 6.037333,
+   "last": false,
+   "words": [
+    [
+     "Tapi",
+     0,
+     0.383
+    ],
+    [
+     "tangan",
+     0.453,
+     0.778
+    ],
+    [
+     "Tuhan",
+     0.848,
+     1.196
+    ],
+    [
+     "menggiringnya",
+     1.265,
+     1.904
+    ],
+    [
+     "masuk",
+     1.985,
+     2.485
+    ],
+    [
+     "ke",
+     2.508,
+     2.577
+    ],
+    [
+     "dalam",
+     2.635,
+     2.868
+    ],
+    [
+     "kegelapan.",
+     2.926,
+     3.947
+    ]
+   ]
+  },
+  {
+   "id": "04-kenapa",
+   "text": "Kenapa harus yang gelap, Tuhan?",
+   "chars": 31,
+   "seconds": 1.985,
+   "clipSeconds": 6.037333,
+   "last": false,
+   "words": [
+    [
+     "Kenapa",
+     0,
+     0.383
+    ],
+    [
+     "harus",
+     0.441,
+     0.72
+    ],
+    [
+     "yang",
+     0.766,
+     0.871
+    ],
+    [
+     "gelap,",
+     0.894,
+     1.184
+    ],
+    [
+     "Tuhan?",
+     1.207,
+     1.95
+    ]
+   ]
+  },
+  {
+   "id": "05-lentera",
+   "text": "Tuhan tidak menjawab. Dia hanya memberinya sebuah lentera.",
+   "chars": 58,
+   "seconds": 4.598,
+   "clipSeconds": 6.037333,
+   "last": false,
+   "words": [
+    [
+     "Tuhan",
+     0,
+     0.302
+    ],
+    [
+     "tidak",
+     0.36,
+     0.615
+    ],
+    [
+     "menjawab.",
+     0.662,
+     1.428
+    ],
+    [
+     "Dia",
+     2.125,
+     2.334
+    ],
+    [
+     "hanya",
+     2.415,
+     2.635
+    ],
+    [
+     "memberinya",
+     2.694,
+     3.193
+    ],
+    [
+     "sebuah",
+     3.262,
+     3.611
+    ],
+    [
+     "lentera.",
+     3.646,
+     4.551
+    ]
+   ]
+  },
+  {
+   "id": "06-satu-langkah",
+   "text": "Jalannya sangat gelap. Cahaya lentera itu hanya cukup untuk satu langkah.",
+   "chars": 73,
+   "seconds": 4.78,
+   "clipSeconds": 6.037333,
+   "last": false,
+   "words": [
+    [
+     "Jalannya",
+     0,
+     0.43
+    ],
+    [
+     "sangat",
+     0.476,
+     0.731
+    ],
+    [
+     "gelap.",
+     0.789,
+     1.289
+    ],
+    [
+     "Cahaya",
+     1.567,
+     1.962
+    ],
+    [
+     "lentera",
+     2.009,
+     2.345
+    ],
+    [
+     "itu",
+     2.392,
+     2.554
+    ],
+    [
+     "hanya",
+     2.612,
+     2.81
+    ],
+    [
+     "cukup",
+     2.856,
+     3.181
+    ],
+    [
+     "untuk",
+     3.262,
+     3.483
+    ],
+    [
+     "satu",
+     3.529,
+     3.762
+    ],
+    [
+     "langkah.",
+     3.82,
+     4.737
+    ]
+   ]
+  },
+  {
+   "id": "07-jurang",
+   "text": "Jurang di kiri, tebing di kanan. Kaki Bayu gemetar, tapi ia melangkah.",
+   "chars": 70,
+   "seconds": 6.4,
+   "clipSeconds": 6.037333,
+   "last": false,
+   "words": [
+    [
+     "Jurang",
+     0,
+     0.453
+    ],
+    [
+     "di",
+     0.522,
+     0.592
+    ],
+    [
+     "kiri,",
+     0.65,
+     1.219
+    ],
+    [
+     "tebing",
+     1.37,
+     1.765
+    ],
+    [
+     "di",
+     1.834,
+     1.904
+    ],
+    [
+     "kanan.",
+     1.95,
+     2.566
+    ],
+    [
+     "Kaki",
+     2.949,
+     3.274
+    ],
+    [
+     "Bayu",
+     3.344,
+     3.622
+    ],
+    [
+     "gemetar,",
+     3.68,
+     4.4
+    ],
+    [
+     "tapi",
+     4.644,
+     4.969
+    ],
+    [
+     "ia",
+     5.039,
+     5.19
+    ],
+    [
+     "melangkah.",
+     5.248,
+     6.362
+    ]
+   ]
+  },
+  {
+   "id": "08-duri",
+   "text": "Lalu jalan itu dipenuhi duri. Bayu menerobosnya dengan sebatang ranting.",
+   "chars": 72,
+   "seconds": 5.851,
+   "clipSeconds": 6.037333,
+   "last": false,
+   "words": [
+    [
+     "Lalu",
+     0,
+     0.302
+    ],
+    [
+     "jalan",
+     0.372,
+     0.639
+    ],
+    [
+     "itu",
+     0.708,
+     0.871
+    ],
+    [
+     "dipenuhi",
+     0.929,
+     1.405
+    ],
+    [
+     "duri.",
+     1.474,
+     2.125
+    ],
+    [
+     "Bayu",
+     2.566,
+     2.856
+    ],
+    [
+     "menerobosnya",
+     2.902,
+     3.715
+    ],
+    [
+     "dengan",
+     3.773,
+     3.994
+    ],
+    [
+     "sebatang",
+     4.063,
+     4.493
+    ],
+    [
+     "ranting.",
+     4.551,
+     5.805
+    ]
+   ]
+  },
+  {
+   "id": "09-sari",
+   "text": "Di balik duri itu, seorang anak meringkuk sendirian di dalam gelap.",
+   "chars": 67,
+   "seconds": 5.251,
+   "clipSeconds": 6.037333,
+   "last": false,
+   "words": [
+    [
+     "Di",
+     0,
+     0.139
+    ],
+    [
+     "balik",
+     0.197,
+     0.464
+    ],
+    [
+     "duri",
+     0.511,
+     0.743
+    ],
+    [
+     "itu,",
+     0.801,
+     1.358
+    ],
+    [
+     "seorang",
+     1.533,
+     1.916
+    ],
+    [
+     "anak",
+     1.997,
+     2.241
+    ],
+    [
+     "meringkuk",
+     2.31,
+     2.786
+    ],
+    [
+     "sendirian",
+     2.844,
+     3.46
+    ],
+    [
+     "di",
+     3.541,
+     3.646
+    ],
+    [
+     "dalam",
+     3.715,
+     3.971
+    ],
+    [
+     "gelap.",
+     4.04,
+     5.201
+    ]
+   ]
+  },
+  {
+   "id": "10-terluka",
+   "text": "Bayu mengulurkan tangan. Durinya perih, dan hampir saja ia mundur.",
+   "chars": 66,
+   "seconds": 5.616,
+   "clipSeconds": 6.037333,
+   "last": false,
+   "words": [
+    [
+     "Bayu",
+     0,
+     0.453
+    ],
+    [
+     "mengulurkan",
+     0.522,
+     1.149
+    ],
+    [
+     "tangan.",
+     1.207,
+     1.776
+    ],
+    [
+     "Durinya",
+     2.101,
+     2.554
+    ],
+    [
+     "perih,",
+     2.612,
+     3.181
+    ],
+    [
+     "dan",
+     3.39,
+     3.529
+    ],
+    [
+     "hampir",
+     3.611,
+     3.924
+    ],
+    [
+     "saja",
+     3.982,
+     4.307
+    ],
+    [
+     "ia",
+     4.365,
+     4.516
+    ],
+    [
+     "mundur.",
+     4.574,
+     5.573
+    ]
+   ]
+  },
+  {
+   "id": "11-angkat-lentera",
+   "text": "Tapi ia tetap masuk, dan mengangkat lenteranya untuk anak itu.",
+   "chars": 62,
+   "seconds": 4.911,
+   "clipSeconds": 6.037333,
+   "last": false,
+   "words": [
+    [
+     "Tapi",
+     0,
+     0.418
+    ],
+    [
+     "ia",
+     0.476,
+     0.592
+    ],
+    [
+     "tetap",
+     0.639,
+     0.952
+    ],
+    [
+     "masuk,",
+     1.033,
+     1.567
+    ],
+    [
+     "dan",
+     1.846,
+     1.997
+    ],
+    [
+     "mengangkat",
+     2.055,
+     2.531
+    ],
+    [
+     "lenteranya",
+     2.601,
+     3.146
+    ],
+    [
+     "untuk",
+     3.204,
+     3.448
+    ],
+    [
+     "anak",
+     3.529,
+     3.762
+    ],
+    [
+     "itu.",
+     3.831,
+     4.876
+    ]
+   ]
+  },
+  {
+   "id": "12-cahaya-di-hati",
+   "text": "Cahaya jatuh di wajah anak itu, dan di dadanya mulai menyala api kecil.",
+   "chars": 71,
+   "seconds": 5.695,
+   "clipSeconds": 6.037333,
+   "last": false,
+   "words": [
+    [
+     "Cahaya",
+     0,
+     0.592
+    ],
+    [
+     "jatuh",
+     0.673,
+     1.08
+    ],
+    [
+     "di",
+     1.103,
+     1.161
+    ],
+    [
+     "wajah",
+     1.219,
+     1.509
+    ],
+    [
+     "anak",
+     1.556,
+     1.753
+    ],
+    [
+     "itu,",
+     1.823,
+     2.276
+    ],
+    [
+     "dan",
+     2.485,
+     2.647
+    ],
+    [
+     "di",
+     2.705,
+     2.786
+    ],
+    [
+     "dadanya",
+     2.844,
+     3.239
+    ],
+    [
+     "mulai",
+     3.297,
+     3.738
+    ],
+    [
+     "menyala",
+     3.808,
+     4.145
+    ],
+    [
+     "api",
+     4.203,
+     4.412
+    ],
+    [
+     "kecil.",
+     4.447,
+     5.666
+    ]
+   ]
+  },
+  {
+   "id": "13-baju-robek",
+   "text": "Sesudah itu, ia bertemu seorang kakek berbaju robek, dan menyelimutinya pelan.",
+   "chars": 78,
+   "seconds": 6.269,
+   "clipSeconds": 6.037333,
+   "last": false,
+   "words": [
+    [
+     "Sesudah",
+     0,
+     0.464
+    ],
+    [
+     "itu,",
+     0.511,
+     0.952
+    ],
+    [
+     "ia",
+     1.126,
+     1.265
+    ],
+    [
+     "bertemu",
+     1.324,
+     1.741
+    ],
+    [
+     "seorang",
+     1.811,
+     2.229
+    ],
+    [
+     "kakek",
+     2.276,
+     2.566
+    ],
+    [
+     "berbaju",
+     2.612,
+     3.03
+    ],
+    [
+     "robek,",
+     3.077,
+     3.576
+    ],
+    [
+     "dan",
+     3.901,
+     4.11
+    ],
+    [
+     "menyelimutinya",
+     4.191,
+     5.074
+    ],
+    [
+     "pelan.",
+     5.19,
+     6.223
+    ]
+   ]
+  },
+  {
+   "id": "14-dikuatkan",
+   "text": "Lalu seorang perempuan muda menangis di atas batu. Bayu menggenggam tangannya.",
+   "chars": 78,
+   "seconds": 6.531,
+   "clipSeconds": 6.037333,
+   "last": false,
+   "words": [
+    [
+     "Lalu",
+     0,
+     0.29
+    ],
+    [
+     "seorang",
+     0.36,
+     0.72
+    ],
+    [
+     "perempuan",
+     0.789,
+     1.242
+    ],
+    [
+     "muda",
+     1.3,
+     1.741
+    ],
+    [
+     "menangis",
+     1.985,
+     2.531
+    ],
+    [
+     "di",
+     2.647,
+     2.717
+    ],
+    [
+     "atas",
+     2.763,
+     2.995
+    ],
+    [
+     "batu.",
+     3.053,
+     3.599
+    ],
+    [
+     "Bayu",
+     4.04,
+     4.528
+    ],
+    [
+     "menggenggam",
+     4.644,
+     5.19
+    ],
+    [
+     "tangannya.",
+     5.283,
+     6.502
+    ]
+   ]
+  },
+  {
+   "id": "15-didoakan",
+   "text": "Lalu seorang anak kecil yang takut sendirian. Mereka berlutut, dan berdoa.",
+   "chars": 74,
+   "seconds": 5.146,
+   "clipSeconds": 6.037333,
+   "last": false,
+   "words": [
+    [
+     "Lalu",
+     0,
+     0.255
+    ],
+    [
+     "seorang",
+     0.313,
+     0.627
+    ],
+    [
+     "anak",
+     0.685,
+     0.871
+    ],
+    [
+     "kecil",
+     0.894,
+     1.219
+    ],
+    [
+     "yang",
+     1.277,
+     1.416
+    ],
+    [
+     "takut",
+     1.463,
+     1.8
+    ],
+    [
+     "sendirian.",
+     1.846,
+     2.543
+    ],
+    [
+     "Mereka",
+     2.868,
+     3.135
+    ],
+    [
+     "berlutut,",
+     3.181,
+     3.727
+    ],
+    [
+     "dan",
+     3.843,
+     3.982
+    ],
+    [
+     "berdoa.",
+     4.04,
+     5.108
+    ]
+   ]
+  },
+  {
+   "id": "16-sendirian",
+   "text": "Bayu mengira ia berjalan sendirian. Ia tidak tahu ada yang mengikuti cahayanya.",
+   "chars": 79,
+   "seconds": 6.087,
+   "clipSeconds": 6.037333,
+   "last": false,
+   "words": [
+    [
+     "Bayu",
+     0,
+     0.313
+    ],
+    [
+     "mengira",
+     0.36,
+     0.685
+    ],
+    [
+     "ia",
+     0.755,
+     0.894
+    ],
+    [
+     "berjalan",
+     0.94,
+     1.393
+    ],
+    [
+     "sendirian.",
+     1.463,
+     2.206
+    ],
+    [
+     "Ia",
+     2.415,
+     2.577
+    ],
+    [
+     "tidak",
+     2.612,
+     2.868
+    ],
+    [
+     "tahu",
+     2.902,
+     3.216
+    ],
+    [
+     "ada",
+     3.332,
+     3.611
+    ],
+    [
+     "yang",
+     3.68,
+     3.831
+    ],
+    [
+     "mengikuti",
+     3.889,
+     4.481
+    ],
+    [
+     "cahayanya.",
+     4.551,
+     6.037
+    ]
+   ]
+  },
+  {
+   "id": "17-keluar",
+   "text": "Akhirnya Bayu keluar dari hutan. Tangan Tuhan masih di sana, menunggunya.",
+   "chars": 73,
+   "seconds": 6.217,
+   "clipSeconds": 6.037333,
+   "last": false,
+   "words": [
+    [
+     "Akhirnya",
+     0,
+     0.557
+    ],
+    [
+     "Bayu",
+     0.627,
+     0.906
+    ],
+    [
+     "keluar",
+     0.975,
+     1.312
+    ],
+    [
+     "dari",
+     1.393,
+     1.544
+    ],
+    [
+     "hutan.",
+     1.591,
+     2.241
+    ],
+    [
+     "Tangan",
+     2.682,
+     3.019
+    ],
+    [
+     "Tuhan",
+     3.088,
+     3.437
+    ],
+    [
+     "masih",
+     3.506,
+     3.796
+    ],
+    [
+     "di",
+     3.82,
+     3.889
+    ],
+    [
+     "sana,",
+     3.947,
+     4.493
+    ],
+    [
+     "menunggunya.",
+     4.876,
+     6.177
+    ]
+   ]
+  },
+  {
+   "id": "18-kenapa",
+   "text": "Tuhan, wajahku penuh goresan. Kenapa jalannya sesukar itu?",
+   "chars": 58,
+   "seconds": 5.251,
+   "clipSeconds": 6.037333,
+   "last": false,
+   "words": [
+    [
+     "Tuhan,",
+     0,
+     0.615
+    ],
+    [
+     "wajahku",
+     0.743,
+     1.335
+    ],
+    [
+     "penuh",
+     1.428,
+     1.683
+    ],
+    [
+     "goresan.",
+     1.718,
+     2.403
+    ],
+    [
+     "Kenapa",
+     3.007,
+     3.367
+    ],
+    [
+     "jalannya",
+     3.425,
+     3.808
+    ],
+    [
+     "sesukar",
+     3.855,
+     4.272
+    ],
+    [
+     "itu?",
+     4.319,
+     5.201
+    ]
+   ]
+  },
+  {
+   "id": "19-menoleh",
+   "text": "Bayu menoleh, dan baru mengerti: mereka berjalan keluar mengikuti cahayanya.",
+   "chars": 76,
+   "seconds": 5.381,
+   "clipSeconds": 6.037333,
+   "last": false,
+   "words": [
+    [
+     "Bayu",
+     0,
+     0.348
+    ],
+    [
+     "menoleh,",
+     0.406,
+     0.906
+    ],
+    [
+     "dan",
+     1.115,
+     1.265
+    ],
+    [
+     "baru",
+     1.335,
+     1.544
+    ],
+    [
+     "mengerti:",
+     1.579,
+     2.276
+    ],
+    [
+     "mereka",
+     2.45,
+     2.74
+    ],
+    [
+     "berjalan",
+     2.786,
+     3.193
+    ],
+    [
+     "keluar",
+     3.262,
+     3.611
+    ],
+    [
+     "mengikuti",
+     3.68,
+     4.156
+    ],
+    [
+     "cahayanya.",
+     4.214,
+     5.341
+    ]
+   ]
+  },
+  {
+   "id": "20-keping-perak",
+   "text": "Kata Tuhan, \"Terima kasih. Kau setia. Ini upahmu: sekeping perak.\"",
+   "chars": 66,
+   "seconds": 6.687,
+   "clipSeconds": 6.037333,
+   "last": false,
+   "words": [
+    [
+     "Kata",
+     0,
+     0.348
+    ],
+    [
+     "Tuhan,",
+     0.406,
+     1.01
+    ],
+    [
+     "\"Terima",
+     1.126,
+     1.567
+    ],
+    [
+     "kasih.",
+     1.614,
+     2.171
+    ],
+    [
+     "Kau",
+     2.45,
+     2.775
+    ],
+    [
+     "setia.",
+     2.844,
+     3.553
+    ],
+    [
+     "Ini",
+     3.796,
+     4.04
+    ],
+    [
+     "upahmu:",
+     4.122,
+     4.818
+    ],
+    [
+     "sekeping",
+     4.888,
+     5.364
+    ],
+    [
+     "perak.\"",
+     5.433,
+     6.641
+    ]
+   ]
+  },
+  {
+   "id": "21-jalan-pulang",
+   "text": "Jalan sukar yang kamu lalui, selalu ada rencana Tuhan tersembunyi di baliknya untuk menyelamatkan yang terhilang.",
+   "chars": 113,
+   "seconds": 7.654,
+   "clipSeconds": 6.037333,
+   "last": true,
+   "words": [
+    [
+     "Jalan",
+     0,
+     0.325
+    ],
+    [
+     "sukar",
+     0.395,
+     0.731
+    ],
+    [
+     "yang",
+     0.789,
+     0.917
+    ],
+    [
+     "kamu",
+     0.987,
+     1.289
+    ],
+    [
+     "lalui,",
+     1.335,
+     1.916
+    ],
+    [
+     "selalu",
+     2.194,
+     2.624
+    ],
+    [
+     "ada",
+     2.694,
+     2.868
+    ],
+    [
+     "rencana",
+     2.937,
+     3.413
+    ],
+    [
+     "Tuhan",
+     3.471,
+     3.785
+    ],
+    [
+     "tersembunyi",
+     3.843,
+     4.505
+    ],
+    [
+     "di",
+     4.551,
+     4.632
+    ],
+    [
+     "baliknya",
+     4.69,
+     5.248
+    ],
+    [
+     "untuk",
+     5.526,
+     5.84
+    ],
+    [
+     "menyelamatkan",
+     5.898,
+     6.606
+    ],
+    [
+     "yang",
+     6.676,
+     6.815
+    ],
+    [
+     "terhilang.",
+     6.885,
+     7.616
+    ]
+   ]
+  }
+ ]
+}
