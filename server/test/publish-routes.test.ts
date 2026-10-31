@@ -9,7 +9,7 @@ import { buildApp } from '../src/app.js';
 
 const DONE_ID = 'story_0123456789abcdef';
 
-async function setup(resolveStoryVideo?: (id: string) => Promise<string | undefined>) {
+async function setup(resolveStoryVideo?: (id: string) => Promise<string | undefined>, canAccessStory: (id: string, user: { id: string }) => Promise<boolean> = async () => true) {
   const dataDir = mkdtempSync(join(tmpdir(), 'nc-pub-'));
   const userAuthStore = new UserAuthStore(dataDir);
   const admin = await userAuthStore.createUser({ email: 'admin@x.io', password: 'admin-pass-1', isAdmin: true });
@@ -24,7 +24,7 @@ async function setup(resolveStoryVideo?: (id: string) => Promise<string | undefi
   });
   const service = { publish, handleCallback } as unknown as PublisherService;
   const server = Fastify();
-  await registerPublisherRoutes(server, { service, userAuthStore, env: {}, resolveStoryVideo });
+  await registerPublisherRoutes(server, { service, userAuthStore, env: {}, resolveStoryVideo, canAccessStory });
   await server.ready();
   const cookie = (id: string) => `oc_session=${userAuthStore.createSession(id).token}`;
   return { server, publish, handleCallback, adminId: admin.id, adminCookie: cookie(admin.id), memberCookie: cookie(member.id) };
@@ -144,6 +144,18 @@ describe('publish route with storyId', () => {
       expect(res.statusCode).toBe(400);
       expect(res.json().error.message).toMatch(/youtube/i);
     }
+    expect(publish).not.toHaveBeenCalled();
+  });
+
+  it('answers 404 and does not publish when the caller does not own the story (ownership is asked before the video is resolved)', async () => {
+    const resolve = vi.fn(async () => '/data/final.mp4');
+    const canAccess = vi.fn(async () => false);
+    const { server, publish, adminCookie } = await setup(resolve, canAccess);
+    const res = await server.inject({ method: 'POST', url: '/api/publish/youtube/publish', headers: { cookie: adminCookie }, payload: { ...body, storyId: DONE_ID } });
+    expect(res.statusCode).toBe(404);
+    expect(res.json().error.code).toBe('NOT_FOUND');
+    expect(canAccess).toHaveBeenCalledWith(DONE_ID, expect.objectContaining({ isAdmin: true }));
+    expect(resolve).not.toHaveBeenCalled();
     expect(publish).not.toHaveBeenCalled();
   });
 

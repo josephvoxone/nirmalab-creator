@@ -19,6 +19,11 @@ export type PublisherRouteOptions = {
    * `stories/caption.ts` writes the hook formula). Read-only; publishing stays admin.
    */
   resolveStoryPreview?: (id: string) => Promise<{ title: string; caption: string } | undefined>;
+  /**
+   * Is this user the owner of the story? Asked BEFORE anything about the story is resolved or any token is read;
+   * `false` answers exactly like a story that does not exist (404). Required: there is no "allow everyone" default.
+   */
+  canAccessStory: (storyId: string, user: { id: string; email: string; isAdmin: boolean }) => Promise<boolean>;
 };
 
 const STORY_ID = /^story_[a-f0-9]{16}$/;
@@ -75,12 +80,13 @@ export async function registerPublisherRoutes(server: FastifyInstance, options: 
   });
 
   // The publish preview: title + a caption generated from the story's own facts. Read-only and
-  // available to members; the publish call itself stays admin-only.
+  // available to the story's owner only (anyone else gets the same 404 as for a missing story); the publish call itself stays admin-only.
   server.get<{ Params: { storyId: string } }>('/api/publish/preview/:storyId', async (request, reply) => {
     const user = sessionUser(userAuthStore, request);
     if (!user) return reply.code(401).send({ error: { code: 'UNAUTHORIZED', message: 'Unauthorized' } });
     const storyId = request.params.storyId;
     if (!STORY_ID.test(storyId)) return reply.code(400).send({ error: { code: 'INVALID_INPUT', message: 'Invalid storyId' } });
+    if (!(await options.canAccessStory(storyId, user))) return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Video cerita belum selesai' } });
     const preview = options.resolveStoryPreview ? await options.resolveStoryPreview(storyId) : undefined;
     if (!preview) return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Video cerita belum selesai' } });
     return { title: preview.title, caption: preview.caption };
@@ -132,6 +138,7 @@ export async function registerPublisherRoutes(server: FastifyInstance, options: 
         if (typeof storyId !== 'string' || !STORY_ID.test(storyId)) {
           return reply.code(400).send({ error: { code: 'INVALID_INPUT', message: 'Invalid storyId' } });
         }
+        if (!(await options.canAccessStory(storyId, user))) return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Video cerita belum selesai' } });
         const resolved = options.resolveStoryVideo ? await options.resolveStoryVideo(storyId) : undefined;
         if (!resolved) return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Video cerita belum selesai' } });
         filePath = resolved;
