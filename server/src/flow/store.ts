@@ -576,6 +576,40 @@ export class FlowStore {
   }
 
   /**
+   * Tenancy backfill (additive; used only by `flow/backfill.ts`): give jobs that STILL have no `createdBy` the owner chosen for them.
+   * Compare-and-set inside the queue, so a job somebody attributed meanwhile is left alone; nothing else on a job changes and nothing
+   * is written when there is nothing to change. Returns what was assigned.
+   */
+  async assignCreatedBy(owners: Record<string, string>): Promise<Array<{ id: string; after: string }>> {
+    return this.serialize(async () => {
+      const state = await this.read();
+      const done: Array<{ id: string; after: string }> = [];
+      for (const job of state.jobs) {
+        const owner = owners[job.id];
+        if (!owner || job.createdBy) continue;
+        job.createdBy = owner.slice(0, 80);
+        done.push({ id: job.id, after: job.createdBy });
+      }
+      if (done.length) await this.write(state);
+      return done;
+    });
+  }
+
+  /** Undo of `assignCreatedBy`: remove the owner only where it is still exactly what the backfill set. Returns the ids reverted. */
+  async clearCreatedBy(entries: Array<{ id: string; after: string }>): Promise<string[]> {
+    return this.serialize(async () => {
+      const state = await this.read();
+      const wanted = new Map(entries.map(e => [e.id, e.after]));
+      const reverted: string[] = [];
+      for (const job of state.jobs) {
+        if (job.createdBy && wanted.get(job.id) === job.createdBy) { delete job.createdBy; reverted.push(job.id); }
+      }
+      if (reverted.length) await this.write(state);
+      return reverted;
+    });
+  }
+
+  /**
    * Claim the oldest queued job of one provider (default 'flow': the Mac bridge never sees
    * OpenRouter jobs). Flow claims pick an account (pool rotation, daily caps); OpenRouter claims don't.
    */

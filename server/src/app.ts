@@ -8,6 +8,7 @@ import { UserAuthStore } from './auth/store.js';
 import { registerFlowRoutes } from './flow/routes.js';
 import { registerFreeGenerateRoutes } from './generate/routes.js';
 import { migrateGenerateFiles } from './generate/migrate.js';
+import { backfillJobOwners } from './flow/backfill.js';
 import { PublisherService, isStoryOwner, migratePublisherTokensAtBoot, registerPublisherRoutes, resolveMainOwner } from './publisher/index.js';
 import { FlowStore } from './flow/store.js';
 import { pollinationsText } from './generate/pollinations.js';
@@ -229,6 +230,18 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
     } catch (error) {
       if (env.TENANCY_ENFORCE === '1') throw error;
       server.log.error({ err: error }, 'tenancy: migrasi berkas free-generate gagal (server tetap jalan; berkas lama tetap terbaca oleh pemilik utama)');
+    }
+  }
+  // T4 (jobs): Flow jobs without `createdBy` get one (story -> project owner, cover -> system:cover, Studio -> main owner). Only that
+  // field is written; backup + manifest + rollback; no-op once done. Runs after `ensureOwners` so every project already has an owner.
+  if (env.TENANCY_MIGRATE !== '0') {
+    try {
+      const mainOwnerId = resolveMainOwner(userAuthStore.listUsers(), env).owner?.user.id;
+      const backfill = await backfillJobOwners({ dataDir: options.dataDir, store: flowStore, ownerOfStory: id => stories.ownerOf(id), mainOwnerId, dryRun: env.TENANCY_DRY_RUN === '1' });
+      server.log.info({ tenancy: { jobs: { dryRun: backfill.dryRun, assigned: backfill.assigned.length, unassigned: backfill.unassigned.length, manifest: backfill.manifest } } }, 'tenancy: pemilik job Flow');
+    } catch (error) {
+      if (env.TENANCY_ENFORCE === '1') throw error;
+      server.log.error({ err: error }, 'tenancy: pengisian pemilik job Flow gagal (server tetap jalan; job tanpa pemilik dianggap milik pemilik utama)');
     }
   }
   // T7 (publisher): tokens saved before per-user storage were one global file per platform. Hand them to the main
