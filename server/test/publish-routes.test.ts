@@ -6,10 +6,11 @@ import { describe, expect, it, vi } from 'vitest';
 import { UserAuthStore } from '../src/auth/store.js';
 import { registerPublisherRoutes, type PublisherService } from '../src/publisher/index.js';
 import { buildApp } from '../src/app.js';
+import type { WorkspaceRole } from '../src/tenancy/workspace-role.js';
 
 const DONE_ID = 'story_0123456789abcdef';
 
-async function setup(resolveStoryVideo?: (id: string) => Promise<string | undefined>, canAccessStory: (id: string, user: { id: string }) => Promise<boolean> = async () => true) {
+async function setup(resolveStoryVideo?: (id: string) => Promise<string | undefined>, canAccessStory: (id: string, user: { id: string }) => Promise<WorkspaceRole | undefined> = async () => 'owner') {
   const dataDir = mkdtempSync(join(tmpdir(), 'nc-pub-'));
   const userAuthStore = new UserAuthStore(dataDir);
   const admin = await userAuthStore.createUser({ email: 'admin@x.io', password: 'admin-pass-1', isAdmin: true });
@@ -70,10 +71,21 @@ describe('publish route with storyId', () => {
     expect(publish.mock.calls[0]?.[2]).toMatchObject({ filePath: '/data/final.mp4' });
   });
 
-  it('refuses a raw filePath from a non-admin caller', async () => {
+  it('refuses a raw filePath from a member of the workspace (only a finished story can be published)', async () => {
+    // WAVE 4: an editor may publish, so the caller is no longer refused for being a member — the raw path is refused instead,
+    // and nothing is published.
     const { server, publish, memberCookie } = await setup(async () => undefined);
     const res = await server.inject({ method: 'POST', url: '/api/publish/youtube/publish', headers: { cookie: memberCookie }, payload: { ...body, filePath: '/etc/passwd' } });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error.message).toMatch(/storyId/);
+    expect(publish).not.toHaveBeenCalled();
+  });
+
+  it('a viewer of the workspace cannot publish (403 VIEWER_READ_ONLY) even for a finished story', async () => {
+    const { server, publish, memberCookie } = await setup(async () => '/data/final.mp4', async () => 'viewer');
+    const res = await server.inject({ method: 'POST', url: '/api/publish/youtube/publish', headers: { cookie: memberCookie }, payload: { ...body, storyId: DONE_ID } });
     expect(res.statusCode).toBe(403);
+    expect(res.json().error.code).toBe('VIEWER_READ_ONLY');
     expect(publish).not.toHaveBeenCalled();
   });
 
