@@ -16,8 +16,9 @@ import { sceneNumber } from '../assistant/resolve.js';
 import { MAX_UPLOAD_BYTES, NOT_IMAGE_MESSAGE, TOO_LARGE_MESSAGE, UPLOAD_FILE, UPLOAD_TYPES, UploadError, mimeOfFile, saveUpload, uploadsDir } from '../assistant/uploads.js';
 import type { TextModel } from '../llm/opencode.js';
 import { MAX_MUSIC_BYTES, MUSIC_MIME, MUSIC_TOO_LARGE_MESSAGE, MUSIC_TYPES, NOT_AUDIO_MESSAGE, type MusicExt } from './music.js';
+import { VIEWER_READ_ONLY_BODY, canEdit, personalWorkspaceId } from '../tenancy/workspace-role.js';
 
-const STATUS: Record<StoryError['code'], number> = { INVALID: 400, NOT_FOUND: 404, BUSY: 409, BUDGET: 409, STALE: 409 };
+const STATUS: Record<StoryError['code'], number> = { INVALID: 400, NOT_FOUND: 404, BUSY: 409, BUDGET: 409, STALE: 409, FORBIDDEN: 403 };
 
 function fail(reply: FastifyReply, error: unknown) {
   if (error instanceof QuotaError) return reply.code(429).send(error.toBody());
@@ -106,18 +107,46 @@ export async function registerStoryRoutes(
     return user;
   };
 
-  server.get('/api/stories', async (request, reply) => {
+  /**
+   * The workspace an edit lands in (WAVE 4): the one named, or the caller's personal workspace. Returns undefined after
+   * answering 403 (viewer) / 404 (not a member) so the route can stop. The project is never created in a workspace the
+   * caller cannot change.
+   */
+  const createWorkspace = async (named: unknown, userId: string, reply: FastifyReply): Promise<string | undefined> => {
+    if (named !== undefined && (typeof named !== 'string' || !named)) {
+      void badRequest(reply, 'workspaceId must be a workspace id');
+      return undefined;
+    }
+    const workspaceId = typeof named === 'string' ? named : personalWorkspaceId(userId);
+    const role = await stories.roleOfWorkspace(userId, workspaceId);
+    if (!role) { void reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Workspace not found' } }); return undefined; }
+    if (!canEdit(role)) { void reply.code(403).send(VIEWER_READ_ONLY_BODY); return undefined; }
+    return workspaceId;
+  };
+
+  server.get<{ Querystring: { workspace?: string } }>('/api/stories', async (request, reply) => {
     const user = member(request, reply);
     if (!user) return undefined;
-    // Only the caller's own projects (admin included): another user's titles never leave the server.
-    return { stories: await stories.listFor(user.id) };
+    // WAVE 4: the projects of every workspace the caller follows (admin included), each with its workspace name and role.
+    // `?workspace=` narrows it to one; a workspace the caller does not follow answers 404, like a project that does not exist.
+    const workspace = typeof request.query?.workspace === 'string' && request.query.workspace ? request.query.workspace : undefined;
+    try {
+      return { stories: await stories.listFor(user.id, workspace) };
+    } catch (error) {
+      if (error instanceof StoryError && error.code === 'NOT_FOUND') return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Workspace not found' } });
+      return fail(reply, error);
+    }
   });
 
-  server.post<{ Body: { storyboard?: unknown } }>('/api/stories', async (request, reply) => {
-    const user = requireAdmin(auth, request, reply);
+  server.post<{ Body: { storyboard?: unknown; workspaceId?: unknown } }>('/api/stories', async (request, reply) => {
+    const user = member(request, reply);
     if (!user) return undefined;
+    // WAVE 4: a project is created in a workspace the caller may EDIT (owner or editor); a viewer answers 403
+    // VIEWER_READ_ONLY and a non-member 404, exactly like the project routes. Absent workspaceId = the caller's personal one.
+    const workspaceId = await createWorkspace(request.body?.workspaceId, user.id, reply);
+    if (!workspaceId) return undefined;
     try {
-      return reply.code(201).send({ story: await stories.create(asBoard(request.body?.storyboard), { createdBy: user.id }) });
+      return reply.code(201).send({ story: await stories.create(asBoard(request.body?.storyboard), { createdBy: user.id, workspaceId }) });
     } catch (error) { return fail(reply, error); }
   });
 
@@ -143,9 +172,12 @@ export async function registerStoryRoutes(
     } catch (error) { return fail(reply, error); }
   });
 
-  server.post<{ Body: { premise?: unknown; shots?: unknown; style?: unknown; template?: unknown; look?: unknown; mode?: unknown; aspect?: unknown; narrator?: unknown; engine?: unknown } }>('/api/stories/draft', async (request, reply) => {
-    const user = requireAdmin(auth, request, reply);
+  server.post<{ Body: { premise?: unknown; shots?: unknown; style?: unknown; template?: unknown; look?: unknown; mode?: unknown; aspect?: unknown; narrator?: unknown; engine?: unknown; workspaceId?: unknown } }>('/api/stories/draft', async (request, reply) => {
+    const user = member(request, reply);
     if (!user) return undefined;
+    // WAVE 4: same workspace rule as POST /api/stories (an editor may draft into their workspace).
+    const workspaceId = await createWorkspace(request.body?.workspaceId, user.id, reply);
+    if (!workspaceId) return undefined;
     const premise = typeof request.body?.premise === 'string' ? request.body.premise.trim() : '';
     if (premise.length < 5) return reply.code(400).send({ error: { code: 'INVALID', message: 'Tulis premis cerita (min. 5 karakter)' } });
     // Checked before drafting: a bad engine must not cost an LLM call.
@@ -164,7 +196,7 @@ export async function registerStoryRoutes(
         narrator: typeof request.body?.narrator === 'string' ? request.body.narrator.slice(0, 200) : undefined
       }, options.generateText);
       const drafted = engine === undefined ? board : { ...board, engine: engine as Storyboard['engine'] };
-      return reply.code(201).send({ story: await stories.create(drafted, { createdBy: user.id }) });
+      return reply.code(201).send({ story: await stories.create(drafted, { createdBy: user.id, workspaceId }) });
     } catch (error) {
       if (error instanceof DraftError) return failDraft(reply, error, request.log);
       return fail(reply, error);

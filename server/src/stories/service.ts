@@ -26,6 +26,7 @@ import { composeStyle, resolveLook } from './looks.js';
 import { usdLabel } from '../providers/catalog.js';
 import { uploadPath } from '../assistant/uploads.js';
 import { MUSIC_FILE, NOT_AUDIO_MESSAGE, NO_SOUND_MESSAGE, musicExt } from './music.js';
+import { canEdit, makeWorkspaceAccess, personalWorkspaceId, workspaceIdOf, VIEWER_READ_ONLY_MESSAGE, type WorkspaceAccess, type WorkspaceRole } from '../tenancy/workspace-role.js';
 
 const MIN_IMAGE_BYTES = 10_000;
 
@@ -168,6 +169,8 @@ export type StoryRecord = {
   events: Array<{ atMs: number; message: string }>;
   /** User id that created the story; every Flow job it queues is attributed to them. */
   createdBy?: string;
+  /** The workspace the project belongs to (WAVE 4): access is decided by the caller's role here, not by `createdBy`. */
+  workspaceId?: string;
   /** Set by the tenancy migration when it gave an ownerless project to the primary owner (`migrasi-tenancy-1`); never set for projects created with an owner. */
   ownerAssignedBy?: string;
   ownerAssignedAt?: string;
@@ -238,10 +241,15 @@ export type StoryDeps = {
    * so. Absent dependency = nothing is checked. It never renders, queues or spends anything.
    */
   motion?: { check: (input: MotionInput) => Promise<MotionVerdict | undefined> };
+  /**
+   * WAVE 4: who may read/change a project, by workspace role. Optional: the default reads the workspace store under
+   * `deps.dataDir` (`tenancy/workspace-role.ts`, the adaptor the ws area replaces at merge).
+   */
+  workspace?: WorkspaceAccess;
 };
 
 export class StoryError extends Error {
-  constructor(public code: 'INVALID' | 'NOT_FOUND' | 'BUSY' | 'BUDGET' | 'STALE', message: string) {
+  constructor(public code: 'INVALID' | 'NOT_FOUND' | 'BUSY' | 'BUDGET' | 'STALE' | 'FORBIDDEN', message: string) {
     super(message);
   }
 }
@@ -288,11 +296,14 @@ export class StoryService {
   /** Motion backfills in flight, per story (a second request joins the first). */
   private motionRuns = new Map<string, Promise<MotionBackfill>>();
   private readonly root: string;
+  /** Workspace roles (WAVE 4): the only key to a project now. */
+  readonly workspace: WorkspaceAccess;
   /** Undo snapshots; they share this service's per-story lock. */
   readonly snapshots: SnapshotStore;
 
   constructor(private deps: StoryDeps) {
     this.root = join(deps.dataDir, 'stories');
+    this.workspace = deps.workspace ?? makeWorkspaceAccess(deps.dataDir);
     this.snapshots = new SnapshotStore(this.root, {
       lock: (id, fn) => this.withLock(id, fn),
       beforeTake: current => { if (BUSY_STATUSES.includes(current.status)) throw new StoryError('BUSY', 'Story sedang diproses; tunggu selesai atau gagal dulu'); },
@@ -443,7 +454,7 @@ export class StoryService {
     if (errors.length) throw new StoryError('INVALID', errors.join('; '));
   }
 
-  async create(input: Storyboard, options: { createdBy?: string } = {}): Promise<StoryRecord> {
+  async create(input: Storyboard, options: { createdBy?: string; workspaceId?: string } = {}): Promise<StoryRecord> {
     this.assertValid(input);
     const board = normalizeScenes(input);
     await this.assertReusable(board, options.createdBy, undefined);
@@ -464,7 +475,9 @@ export class StoryService {
         ...(board.mode === 'konsisten' && !s.reuse ? { frame: { status: 'pending' as const, attempts: 0 } } : {})
       })),
       events: [],
-      ...(options.createdBy ? { createdBy: options.createdBy } : {})
+      ...(options.createdBy ? { createdBy: options.createdBy } : {}),
+      // The workspace owns the project; absent = the creator's personal workspace (old clients, MCP, the draft route).
+      ...(options.workspaceId || options.createdBy ? { workspaceId: options.workspaceId ?? personalWorkspaceId(options.createdBy!) } : {})
     };
     await this.writeJson(join(this.storyDir(id), 'storyboard.json'), { ...board, slug: id });
     await this.save(record, 'Storyboard dibuat');
@@ -487,23 +500,79 @@ export class StoryService {
     return (await this.deps.legacyOwnerId?.()) || undefined;
   }
 
-  /** Tenancy (additive): the user a project belongs to; undefined for a missing project, or an ownerless one when there is no legacy owner. */
+  /**
+   * The workspace a record lives in: `workspaceId` when recorded, else the personal workspace of whoever made it (projects
+   * from before workspaces). `undefined` = an orphan (no owner either way): nobody reaches it, admin included.
+   */
+  private async workspaceOfRecord(record: StoryRecord | undefined): Promise<string | undefined> {
+    if (!record) return undefined;
+    const legacy = await this.deps.legacyOwnerId?.();
+    const createdBy = record.createdBy || legacy || undefined;
+    return workspaceIdOf(record, createdBy);
+  }
+
+  /** WAVE 4: the workspace of a project (undefined for a missing project, or an ownerless one). */
+  async workspaceOf(id: string): Promise<string | undefined> {
+    return this.workspaceOfRecord(await this.get(id).catch(() => undefined));
+  }
+
+  /** WAVE 4: `userId`'s role in the workspace of this project; `undefined` = not a member (answers 404, like a missing project). */
+  async roleFor(id: string, userId: string): Promise<WorkspaceRole | undefined> {
+    if (!userId) return undefined;
+    const workspaceId = await this.workspaceOf(id);
+    return workspaceId ? this.workspace.roleOf(userId, workspaceId) : undefined;
+  }
+
+  /** WAVE 4: `userId`'s role in a workspace named by a route (no project involved). */
+  async roleOfWorkspace(userId: string, workspaceId: string): Promise<WorkspaceRole | undefined> {
+    return this.workspace.roleOf(userId, workspaceId);
+  }
+
+  /**
+   * WAVE 4: the record when `userId` may act on it with at least `min` role. Not a member → NOT_FOUND (the same error as a
+   * project that does not exist: no oracle), a viewer on a write → FORBIDDEN with the VIEWER_READ_ONLY message.
+   */
+  async assertAccess(id: string, userId: string, min: 'viewer' | 'editor' = 'editor'): Promise<StoryRecord> {
+    const record = await this.get(id);
+    if (!record || !userId) throw new StoryError('NOT_FOUND', 'Story not found');
+    const role = await this.roleFor(id, userId);
+    if (!role) throw new StoryError('NOT_FOUND', 'Story not found');
+    if (min === 'editor' && !canEdit(role)) throw new StoryError('FORBIDDEN', VIEWER_READ_ONLY_MESSAGE);
+    return record;
+  }
+
+  /** Kept for the tenancy hotfixes that still say "owner": it now means "may change the project" (owner OR editor). */
+  assertOwner(id: string, userId: string): Promise<StoryRecord> {
+    return this.assertAccess(id, userId, 'editor');
+  }
+
+  /** Kept for admin metadata and the transfer route: the account recorded as the creator. Never a gate. */
   async ownerOf(id: string): Promise<string | undefined> {
     return this.effectiveOwner(await this.get(id).catch(() => undefined));
   }
 
-  /** Tenancy (additive): the record when `userId` owns it; NOT_FOUND otherwise, the same error as for a project that does not exist (no oracle). */
-  async assertOwner(id: string, userId: string): Promise<StoryRecord> {
-    const record = await this.get(id);
-    if (!record || !userId || (await this.effectiveOwner(record)) !== userId) throw new StoryError('NOT_FOUND', 'Story not found');
-    return record;
-  }
-
-  /** Tenancy (additive): only the projects `userId` owns, newest first. */
-  async listFor(userId: string): Promise<StoryRecord[]> {
+  /**
+   * WAVE 4: the projects of every workspace `userId` follows (optionally one workspace), newest first, each with its
+   * workspace name and the caller's role in it. A workspace the caller does not follow is NOT_FOUND (no oracle).
+   */
+  async listFor(userId: string, workspaceId?: string): Promise<Array<StoryRecord & { workspace: { id: string; name: string; role: WorkspaceRole } }>> {
     if (!userId) return [];
-    const legacy = (await this.deps.legacyOwnerId?.()) || undefined;
-    return (await this.list()).filter(r => (r.createdBy || legacy) === userId);
+    const followed = new Map((await this.workspace.workspacesFor(userId)).map(w => [w.id, w]));
+    if (workspaceId !== undefined) {
+      const one = followed.get(workspaceId);
+      if (!one) throw new StoryError('NOT_FOUND', 'Workspace not found');
+      followed.clear();
+      followed.set(one.id, one);
+    }
+    const legacy = await this.deps.legacyOwnerId?.();
+    const out: Array<StoryRecord & { workspace: { id: string; name: string; role: WorkspaceRole } }> = [];
+    for (const record of await this.list()) {
+      const ws = workspaceIdOf(record, (record.createdBy || legacy) || undefined);
+      const followedWs = ws ? followed.get(ws) : undefined;
+      if (!ws || !followedWs) continue;
+      out.push({ ...record, workspace: { id: ws, name: followedWs.name, role: followedWs.role } });
+    }
+    return out;
   }
 
   /** Tenancy (additive): run `fn` under this story's mutation lock (the migration writes `story.json` under it, like every other writer). */

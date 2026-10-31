@@ -4,6 +4,8 @@ import type { UserAuthStore } from '../auth/store.js';
 import type { FlowStore } from '../flow/store.js';
 import type { StoryService } from '../stories/service.js';
 import { ROUTE_POLICY, isStaticFile, routeKey, type Policy, type PolicyRegistry, type Resource, type RoutePolicy } from './policy.js';
+import { canEdit, VIEWER_READ_ONLY_BODY, type WorkspaceRole } from './workspace-role.js';
+import type { FlowJob } from '../flow/store.js';
 
 /**
  * T3 — the ownership gate (audit 06 §A.4 layer 2): ONE global hook that enforces the route-policy registry on every request,
@@ -12,8 +14,10 @@ import { ROUTE_POLICY, isStaticFile, routeKey, type Policy, type PolicyRegistry,
  *   PUBLIK / BRIDGE-TOKEN / MCP-TOKEN   pass (the bridge and MCP verify their own token where they always did)
  *   PENGGUNA-BERSAMA                    a login
  *   SISTEM-ADMIN                        a login, and an admin (403 otherwise)
- *   PENGGUNA-PEMILIK + resource         a login, and the caller OWNS the project / job the route names. Anyone else — admin included —
- *                                       gets the SAME 404 as for an id that does not exist (no oracle), and so does a project with no owner.
+ *   PENGGUNA-PEMILIK + resource         a login, and the caller is a MEMBER of the workspace that owns the project / job the route
+ *                                       names (WAVE 4: the role is the key, not the creator). Not a member — platform admin included —
+ *                                       gets the SAME 404 as for an id that does not exist (no oracle), and so does a project with no
+ *                                       owner. A viewer (read-only member) gets 403 VIEWER_READ_ONLY on every write method.
  *   PENGGUNA-PEMILIK + self / genfile   a login (the handler scopes to the caller; generated files belong to area jobs)
  *
  * The role of the caller is NOT a key to a project any more: an admin has no access to a project he does not own.
@@ -24,6 +28,7 @@ export const UNAUTHORIZED_BODY = { error: { code: 'UNAUTHORIZED', message: 'Unau
 export const FORBIDDEN_BODY = { error: { code: 'FORBIDDEN', message: 'Admin only' } } as const;
 export const STORY_NOT_FOUND_BODY = { error: { code: 'NOT_FOUND', message: 'Story not found' } } as const;
 export const JOB_NOT_FOUND_BODY = { error: { code: 'NOT_FOUND', message: 'Job not found' } } as const;
+export { VIEWER_READ_ONLY_BODY } from './workspace-role.js';
 
 export type OwnershipDeps = {
   auth: UserAuthStore;
@@ -67,19 +72,36 @@ export function installOwnershipGate(server: FastifyInstance, deps: OwnershipDep
     return entry;
   };
 
-  /** The user that owns the project / job, or undefined (no such thing, or nobody owns it). */
-  const ownerOf = async ({ kind, id }: Target): Promise<string | undefined> => {
+  const notFound = (reply: FastifyReply, kind: Kind) => reply.code(404).send(kind === 'story' ? STORY_NOT_FOUND_BODY : JOB_NOT_FOUND_BODY);
+
+  /**
+   * WAVE 4: the caller's ROLE on the project / job the route names (undefined = not a member, answer as if it did not exist).
+   * A Flow job of a project is reached through that project's workspace; a Studio job (no project) stays the caller's own;
+   * an unattributed job stays the legacy owner's.
+   */
+  const roleOn = async ({ kind, id }: Target, userId: string): Promise<WorkspaceRole | undefined> => {
     if (typeof id !== 'string' || !id) return undefined;
-    if (kind === 'story') return deps.stories().ownerOf(id);
+    if (kind === 'story') return deps.stories().roleFor(id, userId);
     const job = await deps.flow().getJob(id).catch(() => undefined);
     if (!job) return undefined;
-    if (job.createdBy) return job.createdBy;
-    // A project job the owner never stamped: whoever owns its project; a job with neither: the account that owned everything before.
-    if (job.group) { const viaGroup = await deps.stories().ownerOf(job.group); if (viaGroup) return viaGroup; }
-    return deps.legacyOwnerId?.();
+    if (job.group) {
+      const viaProject = await deps.stories().roleFor(job.group, userId).catch(() => undefined);
+      if (viaProject) return viaProject;
+    }
+    // A Studio job (never in a project): whoever queued it, with the pre-attribution fallback to the legacy owner.
+    const owner = (job as FlowJob).createdBy || deps.legacyOwnerId?.();
+    return owner && owner === userId ? 'owner' : undefined;
   };
 
-  const denied = (reply: FastifyReply, kind: Kind) => reply.code(404).send(kind === 'story' ? STORY_NOT_FOUND_BODY : JOB_NOT_FOUND_BODY);
+  /** A viewer never writes: the same clear 403 on every mutating method, before the body is read. */
+  const isWrite = (request: FastifyRequest): boolean => request.method !== 'GET' && request.method !== 'HEAD';
+
+  const decide = async (request: FastifyRequest, reply: FastifyReply, userId: string, named: Target) => {
+    const role = await roleOn(named, userId);
+    if (!role) return notFound(reply, named.kind);
+    if (isWrite(request) && !canEdit(role)) return reply.code(403).send(VIEWER_READ_ONLY_BODY);
+    return undefined;
+  };
 
   server.addHook('onRequest', async (request, reply) => {
     const entry = entryOf(request);
@@ -91,7 +113,7 @@ export function installOwnershipGate(server: FastifyInstance, deps: OwnershipDep
     if (entry.policy !== 'PENGGUNA-PEMILIK') return undefined;
     const named = target(entry.resource, request, 'params');
     if (!named) return undefined;
-    return (await ownerOf(named)) === user.id ? undefined : denied(reply, named.kind);
+    return decide(request, reply, user.id, named);
   });
 
   // The one route that names its project in the JSON body (publish): the body is small, so it is checked once parsed, before the handler.
@@ -102,6 +124,6 @@ export function installOwnershipGate(server: FastifyInstance, deps: OwnershipDep
     if (!user) return reply.code(401).send(UNAUTHORIZED_BODY);
     const named = target(entry.resource, request, 'body');
     if (!named) return undefined;
-    return (await ownerOf(named)) === user.id ? undefined : denied(reply, named.kind);
+    return decide(request, reply, user.id, named);
   });
 }

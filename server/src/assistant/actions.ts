@@ -74,7 +74,7 @@ export type ActionContext = {
   rev?: number;
 };
 
-export type ActionErrorCode = 'INVALID' | 'NOT_FOUND' | 'BUSY' | 'BUDGET' | 'STALE' | 'NOT_CONFIGURED' | 'UNAVAILABLE' | 'FAILED' | 'QUOTA';
+export type ActionErrorCode = 'INVALID' | 'NOT_FOUND' | 'FORBIDDEN' | 'BUSY' | 'BUDGET' | 'STALE' | 'NOT_CONFIGURED' | 'UNAVAILABLE' | 'FAILED' | 'QUOTA';
 export type Estimate = { credits?: number; usd?: number };
 export type ActionResult =
   | { ok: true; label: string; changed?: boolean; data?: unknown }
@@ -203,16 +203,18 @@ function toFailure(error: unknown): ActionResult {
 }
 
 /**
- * The story must exist AND belong to `ctx.userId` (tenancy, defence in depth: the HTTP gate is not the only door — chat and MCP
- * come here directly); every failure becomes a plain `{ ok: false }`. Not yours and not there look the same.
+ * The story must exist AND `ctx.userId` must be allowed to CHANGE it (WAVE 4: owner/editor of its workspace; defence in
+ * depth — chat and MCP come here directly, without the HTTP gate). Not a member and not there look the same (404);
+ * a viewer answers VIEWER_READ_ONLY with the gate's own words.
  */
 async function guarded(ctx: ActionContext, storyId: string, fn: (record: StoryRecord) => Promise<ActionResult>): Promise<ActionResult> {
   try {
     let record: StoryRecord;
     try {
-      record = await ctx.stories.assertOwner(storyId, ctx.userId);
+      record = await ctx.stories.assertAccess(storyId, ctx.userId, 'editor');
     } catch (error) {
       if (error instanceof StoryError && error.code === 'NOT_FOUND') return fail('Proyek tidak ditemukan.', 'NOT_FOUND');
+      if (error instanceof StoryError && error.code === 'FORBIDDEN') return fail(error.message, 'FORBIDDEN');
       throw error;
     }
     return await fn(record);
