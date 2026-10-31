@@ -13,7 +13,7 @@ import { OUTAGE } from '../providers/axcel.js';
 import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import type { FlowStore } from '../flow/store.js';
+import type { FlowJob, FlowStore } from '../flow/store.js';
 import { linkOrCopy } from '../media/link.js';
 import { AXCEL_PROJECT_RESOLUTION, CREDITS_PER_SHOT, axcelClipSec, subtitleOf, bibleSceneFor, editPrint, isSilent, narrationOf, castOf, frameHashFor, framePromptFor, hashFor, normalizeScenes, sceneOf, sheetHashFor, sheetPromptFor, shotCast, shotPromptFor, validateStoryboard, type Shot, type Storyboard } from './storyboard.js';
 import { ShotCompileError } from '../bible/compiler.js';
@@ -29,6 +29,15 @@ import { MUSIC_FILE, NOT_AUDIO_MESSAGE, NO_SOUND_MESSAGE, musicExt } from './mus
 const MIN_IMAGE_BYTES = 10_000;
 
 export const MAX_TAKES = 3;
+/**
+ * Flow attempts of one clip JOB. The story's takes (MAX_TAKES) are the one owner of clip retries: a job that also
+ * retried 3 times made 3×3 = 9 Flow attempts per clip. Sheets and keyframes are free and keep the store default (3).
+ */
+export const CLIP_JOB_ATTEMPTS = 1;
+/** Flow's answer when it will not render the clip (an account without credits is parked by the store before this counts). */
+const FLOW_REFUSED = /did not create the video/i;
+/** Accounts that must refuse the same clip before it is called un-renderable as written. */
+const REFUSAL_ACCOUNTS = 2;
 /** Error of the clips stopped because the engine reported an outage (MODEL_GANGGUAN) on another clip. */
 /** "01-a: <why>; 2 shot (02-b, 03-c): <why>" — one entry per reason, so 20 identical refusals read as one. */
 function failureSummary(failed: Array<{ id: string; error?: string }>): string {
@@ -103,6 +112,10 @@ export type ShotState = {
   auditRepair?: string;
   /** A human must look at this shot before the video is assembled. */
   needsReview?: boolean;
+  /** Flow refused this clip on several accounts (not for credits): the prompt or keyframe must change first. */
+  needsEdit?: true;
+  /** Accounts that refused this clip with credits to spare ("did not create the video"). */
+  refusedBy?: string[];
   approvedBy?: string;
   approvedAtMs?: number;
 };
@@ -652,7 +665,12 @@ export class StoryService {
     const konsisten = record.mode === 'konsisten';
     const engine = this.engine(board, 'video');
     const axcel = board.engine?.video?.provider === 'axcel' ? board.engine.video : undefined;
+    // A clip that just failed on account A is retaken on another account when one can take it.
+    const previous = state.jobId ? await this.deps.flow.getJob(state.jobId) : undefined;
+    const avoidAccountId = previous?.status === 'failed' && !previous.cancelled ? previous.accountId : undefined;
     const job = await this.deps.flow.createJob({
+      ...(engine.provider === undefined ? { maxAttempts: CLIP_JOB_ATTEMPTS } : {}),
+      ...(avoidAccountId ? { avoidAccountId } : {}),
       prompt: state.auditRepair ? `${prompt} ${state.auditRepair}`.trim() : prompt,
       technique: `story:${record.id}/${shot.id}`,
       aspect: board.aspect ?? '9:16',
@@ -675,6 +693,7 @@ export class StoryService {
     state.promptHash = hashFor(board, shot);
     state.status = 'queued';
     state.error = undefined;
+    state.needsEdit = undefined;
   }
 
   /** OpenRouter only: an uploaded start frame of the shot (`shot.startFrame`), when it still exists. */
@@ -722,7 +741,8 @@ export class StoryService {
         throw new StoryError('INVALID', 'Buat dan review keyframe dulu sebelum render video');
       }
       const reuseIds = new Set(board.shots.filter(s => s.reuse).map(s => s.id));
-      const todo = run.filter(s => !reuseIds.has(s.id) && (s.status === 'pending' || s.status === 'failed'));
+      // needsEdit shots wait for an edit; only naming the shot itself renders it again.
+      const todo = run.filter(s => !reuseIds.has(s.id) && (s.status === 'pending' || s.status === 'failed') && (!s.needsEdit || options.shot === s.id));
       const videoEngine = board.engine?.video;
       if (videoEngine?.provider === 'openrouter') {
         if (!options.force) await this.openRouterBudget(videoEngine.model, todo.length);
@@ -753,8 +773,10 @@ export class StoryService {
       const r = await this.require(id);
       // Retry the last run plus anything that failed; never spends on scenes the user did not run.
       const run = this.runIds(r);
-      ids = r.shots.filter(s => run.has(s.id) || s.status === 'failed' || s.frame?.status === 'failed').map(s => s.id);
-      for (const s of r.shots) if (s.status === 'failed') { s.status = 'pending'; s.attempts = 0; s.error = undefined; }
+      // A shot Flow refused on several accounts needs an edit first: retrying it would only spend takes.
+      ids = r.shots.filter(s => !s.needsEdit && (run.has(s.id) || s.status === 'failed' || s.frame?.status === 'failed')).map(s => s.id);
+      // One new take per failed shot: its attempts are kept (not zeroed), so the next failure ends it again.
+      for (const s of r.shots) if (s.status === 'failed' && !s.needsEdit) { s.status = 'pending'; s.attempts = Math.max(s.attempts, MAX_TAKES - 1); s.error = undefined; }
       const prepFailed = (r.cast ?? []).some(c => c.status === 'failed') || r.shots.some(s => s.frame?.status === 'failed');
       for (const c of r.cast ?? []) if (c.status === 'failed') Object.assign(c, { status: 'pending', attempts: 0, error: undefined });
       for (const s of r.shots) if (s.frame?.status === 'failed') Object.assign(s.frame, { status: 'pending', attempts: 0, error: undefined });
@@ -783,6 +805,18 @@ export class StoryService {
       return 'failed';
     }
     return 'requeue';
+  }
+
+  /**
+   * Records a "did not create the video" refusal of a Flow clip and says whether enough DIFFERENT accounts refused it.
+   * A refusal on an account that is (nearly) out of credits is not about the prompt, and the same account twice proves nothing.
+   */
+  private async refusedEverywhere(state: ShotState, job: FlowJob): Promise<boolean> {
+    if (!FLOW_REFUSED.test(job.error ?? '') || !job.accountId) return false;
+    const account = await this.deps.flow.getAccount(job.accountId);
+    if (!account || (account.credits !== undefined && account.credits < 2 * CREDITS_PER_SHOT)) return false;
+    state.refusedBy = [...new Set([...(state.refusedBy ?? []), account.id])];
+    return state.refusedBy.length >= REFUSAL_ACCOUNTS;
   }
 
   private async collect(record: StoryRecord, board: Storyboard): Promise<boolean> {
@@ -830,6 +864,13 @@ export class StoryService {
           state.lastError = job.error;
           state.error = job.error;
           outage = job.error;
+        } else if (await this.refusedEverywhere(state, job)) {
+          // Flow said no on several accounts that could pay: more takes of the same prompt would only repeat it.
+          state.attempts += 1;
+          state.status = 'failed';
+          state.needsEdit = true;
+          state.lastError = job.error;
+          state.error = `Flow menolak membuat klip ini di ${state.refusedBy!.length} akun berbeda (bukan karena kredit): ubah dulu prompt atau keyframe shot ini, lalu render lagi`;
         } else if ((await this.rejectTake(state, job.error ?? 'Flow gagal')) === 'requeue') await this.queueShot(record, board, state.id);
         changed = true;
         continue;
@@ -845,6 +886,7 @@ export class StoryService {
         state.status = 'done';
         state.durationSec = (await this.deps.probe(target)).durationSec;
         state.lastError = undefined;
+        state.refusedBy = undefined;
         // cepat: the clip is the only enforcement point (spec §9.3) — sample it and audit it now.
         if (record.mode !== 'konsisten') changed = (await this.auditClip(record, board, state, shot, target)) || changed;
       }

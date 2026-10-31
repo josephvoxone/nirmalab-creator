@@ -141,7 +141,8 @@ describe('StoryService', () => {
     await t.service.retry(story.id);
     const again = (await t.service.get(story.id))!;
     expect(again.status).toBe('rendering');
-    expect(again.shots[0]).toMatchObject({ status: 'queued', attempts: 0 });
+    // S4: one new take, and the attempts are kept (the 3 failed takes stay on record, so the next failure ends it) — not zeroed.
+    expect(again.shots[0]).toMatchObject({ status: 'queued', attempts: 3 });
   });
 
   it('assembly failure marks the story failed; retry assembles again without re-rendering', async () => {

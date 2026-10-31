@@ -131,6 +131,8 @@ export type FlowJob = {
   /** OpenRouter generation id of a submitted video (resumed after a restart). */
   remoteId?: string;
   error?: string;
+  /** A retake: prefer any other account than the one this clip just failed on (never starves: it is a preference). */
+  avoidAccountId?: string;
   /** Stopped by an operator (`cancelJob`): final, never re-taken by a story. */
   cancelled?: true;
   /** User id that queued the job (directly or through a story). */
@@ -490,6 +492,7 @@ export class FlowStore {
     references?: string[];
     startImage?: string;
     resolution?: number;
+    avoidAccountId?: string;
   }): Promise<FlowJob> {
     const openrouter = input.provider === 'openrouter';
     const axcel = input.provider === 'axcel';
@@ -515,6 +518,7 @@ export class FlowStore {
         createdAtMs: Date.now(),
         ...(input.technique === undefined ? {} : { technique: input.technique }),
         ...(input.createdBy ? { createdBy: input.createdBy.slice(0, 80) } : {}),
+        ...(input.avoidAccountId ? { avoidAccountId: input.avoidAccountId.slice(0, 80) } : {}),
         ...(openrouter || axcel ? {
           provider: (openrouter ? 'openrouter' : 'axcel') as ProviderId,
           model: input.model!,
@@ -603,9 +607,14 @@ export class FlowStore {
         // A paid clip that carries its keyframe file can run on any account (the bridge uploads the
         // keyframe there): round-robin to an account that can still pay, without moving the group.
         const portable = cost > 0 && candidate.kind === 'video' && Boolean(candidate.startImage);
+        // A retake prefers another account than the one that just failed it, when one can take it now.
+        const avoid = candidate.avoidAccountId;
+        const elsewhere = () => (avoid ? ordered.find(a => a.id !== avoid && eligible(a, cost)) : undefined);
         const pick = pinned?.enabled
-          ? (eligible(pinned, cost) ? pinned : portable ? ordered.find(a => eligible(a, cost)) : undefined)
-          : ordered.find(a => eligible(a, cost));
+          ? (eligible(pinned, cost)
+            ? (portable && avoid === pinned.id ? elsewhere() ?? pinned : pinned)
+            : portable ? ordered.find(a => eligible(a, cost)) : undefined)
+          : elsewhere() ?? ordered.find(a => eligible(a, cost));
         if (pick) { account = pick; job = candidate; break; }
       }
       if (!account || !job) {
