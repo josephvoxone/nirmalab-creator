@@ -47,6 +47,8 @@ const withPlaceholder = (): Storyboard => {
   };
 };
 
+/** The project belongs to the user the action runs as (tenancy: an action only touches its caller's projects). */
+const ownStory = (t: ReturnType<typeof serviceSetup>, board: Parameters<ReturnType<typeof serviceSetup>['service']['create']>[0]) => t.service.create(board, { createdBy: 'u_admin' });
 const ctxFor = (t: ReturnType<typeof serviceSetup>, model?: TextModel): ActionContext => ({
   stories: t.service, snapshots: t.service.snapshots, model, userId: 'u_admin', source: 'chat', turn: {}
 });
@@ -135,7 +137,7 @@ describe('breakdownScene', () => {
 describe('breakdown_scene action', () => {
   it('replaces a scene of empty placeholders with 3 compiled shots (one snapshot, rev +1)', async () => {
     const t = serviceSetup();
-    const story = await t.service.create(withPlaceholder());
+    const story = await ownStory(t, withPlaceholder());
     const model = fakeModel([JSON.stringify([intent(0), intent(1), intent(2)])]);
     const r = await ACTIONS.breakdown_scene.run(ctxFor(t, model), story.id, { scene: 2, count: 3 });
     expect(r).toMatchObject({ ok: true, changed: true });
@@ -153,14 +155,14 @@ describe('breakdown_scene action', () => {
 
   it('no text model → code NOT_CONFIGURED (not UNAVAILABLE) with the one shared message', async () => {
     const t = serviceSetup();
-    const story = await t.service.create(withPlaceholder());
+    const story = await ownStory(t, withPlaceholder());
     const r = await ACTIONS.breakdown_scene.run(ctxFor(t), story.id, { scene: 2, count: 2 });
     expect(r).toEqual({ ok: false, code: 'NOT_CONFIGURED', error: NO_MODEL_MESSAGE });
   });
 
   it('appends to a scene that already has real shots', async () => {
     const t = serviceSetup();
-    const story = await t.service.create(withPlaceholder());
+    const story = await ownStory(t, withPlaceholder());
     const model = fakeModel([JSON.stringify([intent(0), intent(1)])]);
     expect(await ACTIONS.breakdown_scene.run(ctxFor(t, model), story.id, { scene: 1, count: 2 })).toMatchObject({ ok: true });
     const board = await t.service.readStoryboard(story.id);
@@ -170,7 +172,7 @@ describe('breakdown_scene action', () => {
 
   it('replace is refused over a scene with a done clip or keyframe (paid takes are never dropped)', async () => {
     const t = serviceSetup();
-    const story = await renderedStory(t, withPlaceholder());
+    const story = await renderedStory(t, withPlaceholder(), 'u_admin');
     expect(story.shots.find(s => s.id === '01-laras')!.status).toBe('done');
     const before = readFileSync(join(t.dataDir, 'stories', story.id, 'storyboard.json'), 'utf8');
     const model = fakeModel([JSON.stringify([intent(0), intent(1)])]);
@@ -183,7 +185,7 @@ describe('breakdown_scene action', () => {
 
   it('a character that is only in startState/endState is sent back once: every visible character must be in subject or action', async () => {
     const t = serviceSetup();
-    const story = await t.service.create(withPlaceholder());
+    const story = await ownStory(t, withPlaceholder());
     const hidden = { ...intent(0), startState: 'KAPAS sleeps in the basket' };
     const model = fakeModel([JSON.stringify([hidden, intent(1)]), JSON.stringify([{ ...hidden, action: 'carries the basket with KAPAS toward the market gate' }, intent(1)])]);
     const r = await ACTIONS.breakdown_scene.run(ctxFor(t, model), story.id, { scene: 2, count: 2 });
@@ -194,7 +196,7 @@ describe('breakdown_scene action', () => {
 
   it('an invalid intent gets one retry, then a plain error with nothing inserted', async () => {
     const t = serviceSetup();
-    const story = await t.service.create(withPlaceholder());
+    const story = await ownStory(t, withPlaceholder());
     const before = readFileSync(join(t.dataDir, 'stories', story.id, 'storyboard.json'), 'utf8');
     const model = fakeModel([JSON.stringify([intent(0, { action: '' }), intent(1), intent(2)])]);
     const r = await ACTIONS.breakdown_scene.run(ctxFor(t, model), story.id, { scene: 2, count: 3 });
@@ -207,7 +209,7 @@ describe('breakdown_scene action', () => {
 
   it('a concurrent edit during the model call → STALE, nothing inserted, no snapshot', async () => {
     const t = serviceSetup();
-    const story = await t.service.create(withPlaceholder());
+    const story = await ownStory(t, withPlaceholder());
     const model = fakeModel([JSON.stringify([intent(0), intent(1), intent(2)])]);
     const chat = model.chat;
     model.chat = async input => {
@@ -226,10 +228,10 @@ describe('breakdown_scene action', () => {
 
   it('legacy boards, missing model and a bad count are plain errors', async () => {
     const t = serviceSetup();
-    const legacy = await t.service.create({ title: 'Kucing', shots: [{ id: 'a', prompt: 'Medium shot of a kitten.', narration: 'Mimi menunggu.' }] });
+    const legacy = await ownStory(t, { title: 'Kucing', shots: [{ id: 'a', prompt: 'Medium shot of a kitten.', narration: 'Mimi menunggu.' }] });
     const model = fakeModel(['[]']);
     expect(await ACTIONS.breakdown_scene.run(ctxFor(t, model), legacy.id, { scene: 1, count: 3 })).toEqual({ ok: false, error: 'Pecah scene butuh bible — buat bible dulu di tab Bible.', code: 'INVALID' });
-    const story = await t.service.create(withPlaceholder());
+    const story = await ownStory(t, withPlaceholder());
     expect((await ACTIONS.breakdown_scene.run(ctxFor(t), story.id, { scene: 2, count: 3 }) as { error: string }).error).toMatch(/Model teks/);
     expect((await ACTIONS.breakdown_scene.run(ctxFor(t, model), story.id, { scene: 2, count: 9 }) as { error: string }).error).toMatch(/2–8/);
     expect(model.calls).toHaveLength(0);
