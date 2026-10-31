@@ -24,3 +24,8 @@ export async function openRouterBalance(dataDir: string, options: BalanceOptions
   cache.set(dataDir, { atMs: now, keyHash, value });
   return value;
 }
+
+/** When the cached balance of this data dir was fetched (ms), or undefined when nothing is cached. */
+export function openRouterBalanceAt(dataDir: string): number | undefined {
+  return cache.get(dataDir)?.atMs;
+}

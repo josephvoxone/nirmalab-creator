@@ -1,5 +1,7 @@
 import { del, post, requestJson, type FetchLike } from './http.js';
 
+const put = (body: unknown): RequestInit => ({ method: 'PUT', body: JSON.stringify(body) });
+
 export type PoolProviderId = 'elevenlabs' | 'gemini';
 export const MAX_POOL_KEYS = 10;
 export type KeyState = 'ready' | 'busy' | 'cooldown' | 'invalid';
@@ -8,8 +10,10 @@ export type PoolKeyView = {
   id: string; label: string; keyHint: string; source: 'store' | 'env'; state: KeyState;
   inFlight: number; uses: number; failures: number; cooldownUntilMs?: number; reason?: string; lastUsedAtMs?: number; limited?: string[];
 };
+/** A key that is kept but not used: ElevenLabs allows one active key; extras from old data / the server are dormant. */
+export type DormantKeyView = { id: string; label: string; keyHint: string; source: 'store' | 'env'; addedAtMs: number; reason: 'batas' | 'env' };
 export type KeyPools = {
-  elevenlabs: { keys: PoolKeyView[]; max: number };
+  elevenlabs: { keys: PoolKeyView[]; max: number; dormant?: DormantKeyView[]; warnings?: string[] };
   gemini: { keys: PoolKeyView[]; max: number; primary: 'opencode-go' | 'gemini'; geminiModel?: string };
 };
 export type AddedKey = { key: PoolKeyView; verified: boolean; limited?: boolean; detail?: string };
@@ -21,6 +25,9 @@ export function keyPoolApi(fetchImpl: FetchLike) {
   return {
     get: () => requestJson<KeyPools>(fetchImpl, base),
     add: (provider: PoolProviderId, key: string, label: string) => requestJson<AddedKey>(fetchImpl, `${base}/${provider}`, post(label ? { key, label } : { key })),
+    /** "Ganti kunci" (ElevenLabs): the new key is checked first; the old one stays if it is refused. */
+    replace: (key: string, label: string) => requestJson<AddedKey>(fetchImpl, `${base}/elevenlabs/active`, put(label ? { key, label } : { key })),
+    activate: (provider: PoolProviderId, id: string) => requestJson<{ ok: boolean }>(fetchImpl, `${base}/${provider}/${encodeURIComponent(id)}/activate`, post({})),
     remove: (provider: PoolProviderId, id: string) => requestJson<{ ok: boolean }>(fetchImpl, `${base}/${provider}/${encodeURIComponent(id)}`, del()),
     test: (provider: PoolProviderId, id: string) => requestJson<KeyTest>(fetchImpl, `${base}/${provider}/${encodeURIComponent(id)}/test`, post({})),
     setRouting: (patch: { primary?: TextRouting['primary']; geminiModel?: string | null }) =>

@@ -6,10 +6,11 @@
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { requireAdmin, sessionUser } from '../auth/routes.js';
 import type { UserAuthStore } from '../auth/store.js';
-import { MAX_POOL_KEYS, type PoolProvider, type ProviderKeys } from '../lib/provider-keys.js';
+import { MAX_POOL_KEYS, ManagedByEnvError, SingleKeyError, type PoolProvider, type ProviderKeys } from '../lib/provider-keys.js';
 import { probeGeminiKey } from '../llm/gemini.js';
 import type { TextRoutingStore } from '../llm/router.js';
 import { ProviderInputError } from '../providers/config.js';
+import { QuotaError } from '../quota/errors.js';
 import { StoryError, type StoryService } from '../stories/service.js';
 import { sendVideo } from '../stories/routes.js';
 import { DubError, type DubErrorCode, type ElevenLabsClient } from './elevenlabs.js';
@@ -33,6 +34,8 @@ function send(reply: FastifyReply, status: number, code: string, message: string
 }
 
 function fail(reply: FastifyReply, error: unknown) {
+  if (error instanceof QuotaError) return reply.code(429).send(error.toBody());
+  if (error instanceof SingleKeyError || error instanceof ManagedByEnvError) return send(reply, 409, error.code, error.message);
   if (error instanceof DubError) return send(reply, DUB_STATUS[error.code], error.code, error.message);
   if (error instanceof ProviderInputError) return send(reply, 400, 'INVALID_INPUT', error.message);
   if (error instanceof StoryError) return send(reply, error.code === 'NOT_FOUND' ? 404 : error.code === 'INVALID' ? 400 : 409, error.code, error.message);
@@ -62,7 +65,8 @@ export async function registerDubRoutes(server: FastifyInstance, options: DubRou
   server.get('/api/providers/keypool', async (request, reply) => {
     if (!requireAdmin(auth, request, reply)) return undefined;
     return {
-      elevenlabs: { keys: keys.elevenlabs.view(), max: MAX_POOL_KEYS },
+      // ElevenLabs: ONE active key (no rotation across accounts); extra keys are kept as dormant, never used.
+      elevenlabs: { keys: keys.elevenlabs.view(), max: keys.elevenlabs.maxKeys(), dormant: keys.elevenlabs.dormantView(), warnings: keys.elevenlabs.warnings() },
       gemini: { keys: keys.gemini.view(), max: MAX_POOL_KEYS, ...(await routing.view()) }
     };
   });
@@ -74,6 +78,8 @@ export async function registerDubRoutes(server: FastifyInstance, options: DubRou
     const key = typeof request.body?.key === 'string' ? request.body.key.trim() : '';
     const label = typeof request.body?.label === 'string' ? request.body.label : undefined;
     if (key.length < 16 || key.length > 300 || /\s/.test(key)) return send(reply, 400, 'INVALID_INPUT', 'API key tidak valid');
+    // One key for ElevenLabs: refused before the provider is even asked about the new key.
+    if (provider === 'elevenlabs' && !keys.elevenlabs.hasRoom()) return fail(reply, new SingleKeyError());
     // Prove the key first (a free call). Refused = not stored; provider unreachable = stored, marked unverified.
     let verified = false; let limited = false; let detail: string | undefined;
     if (provider === 'elevenlabs') {
@@ -97,10 +103,35 @@ export async function registerDubRoutes(server: FastifyInstance, options: DubRou
     if (!requireAdmin(auth, request, reply)) return undefined;
     const provider = providerOf(request.params.provider);
     if (!provider) return send(reply, 404, 'NOT_FOUND', 'Provider tidak dikenal');
-    if (keys[provider].view().find(v => v.id === request.params.id)?.source === 'env') {
+    if (keys[provider].view().find(v => v.id === request.params.id)?.source === 'env' || keys[provider].isEnv(request.params.id)) {
       return send(reply, 409, 'MANAGED_BY_ENV', 'Key ini berasal dari environment server; hapus dari konfigurasi server, bukan dari sini.');
     }
     return (await keys[provider].remove(request.params.id)) ? { ok: true } : send(reply, 404, 'NOT_FOUND', 'Key tidak ditemukan');
+  });
+
+  // "Ganti kunci": the new ElevenLabs key is proved first (free call); only then does it replace the old one.
+  server.put<{ Body: { key?: unknown; label?: unknown } | undefined }>('/api/providers/keypool/elevenlabs/active', async (request, reply) => {
+    if (!requireAdmin(auth, request, reply)) return undefined;
+    const key = typeof request.body?.key === 'string' ? request.body.key.trim() : '';
+    const label = typeof request.body?.label === 'string' ? request.body.label : undefined;
+    if (key.length < 16 || key.length > 300 || /\s/.test(key)) return send(reply, 400, 'INVALID_INPUT', 'API key tidak valid');
+    if (keys.elevenlabs.managedByEnv()) return fail(reply, new ManagedByEnvError());
+    const info = await client.probeKey(key);
+    if (!info.ok && info.rejected) return send(reply, 400, 'INVALID_KEY', 'ElevenLabs menolak API key ini. Periksa lagi key-nya; kunci yang lama tidak diubah.');
+    try {
+      const view = await keys.elevenlabs.replaceActive({ key, ...(label !== undefined ? { label } : {}) });
+      return { key: view, verified: info.ok === true, ...(info.ok && info.limited === true ? { limited: true } : {}), ...(!info.ok ? { detail: info.reason } : {}) };
+    } catch (error) { return fail(reply, error); }
+  });
+
+  // Swap a dormant key in (the active one becomes dormant). Nothing is deleted.
+  server.post<{ Params: { provider: string; id: string } }>('/api/providers/keypool/:provider/:id/activate', async (request, reply) => {
+    if (!requireAdmin(auth, request, reply)) return undefined;
+    const provider = providerOf(request.params.provider);
+    if (!provider) return send(reply, 404, 'NOT_FOUND', 'Provider tidak dikenal');
+    try {
+      return (await keys[provider].activate(request.params.id)) ? { ok: true } : send(reply, 404, 'NOT_FOUND', 'Key tidak ditemukan');
+    } catch (error) { return fail(reply, error); }
   });
 
   server.post<{ Params: { provider: string; id: string } }>('/api/providers/keypool/:provider/:id/test', async (request, reply) => {

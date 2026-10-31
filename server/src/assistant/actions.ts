@@ -22,6 +22,7 @@ import { LOOK_IDS, lookById } from '../bible/styles.js';
 import { cardFor } from '../bible/sync.js';
 import { LlmError, type TextModel, type ToolSpec } from '../llm/opencode.js';
 import { usdLabel } from '../providers/catalog.js';
+import { QuotaError } from '../quota/errors.js';
 import { CATALOG, composeStyle, resolveLook } from '../stories/looks.js';
 
 import { BUSY_STATUSES, STALE_MESSAGE, StoryError, type StoryRecord, type StoryService } from '../stories/service.js';
@@ -73,7 +74,7 @@ export type ActionContext = {
   rev?: number;
 };
 
-export type ActionErrorCode = 'INVALID' | 'NOT_FOUND' | 'BUSY' | 'BUDGET' | 'STALE' | 'NOT_CONFIGURED' | 'UNAVAILABLE' | 'FAILED';
+export type ActionErrorCode = 'INVALID' | 'NOT_FOUND' | 'BUSY' | 'BUDGET' | 'STALE' | 'NOT_CONFIGURED' | 'UNAVAILABLE' | 'FAILED' | 'QUOTA';
 export type Estimate = { credits?: number; usd?: number };
 export type ActionResult =
   | { ok: true; label: string; changed?: boolean; data?: unknown }
@@ -191,6 +192,7 @@ const axcelCost = (model: string) => `Axcel ${model} · termasuk paket, 0 kredit
 
 function toFailure(error: unknown): ActionResult {
   if (error instanceof ActionInputError || error instanceof BreakdownError) return fail(error.message);
+  if (error instanceof QuotaError) return fail(error.message, 'QUOTA');
   if (error instanceof StoryError) {
     if (error.code === 'BUSY') return fail(BUSY_MESSAGE, 'BUSY');
     if (error.code === 'STALE') return fail(STALE_MESSAGE, 'STALE');

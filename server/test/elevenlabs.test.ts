@@ -29,7 +29,9 @@ const header = (c: Call, name: string) => (c.init.headers as Record<string, stri
 
 let seq = 0;
 async function client(handler: Parameters<typeof fakeFetch>[0], keys = [KEY1, KEY2]) {
-  const pool = new ProviderKeys(join(dir, `p${seq++}`), 'elevenlabs', { env: {} });
+  // These tests exercise the pool's rotation across keys (429 -> next key). ElevenLabs itself is limited to ONE key in the app
+  // (see eleven-single-key.test.ts); `maxKeys: 10` here lifts that on purpose so the rotation machinery stays covered.
+  const pool = new ProviderKeys(join(dir, `p${seq++}`), 'elevenlabs', { env: {}, maxKeys: 10 });
   await pool.load();
   for (const key of keys) await pool.add({ key });
   const f = fakeFetch(handler);

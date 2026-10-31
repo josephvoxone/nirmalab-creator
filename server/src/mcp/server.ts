@@ -19,6 +19,7 @@ import { listSkills } from '../assistant/skills.js';
 import type { TextModel } from '../llm/opencode.js';
 import { DraftError, draftStoryboard, type TextGenerator } from '../stories/draft.js';
 import { CATALOG } from '../stories/looks.js';
+import { QuotaError } from '../quota/errors.js';
 import { StoryError, type StoryRecord, type StoryService } from '../stories/service.js';
 import type { McpTokenStore } from './tokens.js';
 
@@ -223,7 +224,7 @@ export function createMcpServer(deps: McpDeps, caller: McpCaller, log?: FastifyB
       if ((ACTION_NAMES as readonly string[]).includes(name)) return await runActionTool(deps, caller, name as ActionName, args, extra.signal);
       return failure(`Tool "${name.slice(0, 40)}" tidak ada.`);
     } catch (error) {
-      if (error instanceof StoryError) return failure(error.message);
+      if (error instanceof StoryError || error instanceof QuotaError) return failure(error.message);
       log?.warn({ err: error, tool: name }, 'mcp tool failed');
       return failure('Gagal menjalankan tool — coba lagi.');
     }

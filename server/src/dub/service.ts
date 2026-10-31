@@ -16,6 +16,7 @@ import type { FairQueue } from '../lib/fair-queue.js';
 import { estimateWords, type Word } from './words.js';
 import { normalizeText } from './text.js';
 import { DEFAULT_CLIP_SEC, clipSeconds, fitFor, windowSeconds, type FitView } from './fit.js';
+import type { SpendLedger } from '../quota/ledger.js';
 import { SHOT_ID, narrationOf, type Shot, type Storyboard } from '../stories/storyboard.js';
 
 export type DubSettings = { voiceId?: string; modelId: string; languageCode: string; voice: Required<VoiceSettings>; keepAmbient: boolean };
@@ -65,6 +66,11 @@ export type DubDeps = {
   probe: (file: string) => Promise<number>;
   /** Length of each rendered clip of the story (seconds by shot id); unknown shots count as DEFAULT_CLIP_SEC. */
   clipSeconds?: (storyId: string) => Promise<Record<string, number>>;
+  /**
+   * Quota ledger (characters of ElevenLabs per user). `render` reserves before anything is queued (QuotaError = nothing
+   * queued, nothing called); `renderShot` commits what the provider billed, or releases when nothing was billed.
+   */
+  quota?: Pick<SpendLedger, 'reserveMany' | 'commit' | 'release'>;
 };
 
 export const DEFAULT_VOICE: Required<VoiceSettings> = { stability: 0.5, similarityBoost: 0.75, style: 0, speed: 1, speakerBoost: true };
@@ -83,6 +89,8 @@ export class DubService {
   private readonly decisions = new Map<string, Promise<unknown>>();
   /** `<story>/<shot>` -> hash being made right now by this process (a duplicate request for it is never paid for). */
   private readonly inflight = new Map<string, string>();
+  /** `<story>/<shot>` -> ledger key of the reservation this process holds for it. */
+  private readonly holds = new Map<string, string>();
 
   constructor(private readonly deps: DubDeps) {}
 
@@ -267,7 +275,7 @@ export class DubService {
     return (await this.planWithHashes(id, scope, options)).plan;
   }
 
-  private async planWithHashes(id: string, scope: DubScope, options: { force?: boolean } = {}): Promise<{ plan: DubPlan; hashes: Map<string, string>; fits: Map<string, FitView> }> {
+  private async planWithHashes(id: string, scope: DubScope, options: { force?: boolean } = {}): Promise<{ plan: DubPlan; hashes: Map<string, string>; fits: Map<string, FitView>; chars: Map<string, number> }> {
     const [doc, board] = await Promise.all([this.read(id), this.deps.board(id)]);
     const fits = await this.fitsOf(id, doc, board);
     let ids: string[];
@@ -285,6 +293,7 @@ export class DubService {
     const chosen: string[] = [];
     const texts: string[] = [];
     const hashes = new Map<string, string>();
+    const chars = new Map<string, number>();
     for (const sid of ids) {
       const shot = byId.get(sid)!;
       const e = this.effective(doc, shot);
@@ -293,10 +302,10 @@ export class DubService {
       if (!e.voiceId) throw new DubError('INVALID', 'Pilih suara dulu (suara cerita atau suara shot).');
       if (this.inflight.get(`${id}/${sid}`) === e.hash) continue; // already being made right now: a second request is not paid for
       const status = this.statusOf(doc, shot);
-      if (options.force || status === 'none' || status === 'stale' || status === 'failed') { chosen.push(sid); texts.push(e.text); hashes.set(sid, e.hash); }
+      if (options.force || status === 'none' || status === 'stale' || status === 'failed') { chosen.push(sid); texts.push(e.text); hashes.set(sid, e.hash); chars.set(sid, e.text.length); }
     }
     const blocked = chosen.filter(sid => fits.get(sid)?.level === 'block');
-    return { plan: { shotIds: chosen, chars: texts.reduce((n, t) => n + t.length, 0), credits: estimateCredits(texts, doc.settings.modelId), modelId: doc.settings.modelId, blocked }, hashes, fits };
+    return { plan: { shotIds: chosen, chars: texts.reduce((n, t) => n + t.length, 0), credits: estimateCredits(texts, doc.settings.modelId), modelId: doc.settings.modelId, blocked }, hashes, fits, chars };
   }
 
   /** Runs `fn` after every earlier decision of the same story has finished. */
@@ -312,7 +321,7 @@ export class DubService {
     // Estimate, checks and the "queued" mark are ONE step per story: a second click waits for it and then sees the shots as taken.
     const started = await this.exclusive(id, async () => {
       await this.adopt(id);
-      const { plan, hashes, fits } = await this.planWithHashes(id, scope, opts.force ? { force: true } : {});
+      const { plan, hashes, fits, chars } = await this.planWithHashes(id, scope, opts.force ? { force: true } : {});
       if (!plan.shotIds.length) return undefined;
       if (!this.deps.client.configured()) throw new DubError('NOT_CONFIGURED', 'API key ElevenLabs belum diisi. Isi di Pengaturan › Provider › ElevenLabs.');
       if (plan.blocked.length && opts.acceptTooLong !== true) {
@@ -327,7 +336,19 @@ export class DubService {
       if (typeof left === 'number' && Number.isFinite(left) && left < plan.credits) {
         throw new DubError('INSUFFICIENT', `Kredit ElevenLabs tidak cukup: sisa ±${left}, dubbing ini butuh ±${plan.credits}. Tambah kredit atau dub lebih sedikit shot.`);
       }
-      await this.mutate(id, doc => { for (const sid of plan.shotIds) { const e = (doc.shots[sid] ??= {}); e.status = 'queued'; delete e.error; } });
+      // The user's quota is reserved (atomically, no network) before anything is marked or queued: a refusal leaves no trace.
+      if (this.deps.quota) {
+        await this.deps.quota.reserveMany(plan.shotIds.map(sid => ({
+          key: `dub:${id}:${sid}:${hashes.get(sid)!}`, userId: opts.owner, kind: 'elevenChars' as const, amount: chars.get(sid)!, meta: { story: id, shot: sid }
+        })));
+        for (const sid of plan.shotIds) this.holds.set(`${id}/${sid}`, `dub:${id}:${sid}:${hashes.get(sid)!}`);
+      }
+      try {
+        await this.mutate(id, doc => { for (const sid of plan.shotIds) { const e = (doc.shots[sid] ??= {}); e.status = 'queued'; delete e.error; } });
+      } catch (error) {
+        for (const sid of plan.shotIds) await this.settleHold(id, sid, 'release');
+        throw error;
+      }
       for (const sid of plan.shotIds) this.inflight.set(`${id}/${sid}`, hashes.get(sid)!);
       return plan.shotIds;
     });
@@ -341,22 +362,53 @@ export class DubService {
     const set = this.pending.get(id) ?? new Set<Promise<unknown>>();
     this.pending.set(id, set);
     for (const sid of shotIds) {
-      const p = this.deps.queue.run(owner, () => this.renderShot(id, sid, opts), { signal: ctl.signal })
+      const p = this.deps.queue.run(owner, () => this.renderShot(id, sid, { ...opts, owner }), { signal: ctl.signal })
         .catch(async error => {
-          if ((error as Error)?.name === 'AbortError') await this.mutate(id, doc => { const e = doc.shots[sid]; if (e?.status === 'queued') delete e.status; }).catch(() => undefined);
-          else await this.fail(id, sid, error);
+          if ((error as Error)?.name === 'AbortError') {
+            await this.settleHold(id, sid, 'release');
+            await this.mutate(id, doc => { const e = doc.shots[sid]; if (e?.status === 'queued') delete e.status; }).catch(() => undefined);
+          } else await this.fail(id, sid, error);
         })
         .finally(() => { set.delete(p); this.inflight.delete(`${id}/${sid}`); });
       set.add(p);
     }
   }
 
+  /**
+   * Ends the quota reservation of a shot: `commit` = the provider billed `chars` characters (also recorded when no
+   * reservation exists: billed work is always counted), `release` = nothing was billed.
+   */
+  private async settleHold(id: string, shotId: string, outcome: 'release' | { commit: number; owner?: string; fallbackKey?: string }): Promise<void> {
+    const slot = `${id}/${shotId}`;
+    const key = this.holds.get(slot);
+    this.holds.delete(slot);
+    const quota = this.deps.quota;
+    if (!quota) return;
+    try {
+      if (outcome === 'release') { if (key) await quota.release(key); return; }
+      const owner = outcome.owner && outcome.owner !== 'resume' ? outcome.owner : 'system:resume';
+      await quota.commit(key ?? outcome.fallbackKey ?? `dub:${slot}`, outcome.commit, { userId: owner, kind: 'elevenChars', meta: { story: id, shot: shotId } });
+    } catch (error) {
+      console.error('[dub] quota settle failed', error instanceof Error ? error.message : error); // the sweep frees what stays open
+    }
+  }
+
+  /** For the quota sweep: is the reservation `dub:<story>:<shot>:<hash>` still backed by a queued/running shot? */
+  async isHoldLive(key: string): Promise<boolean> {
+    const [, id, shotId, hash] = key.split(':');
+    if (!id || !shotId || !hash) return false;
+    if (this.inflight.get(`${id}/${shotId}`) === hash) return true;
+    const status = (await this.read(id)).shots[shotId]?.status;
+    return status === 'queued' || status === 'running';
+  }
+
   private async fail(id: string, shotId: string, error: unknown): Promise<void> {
+    await this.settleHold(id, shotId, 'release');
     const message = error instanceof DubError ? error.message : 'Dubbing gagal dibuat. Coba lagi.';
     await this.mutate(id, doc => { const e = (doc.shots[shotId] ??= {}); e.status = 'failed'; e.error = message.slice(0, 300); }).catch(() => undefined);
   }
 
-  private async renderShot(id: string, shotId: string, opts: { force?: boolean; adopt?: boolean } = {}): Promise<void> {
+  private async renderShot(id: string, shotId: string, opts: { force?: boolean; adopt?: boolean; owner?: string } = {}): Promise<void> {
     const [doc, board] = await Promise.all([this.read(id), this.deps.board(id)]);
     const index = board.shots.findIndex(s => s.id === shotId);
     if (index < 0) return;
@@ -364,15 +416,17 @@ export class DubService {
     const e = this.effective(doc, shot);
     const dir = join(this.deps.dir(id), 'dub');
     if (!opts.force && e.fresh) { // already fresh (e.g. a resumed duplicate, or an archived dub that is current again): spend nothing
+      await this.settleHold(id, shotId, 'release');
       await this.mutate(id, d => { const own = d.shots[shotId]; if (!own) return; const x = this.effective(d, shot); if (x.restored) this.swapIn(own, x.restored); delete own.status; });
       return;
     }
-    if (!e.text || !e.voiceId) { await this.mutate(id, d => { if (d.shots[shotId]) delete d.shots[shotId]!.status; }); return; }
+    if (!e.text || !e.voiceId) { await this.settleHold(id, shotId, 'release'); await this.mutate(id, d => { if (d.shots[shotId]) delete d.shots[shotId]!.status; }); return; }
     if (opts.adopt && !opts.force) { // after a restart: the audio may have been saved just before the crash (the provider already billed it)
       for (const h of new Set([e.hash, e.legacyHash])) {
         const name = `${shotId}-${h.slice(0, 8)}.mp3`;
         if (!(await stat(join(dir, name)).then(st => st.size > 0, () => false))) continue;
         const seconds = Math.round((await this.deps.probe(join(dir, name))) * 1000) / 1000;
+        await this.settleHold(id, shotId, { commit: e.text.length, ...(opts.owner ? { owner: opts.owner } : {}), fallbackKey: `dub:${id}:${shotId}:${e.hash}` });
         await this.commit(id, shotId, e, name, seconds, undefined);
         return;
       }
@@ -387,6 +441,8 @@ export class DubService {
       text: e.text, voiceId: e.voiceId, modelId: doc.settings.modelId, languageCode: doc.settings.languageCode, settings: doc.settings.voice,
       ...(prev ? { previousText: prev } : {}), ...(next ? { nextText: next } : {})
     });
+    // The provider billed these characters: counted now, whatever happens to the file afterwards.
+    await this.settleHold(id, shotId, { commit: e.text.length, ...(opts.owner ? { owner: opts.owner } : {}), fallbackKey: `dub:${id}:${shotId}:${e.hash}` });
     await mkdir(dir, { recursive: true });
     const name = `${shotId}-${e.hash.slice(0, 8)}.mp3`;
     const tmp = join(dir, `.${name}.${process.pid}.tmp`);
