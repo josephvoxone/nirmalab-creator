@@ -266,9 +266,19 @@ def dub_tempo(seconds, window, max_tempo=MAX_DUB_TEMPO):
     return (need, False) if need <= max_tempo else (max_tempo, True)
 
 
+def tail_hold(seconds, window, max_tempo=MAX_DUB_TEMPO, breath=0.35):
+    """Seconds of the last frame to hold so a closing dub is heard to the end instead of being cut.
+
+    A dub that fits at `max_tempo` needs none; otherwise the hold is what is still missing plus a breath of quiet.
+    """
+    if seconds <= 0 or window <= 0 or seconds / max_tempo <= window:
+        return 0.0
+    return round(seconds / max_tempo - window + breath, 2)
+
+
 def filter_graph(durations, xf, transitions=None, title_input=None, total=None,
                  clip_volume=None, music_input=None, music=None, subtitles=None, fonts_dir=None, zooms=None,
-                 streams='av', zoom_ys=None, dubs=None):
+                 streams='av', zoom_ys=None, dubs=None, tail_hold=0.0):
     """One ffmpeg filter graph.  streams: 'av' (both), 'v' (video chain only) or 'a' (audio chain only).
 
     Production renders 'v' and 'a' in two ffmpeg runs: in one graph, ffmpeg 5.1 reads every clip to feed the
@@ -286,7 +296,8 @@ def filter_graph(durations, xf, transitions=None, title_input=None, total=None,
         if want_v:
             parts.append(
                 f'[{i}:v]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},{zoom}'
-                f'fps={FPS},setsar=1,format=yuv420p,settb=AVTB[v{i}]'
+                f'fps={FPS},setsar=1,format=yuv420p,settb=AVTB'
+                + (f',tpad=stop_mode=clone:stop_duration={tail_hold}' if tail_hold and i == n - 1 else '') + f'[v{i}]'
             )
         dub = (dubs or [])[i] if dubs and i < len(dubs) else None
         if want_a and dub:
@@ -334,12 +345,20 @@ def filter_graph(durations, xf, transitions=None, title_input=None, total=None,
     if music_input is not None and music:
         at_ms = int(round(float(music.get('at', 0)) * 1000))
         tail = f'atrim=0:{round(total - float(music.get("at", 0)), 3)},' if total else ''
+        # Under a dubbed voice the bed gets out of the way: the clips' audio (the voice) is the sidechain key, and the
+        # rumble below the voice is cleared (measured: ~12 dB lower while speaking, back up in the pauses).
+        duck = any(dubs or [])
         parts.append(
             f'[{music_input}:a]aformat=sample_rates=48000:channel_layouts=stereo,asetpts=PTS-STARTPTS,{tail}'
-            f'volume={round(float(music.get("volume", 0.35)), 3)},adelay={at_ms}|{at_ms}[mus]'
+            f'{"highpass=f=90," if duck else ""}volume={round(float(music.get("volume", 0.35)), 3)},adelay={at_ms}|{at_ms}[mus]'
         )
         parts.append(audio.rstrip(',') + ('[clipa]' if audio != f'[{aprev}]' else 'anull[clipa]'))
-        parts.append('[clipa][mus]amix=inputs=2:duration=first:normalize=0[mixa]')
+        if duck:
+            parts.append('[clipa]asplit=2[clipm][clipk]')
+            parts.append('[mus][clipk]sidechaincompress=threshold=0.015:ratio=9:attack=40:release=700:makeup=1[musd]')
+            parts.append('[clipm][musd]amix=inputs=2:duration=first:normalize=0[mixa]')
+        else:
+            parts.append('[clipa][mus]amix=inputs=2:duration=first:normalize=0[mixa]')
         audio = '[mixa]'
     if total:
         audio += f'afade=t=in:st=0:d=0.6,afade=t=out:st={round(total - 1.2, 3)}:d=1.2,'
@@ -426,7 +445,7 @@ def main(arg):
         inputs += (['-ss', str(float(music.get('from', 0)))] if music.get('from') else []) + ['-i', music['path']]
     else:
         music = None
-    dubs, warnings = [], []
+    dubs, warnings, last_hold = [], [], 0.0
     karaoke = {}   # shot index -> (tempo, words, window when the dub is cut)
     for i, shot in enumerate(story['shots']):
         d = shot.get('dub')
@@ -440,6 +459,14 @@ def main(arg):
             continue
         seconds = float(d.get('seconds') or probe_duration(dub_file))
         window = durations[i] - DUB_LEAD - (xf if i < len(durations) - 1 else 0.2)
+        if i == len(durations) - 1:
+            # The closing line is never cut: hold the last frame for as long as the fastest tempo still lacks.
+            hold = tail_hold(seconds, window)
+            if hold:
+                last_hold = hold
+                durations[i] = round(durations[i] + hold, 3)
+                window += hold
+                warnings.append(f"{shot['id']}: the last frame is held {hold:.2f}s so the closing line is heard to the end")
         tempo, cut = dub_tempo(seconds, window)
         if cut:
             warnings.append(f"{shot['id']}: dub {seconds:.1f}s does not fit the {window:.1f}s window even at {tempo}x: the end is cut")
@@ -468,8 +495,9 @@ def main(arg):
             subs = os.path.join(subs_dir, 'subs.ass')
             open(subs, 'w', encoding='utf-8').write(ass_document(events, W, H, style=edit.get('subtitleStyle'),
                                                                 size=edit.get('subtitleSize'), y=edit.get('subtitleY')))
+    total = round(sum(durations) - xf * (len(durations) - 1), 3)
     graph_args = dict(title_input=title_input, total=total, clip_volume=edit.get('clipVolume'),
-                      music_input=music_input, music=music, subtitles=subs,
+                      music_input=music_input, music=music, subtitles=subs, tail_hold=last_hold,
                       fonts_dir=FONTS_DIR if edit.get('subtitleStyle') == HANDWRITTEN else None, zooms=zooms, zoom_ys=zoom_ys, dubs=dubs)
     vgraph = filter_graph(durations, xf, transitions[1:], streams='v', **graph_args)
     agraph = filter_graph(durations, xf, transitions[1:], streams='a', **graph_args)
