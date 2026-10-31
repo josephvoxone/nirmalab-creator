@@ -21,6 +21,8 @@ import { ClipPreview, SequencePlayer } from './Player.js';
 import { formatSeconds, sequenceClips } from './TimelineModel.js';
 
 const megabytes = (bytes: number) => `${(bytes / 1024 / 1024).toLocaleString('id-ID', { maximumFractionDigits: 1, minimumFractionDigits: 1 })} MB`;
+/** Shots the last assembly could not dub with a fresh voice (server warning `dub-basi:<shot>`). */
+const silentDubShots = (story: { warnings?: string[] }) => (story.warnings ?? []).filter(w => w.startsWith('dub-basi:')).map(w => w.slice('dub-basi:'.length));
 const when = (ms: number) => new Date(ms).toLocaleString('id-ID', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 
 /** Names the project's next step; the header button runs it (never a second copy here). */
@@ -152,6 +154,7 @@ export function ResultTab() {
               <dt className="text-muted-foreground">Isi</dt><dd>{board.scenes?.length ?? 1} scene · {total} shot · {board.aspect ?? '9:16'}</dd>
             </dl>
             {story.videoStale && <p className="text-[12px] text-muted-foreground">Video ini belum mengikuti urutan terbaru di timeline.</p>}
+            {silentDubShots(story).length > 0 && <p role="status" className="text-[12px] text-foreground">Dirakit tanpa suara dub untuk shot {silentDubShots(story).join(', ')}: dub-nya belum terbaru. Perbarui di tab Dubbing, lalu rakit ulang.</p>}
             <div className="flex flex-wrap gap-1.5">
               <a href={media.final(id)} download className={buttonVariants({ size: 'sm', variant: 'glass' })}><Download /> Unduh</a>
             </div>

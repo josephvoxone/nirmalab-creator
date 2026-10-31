@@ -154,7 +154,7 @@ describe('DubService.render', () => {
     expect(h.calls.length).toBe(before);
   });
 
-  it('after a text edit only that shot is stale and only it is rendered again; the old file is removed', async () => {
+  it('after a text edit only that shot is stale and only it is rendered again; the old audio is archived', async () => {
     const h = make();
     await h.svc.updateSettings(ID, { voiceId: 'V1' });
     const all = { kind: 'all' } as const;
@@ -169,7 +169,9 @@ describe('DubService.render', () => {
     expect(h.calls.length - before).toBe(1);
     expect(h.calls.at(-1)!.text).toBe('Tangan itu membelokkan langkahku.');
     const files2 = readdirSync(join(dir, ID, 'dub')).sort();
-    expect(files2).toHaveLength(files1.length); // the old s2 file is gone, not piled up
+    // the replaced s2 audio is archived (so going back to that text is free), not piled up: at most 3 earlier dubs per shot (see dub-money.test.ts)
+    expect(files2).toHaveLength(files1.length + 1);
+    expect(files2.filter(f => f.startsWith('s2-'))).toHaveLength(2);
     expect(files2.filter(f => f.startsWith('s2-'))).not.toEqual(files1.filter(f => f.startsWith('s2-')));
   });
 

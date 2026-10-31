@@ -13,7 +13,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { useSession } from '../../lib/session.js';
 import { Choice, Segmented, inputClass } from '../../ui/controls.js';
 import { EmptyState, ErrorState, LoadingState, describeError } from '../../ui/states.js';
-import { dubApi, fmtCredits, STATUS_TEXT, type DubPlan, type DubScope, type DubShot, type DubState, type Voice } from './dubClient.js';
+import { dubApi, fmtCredits, fmtRatio, STATUS_TEXT, type DubPlan, type DubScope, type DubShot, type DubState, type Voice } from './dubClient.js';
 import { useProject } from './useProject.js';
 
 const TONE: Record<DubShot['status'], string> = { none: 'text-muted-foreground', queued: 'text-muted-foreground', running: 'text-foreground', done: 'text-(--success)', stale: 'text-foreground', failed: 'text-destructive' };
@@ -72,8 +72,8 @@ export function DubTab() {
     setPending({ scope, plan, force, label });
     return undefined;
   });
-  const confirm = () => pending && run('render', async () => {
-    const s = await api.render(p.id, pending.scope, pending.plan.credits, pending.force);
+  const confirm = (acceptTooLong = false) => pending && run('render', async () => {
+    const s = await api.render(p.id, pending.scope, pending.plan.credits, pending.force, acceptTooLong);
     setPending(undefined);
     return s;
   });
@@ -89,6 +89,21 @@ export function DubTab() {
     ...(dub.settings.voiceId && !(voices ?? []).some(v => v.id === dub.settings.voiceId) ? [{ value: dub.settings.voiceId, label: dub.settings.voiceId, hint: undefined }] : [])];
   const t = dub.totals;
   const lock = !canEdit;
+  // Text without a fresh dub, in a project that already has dubs: those shots are silent in the video.
+  const hasDubs = dub.shots.some(s => !s.skipped && (s.status === 'done' || s.status === 'stale'));
+  const silent = hasDubs && t.active === 0 ? dub.shots.filter(s => !s.skipped && (s.status === 'none' || s.status === 'stale' || s.status === 'failed')) : [];
+  const tooLongNow = pending?.plan.blocked ?? [];
+
+  const fitLine = (s: DubShot) => {
+    const f = s.fit;
+    if (!f || s.skipped) return null;
+    const sec = (n: number) => fmtCredits(n);
+    const base = `${f.basis === 'measured' ? 'Dub' : '≈'} ${sec(f.predictedSec)} dtk · jendela ${sec(f.windowSec)} dtk`;
+    const note = f.level === 'warn' ? ` · Agak panjang: dipercepat ×${fmtRatio(f.ratio)}.${f.suggestChars ? ` Ringkas ±${f.suggestChars} karakter supaya tetap natural.` : ''}`
+      : f.level === 'block' ? ` · Terlalu panjang untuk klipnya (×${fmtRatio(f.ratio)}).${f.suggestChars ? ` Ringkas ±${f.suggestChars} karakter, atau pilih Dub tetap.` : ' Ringkas dulu, atau pilih Dub tetap.'}`
+      : f.level === 'hold' ? ` · Kalimat penutup: bingkai terakhir ditahan ${sec(f.holdSec ?? 0)} dtk.` : '';
+    return <p data-fit={f.level} className={cn('text-[12px] tabular-nums', f.level === 'block' ? 'text-destructive' : f.level === 'warn' ? 'text-foreground' : 'text-muted-foreground')}>{base}{note}</p>;
+  };
 
   const shotRow = (s: DubShot) => {
     const isEditing = editing === s.shotId;
@@ -115,6 +130,7 @@ export function DubTab() {
             <Button type="button" size="sm" variant="ghost" aria-label="Batal ubah teks" onClick={() => setEditing(undefined)}><X /></Button>
           </form>
         ) : <p className={cn('text-[13px] leading-snug', s.skipped ? 'text-muted-foreground italic' : 'text-foreground')}>{s.skipped ? 'Shot ini tidak punya narasi.' : s.text}</p>}
+        {fitLine(s)}
         {s.tooLong && <p role="alert" className="text-[12px] text-destructive">Teks terlalu panjang untuk satu shot.</p>}
         {s.status === 'failed' && s.error && <p role="alert" className="text-[12px] text-destructive">{s.error}</p>}
         {(s.status === 'done' || s.status === 'stale') && s.audio && <audio controls preload="none" className="h-8 w-full max-w-sm" aria-label={`Putar dub ${s.shotId}`} src={api.audioUrl(p.id, s.shotId, s.audio)} />}
@@ -155,6 +171,7 @@ export function DubTab() {
           {!lock && <Button size="sm" variant="glass" data-strong="" disabled={busy !== undefined || !dub.configured || !dub.settings.voiceId} onClick={() => void ask({ kind: 'all' }, 'semua')}><AudioLines /> Dub semua yang belum</Button>}
         </span>
       </section>
+      {silent.length > 0 && <p role="status" className="rounded-md bg-muted px-3 py-2 text-[12.5px] text-foreground">Shot {silent.map(s => s.shotId).join(', ')} punya teks tapi belum punya dub terbaru: di video, shot itu akan sunyi sampai di-dub.</p>}
       {p.story?.videoStale && t.done > 0 && <p role="status" className="text-[12.5px] text-muted-foreground">Dubbing berubah. Rakit ulang video di tab Hasil agar suaranya ikut.</p>}
 
       {pending && (
@@ -162,8 +179,10 @@ export function DubTab() {
           <p className="min-w-0 flex-1 text-[13px] text-foreground tabular-nums">
             Dub {pending.label === 'semua' ? 'semua yang belum' : pending.label}: <strong>{pending.plan.shotIds.length} shot</strong>, {pending.plan.chars.toLocaleString('id-ID')} karakter, memakai <strong>±{fmtCredits(pending.plan.credits)} kredit</strong> ElevenLabs.
           </p>
+          {tooLongNow.length > 0 && <p className="basis-full text-[12.5px] text-destructive">Ringkas dulu: {tooLongNow.join(', ')} terlalu panjang untuk klipnya, jadi suaranya akan dipercepat lalu dipotong. Ubah teksnya, atau pilih Dub tetap.</p>}
           <Button size="sm" variant="ghost" onClick={() => setPending(undefined)}>Batal</Button>
-          <Button size="sm" variant="glass" data-strong="" disabled={busy === 'render'} onClick={() => void confirm()}>{busy === 'render' ? 'Memulai…' : 'Lanjut dub'}</Button>
+          {tooLongNow.length > 0 && <Button size="sm" variant="glass" disabled={busy === 'render'} onClick={() => void confirm(true)}>Dub tetap</Button>}
+          <Button size="sm" variant="glass" data-strong="" disabled={busy === 'render' || tooLongNow.length > 0} onClick={() => void confirm()}>{busy === 'render' ? 'Memulai…' : 'Lanjut dub'}</Button>
         </div>
       )}
       {error && <p role="alert" className="rounded-md bg-destructive/10 px-3 py-2 text-[12.5px] text-destructive">{error}</p>}
