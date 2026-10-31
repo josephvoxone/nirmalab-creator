@@ -5,6 +5,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AudioLines, Check, Pencil, RefreshCw, Trash2, X } from 'lucide-react';
+import { Link, useLocation } from 'react-router-dom';
 import { cn } from '@/lib/utils';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -22,6 +23,7 @@ type Pending = { scope: DubScope; plan: DubPlan; force: boolean; label: string }
 
 export function DubTab() {
   const p = useProject();
+  const location = useLocation();
   const { user, fetchImpl } = useSession();
   const api = useMemo(() => dubApi(fetchImpl), [fetchImpl]);
   const canEdit = user.isAdmin;
@@ -123,10 +125,15 @@ export function DubTab() {
   return (
     <div className="flex flex-col gap-4">
       {!dub.configured && (
-        <p role="status" className="rounded-md bg-muted px-3 py-2 text-[12.5px] text-muted-foreground">Belum ada API key ElevenLabs. Admin mengisinya di Pengaturan › Provider › ElevenLabs.</p>
+        <p role="status" className="rounded-md bg-muted px-3 py-2 text-[12.5px] text-foreground">
+          Belum ada API key ElevenLabs, jadi tombol Dub belum aktif.{' '}
+          {canEdit
+            ? <Link to="/pengaturan/provider" state={{ background: (location.state as { background?: unknown } | null)?.background ?? location }} className="underline underline-offset-2 hover:text-foreground/80">Pengaturan › Provider</Link>
+            : 'Minta admin mengisinya di Pengaturan › Provider.'}
+        </p>
       )}
       <section aria-label="Pengaturan suara" className="flex flex-wrap items-end gap-3">
-        <Choice label="Suara" showLabel value={dub.settings.voiceId ?? ''} options={voiceOptions} placeholder={voices ? 'Pilih suara…' : 'Memuat suara…'} disabled={lock || !dub.configured || busy !== undefined}
+        <Choice label="Suara" showLabel value={dub.settings.voiceId ?? ''} options={voiceOptions} placeholder={!dub.configured ? 'Isi API key dulu' : voices ? 'Pilih suara…' : 'Memuat suara…'} disabled={lock || !dub.configured || busy !== undefined}
           onChange={voiceId => void run('voice', () => api.settings(p.id, { voiceId }))} className="w-52" />
         <Choice label="Model" showLabel value={dub.settings.modelId} options={dub.models.map(m => ({ value: m.id, label: m.label }))} disabled={lock || busy !== undefined}
           onChange={modelId => void run('model', () => api.settings(p.id, { modelId }))} className="w-64 max-w-full" />

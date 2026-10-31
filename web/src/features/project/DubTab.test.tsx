@@ -71,10 +71,20 @@ describe('Dubbing tab', () => {
     expect(await screen.findByRole('status', { name: /memuat dubbing/i })).toBeInTheDocument();
   });
 
-  it('without a key it says where to add one and disables dubbing', async () => {
+  it('without a key it says where to add one (a link that opens the settings), disables dubbing and does not pretend to load voices', async () => {
     open(fakeDub({ configured: false }));
     expect(await screen.findByText(/belum ada api key elevenlabs/i)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /pengaturan › provider/i })).toHaveAttribute('href', '/pengaturan/provider');
     expect(screen.getByRole('button', { name: /dub semua yang belum/i })).toBeDisabled();
+    expect(screen.getByRole('combobox', { name: 'Suara' })).toHaveTextContent(/isi api key dulu/i);
+    expect(screen.queryByText(/memuat suara/i)).toBeNull();
+  });
+
+  it('a member sees no link to the settings (only admins can fill keys)', async () => {
+    open(fakeDub({ configured: false }), { isAdmin: false });
+    expect(await screen.findByText(/belum ada api key elevenlabs/i)).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /pengaturan/i })).toBeNull();
+    expect(screen.getByText(/minta admin/i)).toBeInTheDocument();
   });
 
   it('needs a voice before it can dub', async () => {
