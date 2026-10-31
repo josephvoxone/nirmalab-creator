@@ -7,6 +7,7 @@ import { registerAuthRoutes } from './auth/routes.js';
 import { UserAuthStore } from './auth/store.js';
 import { registerFlowRoutes } from './flow/routes.js';
 import { registerFreeGenerateRoutes } from './generate/routes.js';
+import { migrateGenerateFiles } from './generate/migrate.js';
 import { PublisherService, isStoryOwner, migratePublisherTokensAtBoot, registerPublisherRoutes, resolveMainOwner } from './publisher/index.js';
 import { FlowStore } from './flow/store.js';
 import { pollinationsText } from './generate/pollinations.js';
@@ -216,6 +217,18 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
     } catch (error) {
       if (env.TENANCY_ENFORCE === '1') throw error;
       server.log.error({ err: error }, 'tenancy: penetapan pemilik gagal (server tetap jalan; TENANCY_ENFORCE=1 menghentikan boot)');
+    }
+  }
+  // T4 (jobs): files Studio made before per-user storage (free-generate/{tts,images,clips}) go to the main owner, with backup +
+  // manifest + rollback; no-op once done. Same switches as above: TENANCY_MIGRATE=0 skips, TENANCY_DRY_RUN=1 only reports.
+  if (env.TENANCY_MIGRATE !== '0') {
+    try {
+      const mainOwnerId = resolveMainOwner(userAuthStore.listUsers(), env).owner?.user.id;
+      const generated = await migrateGenerateFiles({ dataDir: options.dataDir, ownerId: mainOwnerId, dryRun: env.TENANCY_DRY_RUN === '1' });
+      server.log.info({ tenancy: { generate: { dryRun: generated.dryRun, moved: generated.moved.length, conflicts: generated.conflicts.length, manifest: generated.manifest } } }, 'tenancy: berkas free-generate');
+    } catch (error) {
+      if (env.TENANCY_ENFORCE === '1') throw error;
+      server.log.error({ err: error }, 'tenancy: migrasi berkas free-generate gagal (server tetap jalan; berkas lama tetap terbaca oleh pemilik utama)');
     }
   }
   // T7 (publisher): tokens saved before per-user storage were one global file per platform. Hand them to the main
