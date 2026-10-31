@@ -102,7 +102,7 @@
 - `POST /api/stories/:id/assistant/undo/:undoId` → `{ ok, rev }` or 409 with spec message.
 - `skillsPrompt(): string` — the four skill files concatenated (≤ 2,500 words total) + `listSkills()` for MCP.
 
-Skill files are condensed, imperative rules distilled from: `~/.hermes/skills/software-development/nirmalab-creator-shipping/references/cinematic-quality.md`, `~/.hermes/skills/creative/cinematic-footage/SKILL.md`, `~/.hermes/skills/creative/antislop-copywriting/SKILL.md`, `~/.hermes/skills/viral-hooks/SKILL.md`, and `server/src/text/lint.ts` (P4 banned list). They must say: edit intent not prompt text; one action and one camera move per shot; keep character anchors verbatim; narration ≤12 words, Indonesian, no empty adjectives; hook in the first shot.
+Skill files are condensed, imperative rules distilled from the project's own cinematic-quality notes, the shooting and copy craft references, and `server/src/text/lint.ts` (P4 banned list). They must say: edit intent not prompt text; one action and one camera move per shot; keep character anchors verbatim; narration ≤12 words, Indonesian, no empty adjectives; hook in the first shot.
 
 System prompt = role + project summary (`get_project`) + `skillsPrompt()` + rules (address shots by the numbers shown, ask before spending, answer in Indonesian, short).
 
