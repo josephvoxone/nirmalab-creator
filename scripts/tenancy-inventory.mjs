@@ -69,6 +69,11 @@ function dirBytes(dir) {
 }
 const storiesRoot = join(dataDir, 'stories');
 const stories = { total: 0, withOwner: 0, withoutOwner: 0, orphans: [], qaOwned: [], unreadable: [] };
+// --- workspace summary (wave 4): how many projects each workspace holds and how many people are in it. No title but the
+// orphan's (as before) and never an invite token or hash.
+const projectsByWorkspace = new Map();
+let projectsWithoutWorkspace = 0;
+let livingProjectsWithoutTitle = 0;
 const buckets = new Map(); // ownerId|null -> { projects, bytes }
 const bucket = id => { const k = id ?? null; if (!buckets.has(k)) buckets.set(k, { projects: 0, bytes: 0 }); return buckets.get(k); };
 if (existsSync(storiesRoot)) {
@@ -79,6 +84,12 @@ if (existsSync(storiesRoot)) {
     try { record = JSON.parse(readFileSync(file, 'utf8')); if (!record || typeof record !== 'object' || Array.isArray(record)) throw new Error('x'); } catch { stories.unreadable.push(id); continue; }
     stories.total += 1;
     const owner = typeof record.createdBy === 'string' && record.createdBy ? record.createdBy : null;
+    const workspaceId = typeof record.workspaceId === 'string' && record.workspaceId ? record.workspaceId : null;
+    if (workspaceId) projectsByWorkspace.set(workspaceId, (projectsByWorkspace.get(workspaceId) ?? 0) + 1);
+    else projectsWithoutWorkspace += 1;
+    const title = typeof record.title === 'string' ? record.title.trim() : '';
+    // a project whose owner still exists but that was never given a name: the sidebar shows a blank card to a real person
+    if (owner && byId.has(owner) && !title) livingProjectsWithoutTitle += 1;
     const bytes = wantSize ? dirBytes(join(storiesRoot, id)) : 0;
     const b = bucket(owner);
     b.projects += 1;
@@ -86,13 +97,32 @@ if (existsSync(storiesRoot)) {
     if (!owner) { stories.withoutOwner += 1; continue; }
     stories.withOwner += 1;
     const user = byId.get(owner);
-    if (!user) stories.orphans.push({ id, title: typeof record.title === 'string' ? record.title : '', ownerId: owner, bytes });
+    if (!user) stories.orphans.push({ id, title, ownerId: owner, bytes });
     else if (user.qa) stories.qaOwned.push({ id, ownerId: owner });
   }
 }
 const perOwner = [...buckets.entries()]
   .map(([ownerId, v]) => ({ ownerId, email: ownerId ? (byId.get(ownerId)?.email ?? null) : null, projects: v.projects, bytes: v.bytes }))
   .sort((a, b) => b.bytes - a.bytes || b.projects - a.projects);
+
+// --- workspaces: id, name, personal flag, members and projects. Invites (tokens and hashes) are never read into the output.
+const wsDoc = readJson(join(dataDir, 'workspace', 'workspaces.json'), 'workspace/workspaces.json');
+const wsList = Array.isArray(wsDoc?.workspaces) ? wsDoc.workspaces : [];
+const wsMemberships = Array.isArray(wsDoc?.memberships) ? wsDoc.memberships : [];
+const workspaces = {
+  total: wsList.length,
+  personal: wsList.filter(w => w.personal).length,
+  perWorkspace: wsList.map(w => ({
+    id: w.id,
+    name: typeof w.name === 'string' ? w.name : '',
+    personal: Boolean(w.personal),
+    members: wsMemberships.filter(m => m.workspaceId === w.id).length,
+    projects: projectsByWorkspace.get(w.id) ?? 0
+  })).sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id)),
+  projectsWithoutWorkspace,
+  projectsWithoutTitle: livingProjectsWithoutTitle,
+  accountsWithoutPersonal: users.filter(u => !wsList.some(w => w.personal && w.ownerId === u.id)).map(u => u.email)
+};
 
 // --- publish tokens: file names only (platform), never content
 const publishTokens = { global: [], perUser: 0 };
@@ -127,7 +157,7 @@ const migDir = join(dataDir, 'tenancy', 'migrations');
 const migrations = existsSync(migDir) ? readdirSync(migDir).filter(n => n.endsWith('.json')).sort() : [];
 
 const result = {
-  dataDir, generatedAt: new Date().toISOString(), members: users, primaryOwner, stories, perOwner,
+  dataDir, generatedAt: new Date().toISOString(), members: users, primaryOwner, stories, perOwner, workspaces,
   wouldAssign: primaryOwner ? stories.withoutOwner : 0,
   publishTokens, mcpTokens, flowJobs, freeGenerate: { files: genFiles }, migrations, problems
 };
@@ -150,6 +180,11 @@ for (const id of stories.unreadable) out.push(`  RUSAK  ${id}`);
 out.push('');
 out.push(`Ukuran per pemilik${wantSize ? '' : ' (dilewati: --no-size)'}:`);
 for (const o of perOwner) out.push(`  ${o.ownerId ? (o.email ?? `${o.ownerId} (akun sudah tidak ada)`) : '(tanpa pemilik)'}  ${o.projects} proyek  ${mb(o.bytes)}`);
+out.push('');
+out.push(`Workspace: ${workspaces.total} (pribadi ${workspaces.personal}); proyek tanpa workspace ${workspaces.projectsWithoutWorkspace}` +
+  (workspaces.accountsWithoutPersonal.length ? `; akun TANPA workspace pribadi: ${workspaces.accountsWithoutPersonal.join(', ')}` : '; setiap akun punya workspace pribadi'));
+for (const w of workspaces.perWorkspace) out.push(`  ${w.name || '(tanpa nama)'}${w.personal ? '  [pribadi]' : ''}  anggota ${w.members}  proyek ${w.projects}  ${w.id}`);
+out.push(`Proyek hidup tanpa judul: ${workspaces.projectsWithoutTitle}`);
 out.push('');
 out.push(`Token publish GLOBAL (satu per platform, belum per pengguna): ${publishTokens.global.length ? publishTokens.global.map(t => t.platform).join(', ') : 'tidak ada'}`);
 out.push(`Token MCP: ${mcpTokens.total} (pemilik sudah tidak ada: ${mcpTokens.withoutLiveOwner})`);
