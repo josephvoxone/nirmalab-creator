@@ -63,10 +63,10 @@ def _ass_time(t):
 
 SUNG = '&H0028BEFF'     # spoken words: saturated amber (255, 190, 40); paler gold vanished on a cream painted sky (ASS colours are BGR)
 UNSUNG = '&H00EAF4FA'   # words still to come: warm white
-KARAOKE_PRE = 0.15      # a cue appears a beat before its first word
-KARAOKE_POST = 0.35     # and lingers a moment after its last
-KARAOKE_MAX_WORDS = 6
-KARAOKE_MAX_CHARS = 34
+KARAOKE_PRE = 0.08      # a cue appears a beat before its first word
+KARAOKE_POST = 0.25     # and lingers a moment after its last
+KARAOKE_MAX_WORDS = 3   # a few words at a time, not the whole sentence
+KARAOKE_MAX_CHARS = 30
 KARAOKE_GAP = 0.6       # a pause this long between two words starts a new cue
 
 
@@ -88,21 +88,55 @@ def words_match_text(words, text):
     return bool(words) and _tokens(' '.join(str(w[0]) for w in words)) == _tokens(text)
 
 
+_SENTENCE_END = re.compile(r'[.!?;:][\"\u201d\u2019)]*$')
+
+
+def _balanced(words, max_words, max_chars):
+    """Cut a run of words into the fewest, evenly sized groups of at most max_words that also fit max_chars (4 -> 2+2, never 3+1)."""
+    n = len(words)
+    k = -(-n // max_words)
+    while True:
+        base, extra = divmod(n, k)
+        groups, i = [], 0
+        for g in range(k):
+            size = base + (1 if g < extra else 0)
+            groups.append(words[i:i + size])
+            i += size
+        if k >= n or all(len(g) == 1 or len(' '.join(w[0] for w in g)) <= max_chars for g in groups):
+            return groups
+        k += 1
+
+
 def karaoke_cues(words, max_words=KARAOKE_MAX_WORDS, max_chars=KARAOKE_MAX_CHARS, gap=KARAOKE_GAP):
-    """Split timed words into short readable cues: at sentence ends, at long pauses, never past max_words / max_chars."""
-    cues, cur = [], []
-    for w in words:
-        if cur:
-            too_long = len(' '.join(x[0] for x in cur + [w])) > max_chars
-            if len(cur) >= max_words or too_long or w[1] - cur[-1][2] > gap:
-                cues.append(cur)
-                cur = []
+    """Timed words -> short cues of at most max_words: break at sentence ends, commas and long pauses, then cut each run evenly.
+
+    A lone word before a comma is joined to the next run (a one-word flash reads badly); a one-word sentence stays alone.
+    """
+    runs = []   # [words, reason the run ended]
+    cur = []
+    for i, w in enumerate(words):
         cur.append(w)
-        if re.search(r'[.!?;:][\"\u201d\u2019)]*$', w[0]) or (w[0].endswith(',') and len(cur) >= 4):
-            cues.append(cur)
-            cur = []
+        nxt = words[i + 1] if i + 1 < len(words) else None
+        if _SENTENCE_END.search(w[0]):
+            runs.append([cur, 'sentence']); cur = []
+        elif nxt is not None and nxt[1] - w[2] > gap:
+            runs.append([cur, 'pause']); cur = []
+        elif w[0].endswith(','):
+            runs.append([cur, 'comma']); cur = []
     if cur:
-        cues.append(cur)
+        runs.append([cur, 'end'])
+    merged = []
+    i = 0
+    while i < len(runs):
+        run, reason = runs[i]
+        if len(run) == 1 and reason == 'comma' and i + 1 < len(runs):
+            runs[i + 1][0] = run + runs[i + 1][0]
+        else:
+            merged.append(run)
+        i += 1
+    cues = []
+    for run in merged:
+        cues += _balanced(run, max_words, max_chars)
     return cues
 
 
@@ -111,10 +145,12 @@ def _ass_word(word):
 
 
 def karaoke_events(clock_start, tempo, words, window=None):
-    """(start, end, text, True) cues whose \\kf tags sweep each word over the time it is spoken.
+    """Caption lines that show a few words at a time, with only the word being spoken lit.
 
-    `clock_start` is when the voice begins on the output clock, `tempo` the speed-up applied to the dub, `window` the seconds
-    of dub that survive when it is cut (words starting after it are never spoken, so never shown).
+    Every cue yields one line per word: the same words, the spoken one in SUNG, the rest in UNSUNG, each line lasting from
+    when its word starts to when the next one does (so the light hands over with no gap). The first line fades the cue in,
+    the last fades it out. `clock_start` is when the voice begins on the output clock, `tempo` the speed-up applied to the
+    dub, `window` the seconds of dub that survive when it is cut (words starting after it are never spoken, so never shown).
     """
     tempo = tempo if tempo and tempo > 0 else 1.0
     words = [(str(w[0]), float(w[1]), float(w[2])) for w in words if w and str(w[0]).strip()]
@@ -122,14 +158,13 @@ def karaoke_events(clock_start, tempo, words, window=None):
         words = [w for w in words if w[1] / tempo < window]
     events = []
     for cue in karaoke_cues(words):
-        text = '{\\k%d}' % round(KARAOKE_PRE * 100)
-        for i, (word, s, e) in enumerate(cue):
-            nxt = cue[i + 1][1] if i + 1 < len(cue) else e
-            cs = max(1, round((nxt - s) / tempo * 100))
-            text += '{\\kf%d}%s%s' % (cs, _ass_word(word), ' ' if i + 1 < len(cue) else '')
-        start = max(0.0, clock_start + cue[0][1] / tempo - KARAOKE_PRE)
-        end = clock_start + cue[-1][2] / tempo + KARAOKE_POST
-        events.append([round(start, 3), round(end, 3), text, True])
+        starts = [clock_start + w[1] / tempo for w in cue]
+        starts[0] = max(0.0, starts[0] - KARAOKE_PRE)
+        ends = starts[1:] + [clock_start + cue[-1][2] / tempo + KARAOKE_POST]
+        for k, (word, s, e) in enumerate(zip(cue, starts, ends)):
+            fade = '{\\fad(%d,%d)}' % (120 if k == 0 else 0, 200 if k == len(cue) - 1 else 0)
+            text = fade + ' '.join('{\\1c%s&}%s' % (SUNG if j == k else UNSUNG, _ass_word(w[0])) for j, w in enumerate(cue))
+            events.append([round(s, 3), round(max(e, s + 0.04), 3), text, True])
     for a, b in zip(events, events[1:]):
         a[1] = min(a[1], b[0])
     return [tuple(e) for e in events]
@@ -154,13 +189,13 @@ def ass_document(events, w, h, style=None, size=None, y=None):
     else:
         style_line = (f'Style: Default,DejaVu Sans,{size},&H00FFFFFF,&H00FFFFFF,&H00101010,&H64000000,1,0,0,0,100,100,0,0,1,{max(2, size // 14)},1,2,'
                       f'{round(w * 0.08)},{round(w * 0.08)},{round(h * 0.14)},1')
-    # Karaoke: ASS sweeps SecondaryColour (not yet spoken) to PrimaryColour (spoken). A heavy dark outline keeps both
-    # readable on a pale painted sky, where thin white lettering disappeared.
+    # Word-by-word captions: the base colour is the warm white, the word being spoken is lit by a colour override. A heavy
+    # dark outline keeps both readable on a pale painted sky, where thin white lettering disappeared.
     if handwritten:
-        karaoke_line = (f'Style: Karaoke,Gochi Hand,{size},{SUNG},{UNSUNG},&H20122030,&H00000000,0,0,0,0,100,100,1,0,1,'
+        karaoke_line = (f'Style: Karaoke,Gochi Hand,{size},{UNSUNG},{UNSUNG},&H20122030,&H00000000,0,0,0,0,100,100,1,0,1,'
                         f'{max(4, size // 8)},0,8,{round(w * 0.08)},{round(w * 0.08)},{round(h * 0.11)},1')
     else:
-        karaoke_line = (f'Style: Karaoke,DejaVu Sans,{size},{SUNG},{UNSUNG},&H00101010,&H64000000,1,0,0,0,100,100,0,0,1,{max(4, size // 9)},1,2,'
+        karaoke_line = (f'Style: Karaoke,DejaVu Sans,{size},{UNSUNG},{UNSUNG},&H00101010,&H64000000,1,0,0,0,100,100,0,0,1,{max(4, size // 9)},1,2,'
                         f'{round(w * 0.08)},{round(w * 0.08)},{round(h * 0.14)},1')
     lines = [
         '[Script Info]', 'ScriptType: v4.00+', f'PlayResX: {w}', f'PlayResY: {h}', 'WrapStyle: 0', '',
@@ -174,7 +209,7 @@ def ass_document(events, w, h, style=None, size=None, y=None):
     # A chosen position pins the top of the text, centred, at y x height.
     if y is not None:
         lead = f'{{\\an8\\pos({w // 2},{round(h * y)})}}' + lead
-    kar_lead = '{\\fad(120,200)\\blur1}' if handwritten else '{\\fad(120,200)}'
+    kar_lead = '{\\blur1}' if handwritten else ''   # the fades are per cue, written into the first and last line by karaoke_events
     if y is not None:
         kar_lead = f'{{\\an8\\pos({w // 2},{round(h * y)})}}' + kar_lead
     for ev in events:

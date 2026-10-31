@@ -6,71 +6,104 @@ import subprocess
 import tempfile
 import unittest
 
-from assemble import ass_document, karaoke_cues, karaoke_events, words_match_text, shot_starts
+from assemble import ass_document, karaoke_cues, karaoke_events, words_match_text, shot_starts, SUNG, UNSUNG, KARAOKE_PRE, KARAOKE_POST
 
 W = lambda *a: [(w, s, e) for w, s, e in a]
 
 
 class Cues(unittest.TestCase):
-    def test_a_short_sentence_is_one_cue(self):
-        words = W(('Tuhan', 0, .4), ('menunjukkan', .45, 1.0), ('dua', 1.05, 1.3), ('jalan.', 1.35, 1.8))
-        self.assertEqual([[w[0] for w in c] for c in karaoke_cues(words)], [['Tuhan', 'menunjukkan', 'dua', 'jalan.']])
-
-    def test_a_long_line_splits_at_the_sentence_end_first(self):
-        words = W(('Dia', 0, .3), ('diam.', .35, .8), ('Aku', 1.0, 1.2), ('menoleh,', 1.25, 1.8), ('dan', 1.85, 2.0), ('mengerti.', 2.05, 2.6))
-        cues = [[w[0] for w in c] for c in karaoke_cues(words)]
-        self.assertEqual(cues[0], ['Dia', 'diam.'])
-        self.assertEqual(cues[1][0], 'Aku')
-
-    def test_never_more_than_six_words_or_a_wall_of_letters_in_one_cue(self):
+    def test_never_more_than_three_words_in_one_cue(self):
         words = W(*[(f'kata{i}', i * .3, i * .3 + .25) for i in range(15)])
-        for c in karaoke_cues(words):
-            self.assertLessEqual(len(c), 6)
-        long_words = W(*[('menyelamatkan', i * .5, i * .5 + .4) for i in range(5)])
-        for c in karaoke_cues(long_words):
-            self.assertLessEqual(len(' '.join(w[0] for w in c)), 34)
+        self.assertTrue(all(len(c) <= 3 for c in karaoke_cues(words)))
+        self.assertEqual([w[0] for c in karaoke_cues(words) for w in c], [w[0] for w in words], 'no word lost, none reordered')
+
+    def test_chunks_are_balanced_so_no_cue_is_a_lonely_word(self):
+        sizes = lambda n: [len(c) for c in karaoke_cues(W(*[(f'k{i}', i * .3, i * .3 + .25) for i in range(n)]))]
+        self.assertEqual(sizes(3), [3])
+        self.assertEqual(sizes(4), [2, 2])
+        self.assertEqual(sizes(5), [3, 2])
+        self.assertEqual(sizes(6), [3, 3])
+        self.assertEqual(sizes(7), [3, 2, 2])
+        self.assertEqual(sizes(1), [1])
+
+    def test_a_sentence_end_always_breaks_the_cue(self):
+        words = W(('Dia', 0, .3), ('diam.', .35, .8), ('Aku', 1.0, 1.2), ('menoleh,', 1.25, 1.8), ('dan', 1.85, 2.0), ('mengerti.', 2.05, 2.6))
+        self.assertEqual([[w[0] for w in c] for c in karaoke_cues(words)],
+                         [['Dia', 'diam.'], ['Aku', 'menoleh,'], ['dan', 'mengerti.']])
+
+    def test_a_comma_breaks_but_never_leaves_a_one_word_cue(self):
+        words = W(('Tapi,', 0, .3), ('ia', .35, .5), ('tetap', .55, .9), ('masuk.', .95, 1.4))
+        self.assertEqual([[w[0] for w in c] for c in karaoke_cues(words)], [['Tapi,', 'ia'], ['tetap', 'masuk.']])
 
     def test_a_long_pause_between_words_starts_a_new_cue(self):
-        words = W(('satu', 0, .3), ('dua', .35, .6), ('tiga', 3.0, 3.3))
-        self.assertEqual(len(karaoke_cues(words)), 2)
+        words = W(('satu', 0, .3), ('dua', .35, .6), ('tiga', 3.0, 3.3))   # three words would fit one cue; the silence is what splits them
+        self.assertEqual([[w[0] for w in c] for c in karaoke_cues(words)], [['satu', 'dua'], ['tiga']])
 
     def test_no_words_no_cues(self):
         self.assertEqual(karaoke_cues([]), [])
 
 
+def plain(text):
+    import re
+    return re.sub(r'\{[^}]*\}', '', text)
+
+
 class Events(unittest.TestCase):
-    def test_times_are_on_the_output_clock_and_follow_the_tempo(self):
-        words = W(('Halo', 0.0, 0.4), ('dunia.', 0.5, 1.0))
-        (start, end, text, raw), = karaoke_events(10.3, 1.25, words)
-        self.assertTrue(raw)
-        self.assertAlmostEqual(start, 10.3 - 0.15, places=2)               # shows a beat before the first word
-        self.assertAlmostEqual(end, 10.3 + 1.0 / 1.25 + 0.35, places=2)    # and lingers after the last
-        # centiseconds per word on the sped-up clock: (0.5-0.0)/1.25 and (1.0-0.5)/1.25
-        self.assertIn('{\\kf40}Halo', text)
-        self.assertIn('{\\kf40}dunia.', text)
+    def test_one_line_per_word_and_only_that_word_is_amber(self):
+        words = W(('Halo', 0.0, 0.4), ('dunia', 0.5, 1.0), ('hari', 1.1, 1.5))
+        evs = karaoke_events(10.0, 1.0, words)
+        self.assertEqual(len(evs), 3)
+        for k, (start, end, text, raw) in enumerate(evs):
+            self.assertTrue(raw)
+            self.assertEqual(plain(text), 'Halo dunia hari', 'the whole cue stays on screen in every line')
+            parts = text.split(' ')
+            for j, part in enumerate(parts):
+                self.assertEqual(SUNG in part, j == k, f'line {k}: word {j} {part!r}')
+                self.assertEqual(UNSUNG in part, j != k)
 
-    def test_the_cue_opens_with_the_lead_in_so_the_sweep_starts_with_the_first_word(self):
-        (start, end, text, raw), = karaoke_events(5.0, 1.0, W(('a', 0, .5)))
-        self.assertTrue(text.startswith('{\\k15}'), text)
+    def test_the_cue_shows_a_beat_before_its_first_word_and_the_amber_hands_over_without_a_gap(self):
+        words = W(('Halo', 0.0, 0.4), ('dunia', 0.5, 1.0), ('hari', 1.1, 1.5))
+        evs = karaoke_events(10.0, 1.0, words)
+        self.assertAlmostEqual(evs[0][0], 10.0 - KARAOKE_PRE, places=2)
+        self.assertAlmostEqual(evs[0][1], evs[1][0], places=3)
+        self.assertAlmostEqual(evs[1][1], evs[2][0], places=3)
+        self.assertAlmostEqual(evs[1][0], 10.5, places=2)                      # 'dunia' lights exactly when it is spoken
+        self.assertAlmostEqual(evs[2][1], 10.0 + 1.5 + KARAOKE_POST, places=2)  # the last word lingers a moment
 
-    def test_two_cues_do_not_overlap(self):
+    def test_the_fade_belongs_to_the_cue_not_to_each_word(self):
+        evs = karaoke_events(0.0, 1.0, W(('a', 0, .3), ('b', .4, .7), ('c', .8, 1.1)))
+        self.assertTrue(evs[0][2].startswith('{\\fad(120,0)}'), evs[0][2])
+        self.assertTrue(evs[1][2].startswith('{\\fad(0,0)}'), 'no flicker while the light moves from word to word')
+        self.assertTrue(evs[2][2].startswith('{\\fad(0,200)}'), evs[2][2])
+        (only,) = karaoke_events(0.0, 1.0, W(('a', 0, .3)))
+        self.assertTrue(only[2].startswith('{\\fad(120,200)}'), only[2])
+
+    def test_times_follow_the_tempo_of_the_sped_up_dub(self):
+        evs = karaoke_events(10.3, 1.25, W(('Halo', 0.0, 0.4), ('dunia.', 0.5, 1.0)))
+        self.assertAlmostEqual(evs[1][0], 10.3 + 0.5 / 1.25, places=2)
+        self.assertAlmostEqual(evs[1][1], 10.3 + 1.0 / 1.25 + KARAOKE_POST, places=2)
+
+    def test_a_cue_is_replaced_by_the_next_one_never_stacked(self):
         words = W(('Dia', 0, .3), ('diam.', .35, .8), ('Aku', .9, 1.2), ('menoleh.', 1.25, 1.8))
         evs = karaoke_events(0.0, 1.0, words)
-        self.assertEqual(len(evs), 2)
-        self.assertLessEqual(evs[0][1], evs[1][0] + 1e-6)
+        self.assertEqual(plain(evs[0][2]), 'Dia diam.')
+        self.assertEqual(plain(evs[-1][2]), 'Aku menoleh.')
+        for a, b in zip(evs, evs[1:]):
+            self.assertLessEqual(a[1], b[0] + 1e-6)
 
     def test_words_that_start_after_the_window_are_dropped_when_the_dub_is_cut(self):
         words = W(('satu', 0, .5), ('dua', .6, 1.1), ('tiga', 5.0, 5.5))
         evs = karaoke_events(0.0, 1.25, words, window=2.0)
-        joined = ' '.join(e[2] for e in evs)
+        joined = ' '.join(plain(e[2]) for e in evs)
         self.assertIn('dua', joined)
         self.assertNotIn('tiga', joined)
 
     def test_braces_and_newlines_in_a_word_cannot_inject_ass_tags(self):
         evs = karaoke_events(0.0, 1.0, W(('{\\an1}hai', 0, .5), ('a\nb', .6, 1.0)))
-        text = evs[0][2]
-        self.assertNotIn('{\\an1}', text)
-        self.assertNotIn('\n', text)
+        for e in evs:
+            self.assertNotIn('{\\an1}', e[2])
+            self.assertNotIn('\n', e[2])
+            self.assertEqual(plain(e[2]), '(an1)hai a b')
 
 
 class Match(unittest.TestCase):
@@ -87,18 +120,16 @@ class Ass(unittest.TestCase):
     def test_start_times_of_shots_follow_the_crossfades(self):
         self.assertEqual(shot_starts([4.0, 4.0, 4.0], 0.3), [0.0, 3.7, 7.4])
 
-    def test_karaoke_cues_become_dialogue_lines_with_the_sweep_tags_untouched(self):
-        doc = ass_document([(1.0, 3.0, '{\\k15}{\\kf40}Halo {\\kf40}dunia.', True)], 720, 1280, style='tulisan-tangan')
+    def test_karaoke_lines_keep_their_colour_tags_unescaped(self):
+        doc = ass_document([(1.0, 3.0, '{\\1c%s}Halo {\\1c%s}dunia.' % (SUNG, UNSUNG), True)], 720, 1280, style='tulisan-tangan')
         line = [l for l in doc.splitlines() if l.startswith('Dialogue')][0]
-        self.assertIn('{\\kf40}Halo', line)
-        self.assertNotIn('(\\kf40)', line, 'the tags must not be escaped like user text')
+        self.assertIn('{\\1c%s}Halo' % SUNG, line)
+        self.assertNotIn('(\\1c', line, 'the tags must not be escaped like user text')
 
-    def test_the_sung_colour_differs_from_the_unsung_one_and_the_outline_is_heavy(self):
-        doc = ass_document([(1.0, 3.0, '{\\kf40}Halo', True)], 720, 1280, style='tulisan-tangan')
+    def test_the_karaoke_style_is_white_with_a_heavy_outline_and_used_by_its_lines(self):
+        doc = ass_document([(1.0, 3.0, 'Halo', True)], 720, 1280, style='tulisan-tangan')
         style = [l for l in doc.splitlines() if l.startswith('Style: Karaoke')][0].split(',')
-        self.assertNotEqual(style[3], style[4], 'primary (sung) and secondary (unsung) colours must differ for a karaoke sweep')
-        plain = [l for l in doc.splitlines() if l.startswith('Style: Default')][0].split(',')
-        self.assertEqual(plain[3], plain[4], 'plain captions keep a single colour')
+        self.assertEqual(style[3], UNSUNG, 'unspoken words are the base colour; the spoken one is an override')
         self.assertGreaterEqual(int(style[16]), 4, 'a heavy outline keeps the letters readable on a pale sky')
         dialogue = [l for l in doc.splitlines() if l.startswith('Dialogue')][0]
         self.assertIn(',Karaoke,', dialogue)
@@ -108,31 +139,39 @@ class Ass(unittest.TestCase):
         self.assertIn('a (b) c', doc)
 
 
-def gold_pixels(frame_png):
+def amber_stats(frame_png):
+    """(pixel count, mean x) of the amber (255, 190, 40) letters in a frame."""
     from PIL import Image
     im = Image.open(frame_png).convert('RGB')
-    return sum(1 for r, g, b in im.getdata() if r > 230 and 170 < g < 215 and b < 120)   # the amber (255, 190, 40)
+    w = im.size[0]
+    xs = [i % w for i, (r, g, b) in enumerate(im.getdata()) if r > 230 and 170 < g < 215 and b < 120]
+    return (len(xs), sum(xs) / len(xs) if xs else 0.0)
+
+
+def gold_pixels(frame_png):
+    return amber_stats(frame_png)[0]
 
 
 def white_pixels(frame_png):
     from PIL import Image
     im = Image.open(frame_png).convert('RGB')
-    return sum(1 for r, g, b in im.getdata() if r > 235 and g > 225 and b > 205)   # the warm white (250, 244, 234), not the gold (255, 214, 90)
+    return sum(1 for r, g, b in im.getdata() if r > 235 and g > 225 and b > 205)   # the warm white (250, 244, 234), not the amber
 
 
 class EndToEnd(unittest.TestCase):
-    def test_the_sweep_turns_the_spoken_words_gold_while_the_rest_stay_white(self):
+    def test_three_words_at_a_time_and_only_the_word_being_spoken_is_amber(self):
         d = tempfile.mkdtemp(prefix='asm-karaoke-')
         try:
-            subprocess.run(['ffmpeg', '-v', 'error', '-y', '-f', 'lavfi', '-i', 'color=c=0x223344:s=720x1280:r=24:d=6',
-                            '-f', 'lavfi', '-i', 'sine=frequency=330:duration=6', '-shortest', '-c:v', 'libx264', '-pix_fmt', 'yuv420p',
+            subprocess.run(['ffmpeg', '-v', 'error', '-y', '-f', 'lavfi', '-i', 'color=c=0x223344:s=720x1280:r=24:d=8',
+                            '-f', 'lavfi', '-i', 'sine=frequency=330:duration=8', '-shortest', '-c:v', 'libx264', '-pix_fmt', 'yuv420p',
                             '-c:a', 'aac', os.path.join(d, 's0.mp4')], check=True)
             dub = os.path.join(d, 'dub.mp3')
-            subprocess.run(['ffmpeg', '-v', 'error', '-y', '-f', 'lavfi', '-i', 'sine=frequency=880:duration=4', '-c:a', 'libmp3lame', dub], check=True)
+            subprocess.run(['ffmpeg', '-v', 'error', '-y', '-f', 'lavfi', '-i', 'sine=frequency=880:duration=5.5', '-c:a', 'libmp3lame', dub], check=True)
             text = 'satu dua tiga empat lima enam'
-            words = [['satu', 0.0, 0.6], ['dua', 0.7, 1.3], ['tiga', 1.4, 2.0], ['empat', 2.1, 2.7], ['lima', 2.8, 3.4], ['enam', 3.5, 4.0]]
+            # in the file: 1.2 s of quiet, then six words; on the film's clock everything is 0.3 s later (the voice lead)
+            words = [['satu', 1.2, 1.8], ['dua', 1.9, 2.5], ['tiga', 2.6, 3.2], ['empat', 3.3, 3.9], ['lima', 4.0, 4.6], ['enam', 4.7, 5.2]]
             plan = {'slug': 'final', 'crossfade': 0.3,
-                    'shots': [{'id': 's0', 'narration': text, 'dub': {'file': dub, 'seconds': 4.0, 'words': words}}],
+                    'shots': [{'id': 's0', 'narration': text, 'dub': {'file': dub, 'seconds': 5.5, 'words': words}}],
                     'edit': {'subtitles': True, 'subtitleStyle': 'tulisan-tangan', 'subtitleSize': 1.2}}
             json.dump(plan, open(os.path.join(d, 'assemble.json'), 'w'))
             out = subprocess.run(['python3', os.path.join(os.path.dirname(os.path.abspath(__file__)), 'assemble.py'), d], capture_output=True, text=True)
@@ -142,12 +181,19 @@ class EndToEnd(unittest.TestCase):
                 p = os.path.join(d, f'f{t}.png')
                 subprocess.run(['ffmpeg', '-v', 'error', '-y', '-ss', str(t), '-i', final, '-frames:v', '1', p], check=True)
                 return p
-            early, mid, late = frame(1.2), frame(2.4), frame(4.1)   # the voice starts at 0.3 s; the film itself fades in over the first ~second
-            self.assertEqual(gold_pixels(early) < gold_pixels(mid) < gold_pixels(late), True,
-                             f'the gold must grow as the words are spoken: {[gold_pixels(p) for p in (early, mid, late)]}')
-            self.assertGreater(white_pixels(early), 2 * white_pixels(late), 'unspoken words stay white, and almost none are left at the end')
-            before = frame(0.05)
-            self.assertEqual(gold_pixels(before), 0)
+            satu, dua, tiga = (amber_stats(frame(t)) for t in (1.8, 2.5, 3.2))   # words 1-3 of the first cue
+            for name, st in (('satu', satu), ('dua', dua), ('tiga', tiga)):
+                self.assertGreater(st[0], 100, f'{name} must be amber while it is spoken: {st}')
+            self.assertLess(satu[1], dua[1] - 40, f'the amber moves right with the voice: {satu} -> {dua}')
+            self.assertLess(dua[1], tiga[1] - 40, f'the amber moves right with the voice: {dua} -> {tiga}')
+            self.assertLess(max(satu[0], dua[0], tiga[0]), 1.8 * min(satu[0], dua[0], tiga[0]),
+                            'one word at a time: the amber must not accumulate like a sweep')
+            self.assertGreater(white_pixels(frame(3.2)), 200, 'the other words of the cue are still on screen, in white')
+            lima = amber_stats(frame(4.6))                                          # second cue: empat lima enam
+            self.assertGreater(lima[0], 100)
+            self.assertEqual(gold_pixels(frame(1.0)) + white_pixels(frame(1.0)) < 5, True, 'nothing is shown before the first word')
+            self.assertLess(white_pixels(frame(6.4)), 5, 'and the caption is gone once the words are spoken')
+            self.assertEqual(gold_pixels(frame(6.4)), 0)
         finally:
             shutil.rmtree(d, ignore_errors=True)
 

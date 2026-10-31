@@ -79,7 +79,7 @@ describe.skipIf(!hasTools)('dubbing → real assembler', () => {
     expect((await probeClip(r.final)).hasAudio).toBe(true);
   }, 240_000);
 
-  it('the voice\'s word timings travel service → assemble.json → libass: the subtitle turns gold word by word as it is spoken', async () => {
+  it('the voice\'s word timings travel service → assemble.json → libass: three words at a time, only the word being spoken lit', async () => {
     const dir = join(root, 'story-karaoke');
     execFileSync('mkdir', ['-p', dir]);
     execFileSync('ffmpeg', ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'color=c=0x223344:s=720x1280:r=24:d=6', '-f', 'lavfi', '-i', 'sine=frequency=330:duration=6', '-shortest', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', join(dir, 'a.mp4')]);
@@ -100,24 +100,30 @@ describe.skipIf(!hasTools)('dubbing → real assembler', () => {
       shots: [{ id: 'a', narration: 'satu dua tiga empat.', dub: dubs.shots.a }],
       edit: { subtitles: true, subtitleStyle: 'tulisan-tangan', subtitleSize: 1.2, ...(karaoke ? {} : { subtitleKaraoke: false }) }
     }));
-    const gold = (file: string, t: number): number => Number(execFileSync(PY, ['-c', `
-import subprocess, sys
+    // [amber pixel count, mean x of the amber] of the frame at second t
+    const amber = (file: string, t: number): [number, number] => JSON.parse(execFileSync(PY, ['-c', `
+import subprocess, sys, json
 from PIL import Image
 f, t = sys.argv[1], sys.argv[2]
 subprocess.run(['ffmpeg','-v','error','-y','-ss',t,'-i',f,'-frames:v','1',f+'.png'], check=True)
-im = Image.open(f+'.png').convert('RGB')
-print(sum(1 for r,g,b in im.getdata() if r > 230 and 170 < g < 215 and b < 120))`, file, String(t)]).toString().trim());
+im = Image.open(f+'.png').convert('RGB'); w = im.size[0]
+xs = [i % w for i, (r,g,b) in enumerate(im.getdata()) if r > 230 and 170 < g < 215 and b < 120]
+print(json.dumps([len(xs), sum(xs)/len(xs) if xs else 0]))`, file, String(t)]).toString().trim());
     planFile(true);
     await assembleStory(dir);
     const final = join(dir, 'final.mp4');
-    const swept = [0.05, 1.2, 2.0, 2.9].map(t => gold(final, t));   // the voice starts at 0.3 s
-    expect(swept[0]).toBe(0);
-    expect(swept[1]!).toBeGreaterThan(0);
-    expect(swept[2]!).toBeGreaterThan(swept[1]!);
-    expect(swept[3]!).toBeGreaterThan(swept[2]!);
+    // words: satu .3-.9 | dua 1.0-1.6 || tiga 1.7-2.3 | empat. 2.4-3.0 on the film's clock → two cues of two words
+    expect(amber(final, 0.05)[0]).toBe(0);
+    expect(amber(final, 1.3)[0]).toBeGreaterThan(100);                 // 'dua' is lit
+    const tiga = amber(final, 2.0), empat = amber(final, 2.7);
+    expect(tiga[0]).toBeGreaterThan(100);
+    expect(empat[0]).toBeGreaterThan(100);
+    expect(empat[1]).toBeGreaterThan(tiga[1] + 40);                   // the light moves right, word by word, inside the second cue
+    expect(Math.max(tiga[0], empat[0])).toBeLessThan(1.8 * Math.min(tiga[0], empat[0]));   // one word at a time: it does not pile up
+    expect(amber(final, 3.7)[0]).toBe(0);                             // and once the words are spoken the caption is gone
     planFile(false);                        // "Sorot kata" off: the same words, plain caption, nothing is ever gold
     await assembleStory(dir);
-    expect([1.2, 2.9].map(t => gold(final, t))).toEqual([0, 0]);
+    expect([1.3, 2.0, 2.7].map(t => amber(final, t)[0])).toEqual([0, 0, 0]);
   }, 240_000);
 
   it('\"suasana diredam\" keeps the clip sound quiet under the voice instead of removing it', async () => {
