@@ -110,7 +110,7 @@ export function TrendsPage() {
   const reload = () => setTick(t => t + 1);
 
   const shown = useMemo(() => sortItems(data?.items ?? [], sort), [data, sort]);
-  const open = data?.items.find(i => i.id === openId);
+  const open = data?.items?.find(i => i.id === openId);
   const active = data ? activeSources(data) : [];
   const missing = data && !data.configured ? missingEnv(data) : [];
 

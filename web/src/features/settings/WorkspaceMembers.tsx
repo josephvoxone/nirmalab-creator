@@ -163,8 +163,8 @@ export function WorkspaceMembersPanel() {
         <ShieldCheck aria-hidden="true" className="size-4 text-muted-foreground" />
         <h1 className="min-w-0 truncate text-[15px] font-medium">{summary?.name ?? 'Workspace'}</h1>
         {summary && <RoleBadge role={summary.role} />}
-        <span className="text-[12px] text-muted-foreground">
-          {members ? `${members.length} orang · ${active.length} undangan tertunda` : 'Memuat anggota…'}
+        <span className="text-[12px] text-muted-foreground tabular-nums">
+          {members ? `${members.length} orang · ${active.length} undangan tertunda` : error ? 'Daftar anggota tidak bisa dimuat' : 'Memuat anggota…'}
         </span>
       </div>
 

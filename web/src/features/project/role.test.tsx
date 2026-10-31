@@ -44,3 +44,12 @@ describe('403 dan 404 di UI', () => {
     expect(screen.getByRole('alert')).toHaveTextContent(/bukan anggota workspace ini/i);
   });
 });
+
+describe('Muatan rusak', () => {
+  it('says the project could not be read instead of crashing on a payload without story', async () => {
+    const api = fakeProjectApi({ extra: (call, json) => (call.method === 'GET' && call.url.startsWith('/api/stories/') && !call.url.endsWith('/catalog') ? json(200, {}) : undefined) });
+    mountProject(<ProjectPage pollMs={0} />, api.fetchImpl, { role: 'owner' });
+    expect(await screen.findByRole('heading', { name: /gagal dimuat/i })).toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent(/coba lagi|tidak/i);
+  });
+});

@@ -58,13 +58,37 @@ export function settingsApi(fetchImpl: FetchLike) {
     removeMember: (id: string) => requestJson<{ ok: boolean; orphanedProjects?: number; alreadyRemoved?: boolean }>(fetchImpl, `/api/auth/members/${encodeURIComponent(id)}`, del()),
     suspend: (id: string) => requestJson<{ member: Member }>(fetchImpl, `/api/admin/users/${encodeURIComponent(id)}/suspend`, post({})),
     activate: (id: string) => requestJson<{ member: Member }>(fetchImpl, `/api/admin/users/${encodeURIComponent(id)}/activate`, post({})),
-    adminProjects: () => requestJson<AdminProjects>(fetchImpl, '/api/admin/projects'),
+    adminProjects: async () => {
+      const r = await requestJson<Partial<AdminProjects>>(fetchImpl, '/api/admin/projects');
+      // An older server or a catch-all fake answers `{}`: an empty admin view beats a crash.
+      return {
+        owners: Array.isArray(r?.owners) ? r.owners : [],
+        orphans: Array.isArray(r?.orphans) ? r.orphans : [],
+        totals: { projects: 0, bytes: 0, orphans: 0, orphanBytes: 0, unreadable: 0, ...(r?.totals ?? {}) }
+      };
+    },
     transferProject: (id: string, toUserId: string) => requestJson<{ ok: boolean; jobsReassigned: number }>(fetchImpl, `/api/admin/projects/${encodeURIComponent(id)}/transfer`, post({ toUserId })),
     deleteProject: (id: string, confirmTitle: string) => requestJson<{ ok: boolean; freedBytes: number }>(fetchImpl, `/api/admin/projects/${encodeURIComponent(id)}`, { method: 'DELETE', body: JSON.stringify({ confirmTitle }) }),
     cleanupStorage: () => requestJson<{ freedBytes: number; linked: number; removed: number }>(fetchImpl, '/api/storage/cleanup', post({})),
     userLimits: (id: string) => requestJson<LimitsView>(fetchImpl, `/api/admin/users/${encodeURIComponent(id)}/limits`),
     setUserLimits: (id: string, limits: UserLimits) => requestJson<LimitsView>(fetchImpl, `/api/admin/users/${encodeURIComponent(id)}/limits`, { method: 'PUT', body: JSON.stringify({ limits }) }),
-    usage: (days: number) => requestJson<Usage>(fetchImpl, `/api/flow/usage?days=${days}`),
+    usage: async (days: number) => {
+      const r = await requestJson<Partial<Usage> & { byKind?: Partial<Usage['byKind']> }>(fetchImpl, `/api/flow/usage?days=${days}`);
+      const count = (c?: Partial<Count>) => ({ jobs: c?.jobs ?? 0, done: c?.done ?? 0, failed: c?.failed ?? 0 });
+      if (!r || typeof r !== 'object' || !r.totals) throw new Error('Laporan pemakaian tidak terbaca');
+      return {
+        range: r.range ?? { from: '', to: '', days },
+        totals: { ...count(r.totals), running: r.totals.running ?? 0, queued: r.totals.queued ?? 0, credits: r.totals.credits ?? 0 },
+        byDay: Array.isArray(r.byDay) ? r.byDay : [],
+        byAccount: Array.isArray(r.byAccount) ? r.byAccount : [],
+        byMember: Array.isArray(r.byMember) ? r.byMember : [],
+        byKind: {
+          video: { ...count(r.byKind?.video), credits: r.byKind?.video?.credits ?? 0 },
+          image: { ...count(r.byKind?.image), credits: r.byKind?.image?.credits ?? 0 },
+          character: { ...count(r.byKind?.character), credits: r.byKind?.character?.credits ?? 0 }
+        }
+      };
+    },
     pool: () => requestJson<{ pool: { rotation: Rotation } }>(fetchImpl, '/api/flow/pool'),
     setPool: (rotation: Rotation) => requestJson<{ pool: { rotation: Rotation } }>(fetchImpl, '/api/flow/pool', { method: 'PUT', body: JSON.stringify({ rotation }) }),
     updateAccount: (id: string, patch: AccountPatch) => requestJson<{ account: FlowAccount }>(fetchImpl, `/api/flow/accounts/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(patch) }),

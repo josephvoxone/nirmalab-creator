@@ -99,6 +99,9 @@ export function useProjectState(id: string, pollMs = 4000): Project {
     let alive = true;
     api.get(id).then(r => {
       if (!alive) return;
+      // A partial payload (an older server, a proxy error page) reads as a failed load, never as
+      // an empty project — otherwise a tab would dereference `story` that was never there.
+      if (!r?.story || !r?.storyboard) { setLoadError(new Error('Proyek tidak terbaca dari server')); return; }
       setStory(r.story);
       // Never mid-save: the board and its rev are replaced together, or not at all.
       if (!saving.current) show({ board: normalizeScenes(r.storyboard as unknown as Board), rev: r.story.rev }, true);

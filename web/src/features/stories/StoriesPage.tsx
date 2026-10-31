@@ -93,7 +93,7 @@ export function StoriesPage(props: { pollMs?: number }) {
 
   useEffect(() => {
     let alive = true;
-    api.list().then(r => { if (alive) { setStories([...r.stories].sort((a, b) => b.updatedAtMs - a.updatedAtMs)); setError(undefined); } }, e => alive && setError(e));
+    api.list().then(r => { if (alive) { setStories([...(Array.isArray(r?.stories) ? r.stories : [])].sort((a, b) => b.updatedAtMs - a.updatedAtMs)); setError(undefined); } }, e => alive && setError(e));
     return () => { alive = false; };
   }, [api, tick]);
   const running = stories?.some(isActive);

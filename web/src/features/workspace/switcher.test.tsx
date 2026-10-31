@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import { userEvent } from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import { App } from '../../App.js';
@@ -45,9 +45,17 @@ describe('Pengalih workspace', () => {
   });
 
   it('stays out of the way when you only have your personal workspace', async () => {
-    app(base([WORKSPACES[0]]));
+    let answered = false;
+    app(url => {
+      if (url === '/api/workspaces') { answered = true; return ok({ workspaces: [WORKSPACES[0]] }); }
+      return base([WORKSPACES[0]])(url);
+    });
     await screen.findByRole('navigation', { name: /menu utama/i });
-    await waitFor(() => expect(screen.queryByRole('combobox', { name: 'Workspace' })).not.toBeInTheDocument());
+    // Let the workspace list land and commit before deciding it is absent — otherwise the
+    // assertion would pass on the first frame, before the provider has data.
+    await waitFor(() => expect(answered).toBe(true));
+    await act(async () => { await new Promise(r => setTimeout(r, 150)); });
+    expect(screen.queryByRole('combobox', { name: 'Workspace' })).not.toBeInTheDocument();
   });
 
   it('drops the picker quietly when the workspace list cannot be loaded', async () => {
