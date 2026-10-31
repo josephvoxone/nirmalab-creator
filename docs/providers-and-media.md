@@ -74,6 +74,17 @@ type ModelInfo = { id: string; name: string; aspects: string[]; durations?: numb
 - `measureStorage(dataDir): Promise<{ usedBytes: number; byArea: { stories: number; clips: number; cache: number; covers: number; other: number }; diskFreeBytes: number | null }>` in `server/src/media/storage.ts` (hard-linked files counted once).
 - `cleanupStorage(dataDir, deps)`: remove `final.mp4.prev`, image cache files older than 30 days, flow clip files of jobs that no longer exist or failed, replace byte-identical duplicates between `stories/` and `flow/clips/` with hard links. Returns `{ freedBytes, linked, removed }`. Runs once a day in the server + `POST /api/storage/cleanup` (admin). `GET /api/storage` (admin) returns `measureStorage`.
 
+### Motion QC of finished clips (free)
+Every clip that passes `qc()` in `collect()` (all modes) is checked by `bridge/py/clipqc.py` (numpy + ffmpeg, no credits): a scene melting into
+another mid-clip, a pale border growing in, a frozen/near-still clip, the camera drifting back, a hard cut or scale jump, and (konsisten) a clip
+that does not open on its keyframe. The server runs it as `nice python3 clipqc.py …` one at a time with a 20 s kill (`server/src/media/motion-qc.ts`);
+a missing python/numpy, a timeout or garbage output means *no verdict* and the clip is used as before. The verdict is `ShotState.motion`
+(`status ok|warn|fail`, `score`, `reasons` in plain Indonesian, optional free `suggest` = `trimOut`/`trimIn`/`zoom`) and belongs to one take (`motionJobId`).
+Only `fail` sets `needsReview` (the existing gate; `approve-audit` clears it). It never queues a render. Old projects: `POST /api/stories/:id/motion-check`
+(admin, free, idempotent, stores verdicts only, does not gate a finished project).
+Limits (measured on one film, 21 shots, thresholds tuned on the same shots, no human hold-out; only the painterly look tested): a small identity glitch
+(a hood going up in 0.2 s) is **not** found. Measure speed and memory on the production image: `docker exec <c> python3 /app/bridge/py/clipqc_bench.py`.
+
 ## 3. Quota (parent; W1 consumes)
 `GET /api/quota` (member):
 ```ts

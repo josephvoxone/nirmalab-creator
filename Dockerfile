@@ -1,4 +1,4 @@
-# Nirmalab Creator — one small image: Fastify API + built web + story assembler (ffmpeg + Python/PIL).
+# Nirmalab Creator — one small image: Fastify API + built web + story assembler (ffmpeg + Python/PIL) + clip motion QC (numpy).
 FROM node:22-bookworm-slim AS build
 WORKDIR /app
 RUN corepack enable
@@ -16,7 +16,7 @@ ENV NODE_ENV=production \
     STORY_ASSEMBLER=/app/bridge/py/assemble.py \
     PORT=3000
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ffmpeg python3 python3-pil ca-certificates \
+ && apt-get install -y --no-install-recommends ffmpeg python3 python3-pil python3-numpy ca-certificates \
  && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 RUN corepack enable
