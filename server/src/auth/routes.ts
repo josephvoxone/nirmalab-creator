@@ -55,6 +55,22 @@ export function readSessionToken(request: FastifyRequest): string | undefined {
   return undefined;
 }
 
+/**
+ * Start a session and set the cookie (wave 4: the join route signs a new account in without repeating the login handler).
+ * Kept here so the cookie attributes stay in ONE place (`SESSION_COOKIE`, HttpOnly, SameSite=Lax, Secure by protocol).
+ */
+export function startSession(
+  store: UserAuthStore,
+  request: FastifyRequest,
+  reply: FastifyReply,
+  userId: string,
+  secureCookies: 'auto' | boolean = 'auto'
+): { token: string } {
+  const session = store.createSession(userId);
+  setSessionCookie(request, reply, session.token, secureCookies);
+  return { token: session.token };
+}
+
 export function sessionUser(store: UserAuthStore, request: FastifyRequest) {
   const token = readSessionToken(request);
   if (!token) return undefined;
@@ -77,6 +93,11 @@ export type AuthRouteOptions = {
    * (MCP tokens, publisher connections) and reports how many projects were left without an owner. Must be idempotent.
    */
   onMemberRemoved?: (member: Tombstone) => Promise<{ orphanedProjects: number }>;
+  /**
+   * Called once an account has signed in (login, or accepting a create-account invite): the wave-4 personal workspace opens on
+   * first use. A failing hook never fails the sign-in — the account keeps working without the workspace until the next boot.
+   */
+  onLogin?: (user: { id: string; email: string }) => Promise<void> | void;
   /** Called after an admin action on an account (remove / suspend / role); a failing recorder never fails the action. */
   audit?: (entry: { by: string; action: string; targetId: string; targetEmail?: string; detail?: Record<string, string | number | boolean | null> }) => Promise<void>;
 };
@@ -127,6 +148,8 @@ export async function registerAuthRoutes(
     }
     const session = store.createSession(user.id);
     setSessionCookie(request, reply, session.token, secureCookies);
+    // Wave 4: a personal workspace exists from the first use of the platform on (never blocks the sign-in).
+    try { await options.onLogin?.(user); } catch { /* never blocks the sign-in */ }
     return { user: store.publicUser(user) };
   });
 
@@ -278,6 +301,7 @@ export async function registerAuthRoutes(
         const user = await store.acceptInvite({ token, email, password });
         const session = store.createSession(user.id);
         setSessionCookie(request, reply, session.token, secureCookies);
+        try { await options.onLogin?.(user); } catch { /* never blocks the sign-in */ }
         return { user: store.publicUser(user) };
       } catch (error) {
         return reply.code(400).send({

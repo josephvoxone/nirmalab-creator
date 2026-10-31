@@ -56,6 +56,10 @@ import { registerCrossSiteGuard } from './auth/csrf.js';
 import { installPolicyGuard } from './tenancy/policy.js';
 import { installOwnershipGate } from './tenancy/ownership.js';
 import { ensureOwners, resolvePrimaryOwner } from './tenancy/migrate.js';
+// WAVE 4 (ws): team workspaces — one personal workspace per person, projects owned by a workspace.
+import { WorkspaceService } from './workspace/service.js';
+import { WorkspaceStore } from './workspace/store.js';
+import { registerWorkspaceRoutes } from './workspace/routes.js';
 import { StorageMeter } from './media/storage-meter.js';
 import { createOpenCodeModel, type TextModel } from './llm/opencode.js';
 
@@ -122,6 +126,9 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   // T3 tenancy gate (tenancy/ownership.ts): enforces the registry on every request before the body is read; the services it needs
   // do not exist yet, so it reaches them lazily. It must sit here: hooks of the root are inherited only by scopes registered after it.
   const userAuthStore = new UserAuthStore(options.dataDir);
+  // WAVE 4 (ws): the workspace store and its rules. The personal workspace opens on the first use of the platform (login).
+  const workspaceStore = new WorkspaceStore(options.dataDir);
+  const workspaceService = new WorkspaceService({ store: workspaceStore, auth: userAuthStore, dataDir: options.dataDir });
   const legacyOwnerId = (): string | undefined => { try { return resolvePrimaryOwner(userAuthStore.listUsers(), env.TENANCY_DEFAULT_OWNER_EMAIL)?.id; } catch { return undefined; } };
   installOwnershipGate(server, { auth: userAuthStore, stories: () => stories, flow: () => flowStore, legacyOwnerId, ...(options.tenancy?.policyRegistry ? { registry: options.tenancy.policyRegistry } : {}) });
 
@@ -156,7 +163,9 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
       bootstrapAdminPassword: env.OPENCREATOR_ADMIN_PASSWORD,
       trustProxyHops,
       // COOKIE_SECURE=1 always / 0 never / unset = only over HTTPS (see AuthRouteOptions.secureCookies).
-      secureCookies: env.COOKIE_SECURE === '1' ? true : env.COOKIE_SECURE === '0' ? false : 'auto'
+      secureCookies: env.COOKIE_SECURE === '1' ? true : env.COOKIE_SECURE === '0' ? false : 'auto',
+      // WAVE 4 (ws): first use of the platform gives a personal workspace (idempotent; a failure never blocks a sign-in).
+      onLogin: async user => { await workspaceService.ensurePersonalForUser(user.id); }
     });
   }, { prefix: '/api' });
 
@@ -415,6 +424,11 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
 
   const sweepOnce = serialCleanup(options.dataDir, { jobs: () => flowStore.listJobs(Number.MAX_SAFE_INTEGER) });
   const cleanup = async () => { try { return await sweepOnce(); } finally { storageMeter.invalidate(); } };
+  // WAVE 4 (ws): team workspaces — list/create, members, invites, and the public /api/join/:token page.
+  await registerWorkspaceRoutes(server, {
+    service: workspaceService, store: workspaceStore, auth: userAuthStore, audit: entry => adminAudit.append(entry),
+    secureCookies: env.COOKIE_SECURE === '1' ? true : env.COOKIE_SECURE === '0' ? false : 'auto'
+  });
   // T8 admin console: accounts, orphans, limits, audit trail (no route here reads the content of a project).
   await registerAdminRoutes(server, { userAuthStore, dataDir: options.dataDir, flow: flowStore, ledger: quotaLedger, limits: quotaLimits, audit: adminAudit, lock: stories.lockStory.bind(stories), onChange: () => storageMeter.invalidate() });
   await registerStorageRoutes(server, { userAuthStore, dataDir: options.dataDir, cleanup, meter: storageMeter });

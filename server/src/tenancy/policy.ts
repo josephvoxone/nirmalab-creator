@@ -165,6 +165,18 @@ export const ROUTE_POLICY: PolicyRegistry = {
   'GET /api/admin/audit-log': { policy: 'SISTEM-ADMIN' },
   'POST /api/admin/users/:id/suspend': { policy: 'SISTEM-ADMIN' },
   'POST /api/admin/users/:id/activate': { policy: 'SISTEM-ADMIN' },
+  // WAVE 4 (ws): team workspaces. The join page is PUBLIC (the token IS the credential); everything else needs a login and scopes
+  // itself to the caller's memberships (a non-member gets the same 404 as an unknown workspace).
+  'GET /api/workspaces': { policy: 'PENGGUNA-PEMILIK', resource: 'self' },
+  'POST /api/workspaces': { policy: 'PENGGUNA-PEMILIK', resource: 'self' },
+  'GET /api/workspaces/:id': { policy: 'PENGGUNA-BERSAMA' },
+  'DELETE /api/workspaces/:id': { policy: 'PENGGUNA-BERSAMA' },
+  'POST /api/workspaces/:id/invites': { policy: 'PENGGUNA-BERSAMA' },
+  'DELETE /api/workspaces/:id/invites/:inviteId': { policy: 'PENGGUNA-BERSAMA' },
+  'PATCH /api/workspaces/:id/members/:userId': { policy: 'PENGGUNA-BERSAMA' },
+  'DELETE /api/workspaces/:id/members/:userId': { policy: 'PENGGUNA-BERSAMA' },
+  'GET /api/join/:token': { policy: 'PUBLIK' },
+  'POST /api/join/:token': { policy: 'PUBLIK' },
 };
 
 export type PolicyFinding = { key: string; policy: string; status: number };
