@@ -32,6 +32,16 @@ Self-hosted, one container, your own keys and data directory.
 - **Multi user.** Invite-only accounts, a project visible only to its owner, admin-managed provider
   keys, quotas and storage.
 
+## See it render without any key
+
+```sh
+python3 bridge/py/demo/make_demo.py     # writes bridge/py/demo/out/demo.mp4
+```
+
+The demo paints three scenes with Pillow (gradient sky, layered ridges, a low sun, warm windows
+switching on), writes a music bed and a word-timed dub, and runs the same assembler the app uses
+for a real film. No account, no key, no footage.
+
 ## Requirements
 
 - Node 22 and pnpm 9

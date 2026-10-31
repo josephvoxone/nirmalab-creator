@@ -32,6 +32,16 @@ Self-hosted, satu container, key dan folder data milikmu sendiri.
 - **Multi user.** Akun lewat undangan, proyek hanya terlihat oleh pemiliknya, key provider, kuota dan
   penyimpanan diatur admin.
 
+## Lihat hasil render tanpa key apa pun
+
+```sh
+python3 bridge/py/demo/make_demo.py     # menulis bridge/py/demo/out/demo.mp4
+```
+
+Demo ini melukis tiga scene dengan Pillow (gradien langit, ridge berlapis, matahari rendah,
+jendela hangat yang menyala), membuat musik latar dan dub bertiming kata, lalu menjalankan
+assembler yang sama dengan yang dipakai aplikasi. Tanpa akun, tanpa key, tanpa footage.
+
 ## Kebutuhan
 
 - Node 22 dan pnpm 9
