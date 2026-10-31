@@ -132,11 +132,21 @@ export class PublisherService {
     throw new PublisherError('NOT_IMPLEMENTED', `${platform} publisher is not wired yet`);
   }
 
-  async handleCallback(platform: PublisherPlatform, query: { code?: string; state?: string; error?: string }): Promise<{ accountLabel?: string }> {
+  /**
+   * Finishes an OAuth round trip. `sessionUserId` = who the browser's session cookie says is calling (undefined when
+   * anonymous): it must be the user the state was created for, so nobody can complete, replay or hijack another
+   * user's flow. The token is saved for the state's user.
+   */
+  async handleCallback(platform: PublisherPlatform, query: { code?: string; state?: string; error?: string }, sessionUserId: string | undefined): Promise<{ accountLabel?: string }> {
     if (query.error) throw new PublisherError('OAUTH_DENIED', `Provider refused: ${query.error}`.slice(0, 200));
     if (!query.code || !query.state) throw new PublisherError('INVALID_INPUT', 'Missing code/state in callback');
-    const record = this.states.consume(query.state, platform);
-    if (!record) throw new PublisherError('INVALID_STATE', 'Unknown or expired OAuth state');
+    const consumed = this.states.consume(query.state, platform, sessionUserId);
+    if (!consumed.ok) {
+      if (consumed.reason === 'anonymous') throw new PublisherError('LOGIN_REQUIRED', 'OAuth callback without a session');
+      if (consumed.reason === 'wrong-user') throw new PublisherError('STATE_NOT_YOURS', 'OAuth state belongs to another user');
+      throw new PublisherError('INVALID_STATE', 'Unknown or expired OAuth state');
+    }
+    const record = consumed.record;
     if (platform === 'youtube') {
       const env = youtubeEnv(this.env);
       if (!env.clientId || !env.clientSecret) throw new PublisherError('NOT_CONFIGURED', 'YouTube client id/secret missing');

@@ -32,6 +32,8 @@ export function callbackErrorMessage(platform: PublisherPlatform, error: unknown
   const name = PLATFORM_NAME[platform];
   const code = error instanceof PublisherError ? error.code : '';
   if (code === 'OAUTH_DENIED') return `Izin akses ditolak di ${name}. Coba hubungkan lagi dan setujui izinnya.`;
+  if (code === 'STATE_NOT_YOURS') return `Tautan ini dimulai dari akun lain. Masuk dengan akun yang menghubungkan ${name}, lalu coba lagi.`;
+  if (code === 'LOGIN_REQUIRED') return `Kamu belum masuk. Masuk ke Nirmalab Creator dulu, lalu hubungkan ${name} lagi.`;
   if (code === 'INVALID_STATE' || code === 'INVALID_INPUT') return `Sesi login ${name} kedaluwarsa atau tidak lengkap. Coba hubungkan lagi.`;
   if (code === 'NOT_CONFIGURED') return `Aplikasi developer ${name} belum diatur di server.`;
   if (code === 'OAUTH_FAILED' && error instanceof Error && /no Page/i.test(error.message)) {
@@ -105,7 +107,8 @@ export async function registerPublisherRoutes(server: FastifyInstance, options: 
       };
       if (!PLATFORMS.includes(platform)) return reply.code(404).send({ error: { code: 'UNKNOWN_PLATFORM', message: 'Unknown platform' } });
       try {
-        await service.handleCallback(platform, request.query);
+        // Public route (the provider redirects the browser): the session cookie must belong to the user who started the flow.
+        await service.handleCallback(platform, request.query, sessionUser(userAuthStore, request)?.id);
         done(new URLSearchParams({ connected: platform }));
       } catch (error) {
         done(new URLSearchParams({ platform, error: callbackErrorMessage(platform, error) }));

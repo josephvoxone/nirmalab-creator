@@ -9,6 +9,10 @@ export type OAuthStateRecord = {
   createdAtMs: number;
 };
 
+export type OAuthStateConsumed =
+  | { ok: true; record: OAuthStateRecord }
+  | { ok: false; reason: 'unknown' | 'anonymous' | 'wrong-user' };
+
 const TTL_MS = 10 * 60 * 1000;
 
 /** In-memory OAuth state (CSRF + PKCE). Pending flows complete in minutes. */
@@ -22,12 +26,29 @@ export class OAuthStateStore {
     return state;
   }
 
-  consume(state: string, platform: string): OAuthStateRecord | undefined {
+  /**
+   * Redeems a state for the browser that comes back. The callback is a PUBLIC route (the provider redirects the
+   * browser; no Authorization header), so the only proof of who is finishing the flow is the session cookie:
+   * `sessionUserId` must be the user who started it. A refused attempt does NOT use the state up — the rightful
+   * user can still finish — and a successful one removes it (single use).
+   */
+  consume(state: string, platform: string, sessionUserId: string | undefined): OAuthStateConsumed {
     this.prune();
     const record = this.states.get(state);
-    if (!record || record.platform !== platform) return undefined;
+    if (!record || record.platform !== platform) return { ok: false, reason: 'unknown' };
+    if (!sessionUserId) return { ok: false, reason: 'anonymous' };
+    if (record.userId !== sessionUserId) return { ok: false, reason: 'wrong-user' };
     this.states.delete(state);
-    return record;
+    return { ok: true, record };
+  }
+
+  /** Forgets every pending flow of this user (account removal). Returns how many there were. */
+  revokeAllFor(userId: string): number {
+    let removed = 0;
+    for (const [key, record] of this.states) {
+      if (record.userId === userId) { this.states.delete(key); removed += 1; }
+    }
+    return removed;
   }
 
   stateHash(state: string): string {

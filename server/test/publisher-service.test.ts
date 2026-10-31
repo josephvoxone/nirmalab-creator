@@ -34,7 +34,7 @@ describe('publisher service', () => {
     const { url, state } = svc.connectUrl(U, 'youtube');
     expect(url).toContain('https%3A%2F%2Fcreator.example.com%2Fapi%2Fpublish%2Fyoutube%2Fcallback');
     expect(url).toContain(`state=${state}`);
-    await expect(svc.handleCallback('youtube', { code: 'c', state: 'nope' }))
+    await expect(svc.handleCallback('youtube', { code: 'c', state: 'nope' }, U))
       .rejects.toMatchObject({ code: 'INVALID_STATE' });
   });
 
@@ -46,7 +46,7 @@ describe('publisher service', () => {
       .mockResolvedValueOnce(jsonResponse({ id: 'vid1' }));
     const svc = service(fetchImpl as never);
     const { state } = svc.connectUrl(U, 'youtube');
-    const done = await svc.handleCallback('youtube', { code: 'code1', state });
+    const done = await svc.handleCallback('youtube', { code: 'code1', state }, U);
     expect(done).toEqual({ accountLabel: 'Chan' });
     expect(await svc.getStatus(U, 'youtube')).toMatchObject({ connected: true, accountLabel: 'Chan' });
     // Publish via service uses node fs; write a tiny temp file instead.
@@ -73,7 +73,7 @@ describe('publisher service', () => {
       .mockResolvedValueOnce(jsonResponse({ id: 'vid1' }));
     const svc = service(fetchImpl as never);
     const { state } = svc.connectUrl(U, 'youtube');
-    await svc.handleCallback('youtube', { code: 'code1', state });
+    await svc.handleCallback('youtube', { code: 'code1', state }, U);
     const { writeFileSync } = await import('node:fs');
     const tmp = join(mkdtempSync(join(tmpdir(), 'pubvid-')), 'v.mp4');
     writeFileSync(tmp, Buffer.alloc(8));

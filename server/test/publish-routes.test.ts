@@ -27,7 +27,7 @@ async function setup(resolveStoryVideo?: (id: string) => Promise<string | undefi
   await registerPublisherRoutes(server, { service, userAuthStore, env: {}, resolveStoryVideo });
   await server.ready();
   const cookie = (id: string) => `oc_session=${userAuthStore.createSession(id).token}`;
-  return { server, publish, adminId: admin.id, adminCookie: cookie(admin.id), memberCookie: cookie(member.id) };
+  return { server, publish, handleCallback, adminId: admin.id, adminCookie: cookie(admin.id), memberCookie: cookie(member.id) };
 }
 
 const body = { title: 'Kucing Hilang', description: 'desc', visibility: 'public' };
@@ -90,6 +90,14 @@ describe('publish route with storyId', () => {
     const res = await server.inject({ url: '/api/publish/tiktok/callback?code=c&state=s' });
     expect(res.statusCode).toBe(302);
     expect(res.headers.location).toBe('https://creator.nirmalab.com/pengaturan/koneksi?connected=tiktok');
+  });
+
+  it('the public callback hands the service the user of the SESSION cookie (undefined when anonymous)', async () => {
+    const { server, handleCallback, adminCookie, adminId } = await setup(undefined);
+    await server.inject({ url: '/api/publish/youtube/callback?code=c&state=s', headers: { cookie: adminCookie } });
+    await server.inject({ url: '/api/publish/youtube/callback?code=c&state=s' });
+    await server.inject({ url: '/api/publish/youtube/callback?code=c&state=s', headers: { cookie: 'oc_session=not-a-real-session-token-xxxxxxxx' } });
+    expect(handleCallback.mock.calls.map(call => call[2])).toEqual([adminId, undefined, undefined]);
   });
 
   it('OAuth callback failure returns to Settings → Koneksi with a plain ?error message', async () => {
