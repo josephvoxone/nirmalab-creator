@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
+import { appendFile, chmod, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { writePrivateJsonFile } from '../lib/private-json-file.js';
 import { isModelId, type ProviderId } from '../providers/config.js';
@@ -170,7 +170,17 @@ const BRIDGE_ONLINE_MS = 90_000;
 const JOB_LEASE_MS = 25 * 60_000;
 
 const EMPTY: FlowState = { version: 1, accounts: [], jobs: [] };
+/**
+ * Finished (done/failed) jobs kept in flow.json. Queued and running jobs are never counted or cut: the window used
+ * to cut by position, so 500 newer stills of other users pushed a waiting clip out and its story burnt a take.
+ */
 const MAX_JOBS = 500;
+/** Finished jobs cut from flow.json move to `flow-history.jsonl` (usage reports, reuse of old clips read them). */
+const HISTORY_FILE = 'flow-history.jsonl';
+const HISTORY_MAX_BYTES = 8 * 1024 * 1024;
+const HISTORY_KEEP_MS = 100 * 86_400_000;
+
+const isActive = (job: FlowJob): boolean => job.status === 'queued' || job.status === 'running';
 
 /** Business day stamp (YYYY-MM-DD) in Asia/Makassar (UTC+8, no DST): daily usage resets at local midnight. */
 const DAY_OFFSET_MS = 8 * 3_600_000;
@@ -234,10 +244,12 @@ function orderAccounts(accounts: FlowAccount[], rotation: FlowRotation): FlowAcc
 
 export class FlowStore {
   private readonly path: string;
+  private readonly historyPath: string;
   private queue: Promise<unknown> = Promise.resolve();
 
   constructor(dataDir: string) {
     this.path = join(dataDir, 'flow.json');
+    this.historyPath = join(dataDir, HISTORY_FILE);
   }
 
   private serialize<T>(work: () => Promise<T>): Promise<T> {
@@ -263,8 +275,41 @@ export class FlowStore {
   }
 
   private async write(state: FlowState): Promise<void> {
-    const trimmed: FlowState = { ...state, jobs: state.jobs.slice(-MAX_JOBS) };
-    await writePrivateJsonFile(this.path, trimmed);
+    // Cut only the oldest FINISHED jobs; every queued/running job stays, in its place.
+    const finished = state.jobs.filter(j => !isActive(j));
+    const cut = new Set(finished.slice(0, Math.max(0, finished.length - MAX_JOBS)).map(j => j.id));
+    if (cut.size === 0) return writePrivateJsonFile(this.path, state);
+    await this.archive(state.jobs.filter(j => cut.has(j.id)));
+    await writePrivateJsonFile(this.path, { ...state, jobs: state.jobs.filter(j => !cut.has(j.id)) });
+  }
+
+  /** Append finished jobs to the history file (0600); an old, big file is rewritten without the entries past 100 days. */
+  private async archive(jobs: FlowJob[]): Promise<void> {
+    try {
+      await appendFile(this.historyPath, jobs.map(j => JSON.stringify(j)).join('\n') + '\n', { mode: 0o600 });
+      await chmod(this.historyPath, 0o600).catch(() => undefined);
+      if ((await stat(this.historyPath)).size > HISTORY_MAX_BYTES) {
+        const cutoff = Date.now() - HISTORY_KEEP_MS;
+        const keep = (await this.readHistory()).filter(j => (j.finishedAtMs ?? j.createdAtMs) >= cutoff);
+        const tmp = `${this.historyPath}.tmp`;
+        await writeFile(tmp, keep.map(j => JSON.stringify(j)).join('\n') + (keep.length ? '\n' : ''), { mode: 0o600 });
+        await rename(tmp, this.historyPath);
+      }
+    } catch (error) {
+      // History is a convenience: failing to keep it must never fail a claim or a completion.
+      console.error('[flow] history archive failed', error instanceof Error ? error.message : error);
+    }
+  }
+
+  private async readHistory(): Promise<FlowJob[]> {
+    let text: string;
+    try { text = await readFile(this.historyPath, 'utf8'); } catch { return []; }
+    const jobs: FlowJob[] = [];
+    for (const line of text.split('\n')) {
+      if (!line.trim()) continue;
+      try { const j = JSON.parse(line) as FlowJob; if (j && typeof j.id === 'string') jobs.push({ ...j, kind: j.kind ?? 'video' }); } catch { /* a torn last line */ }
+    }
+    return jobs;
   }
 
   private normaliseAccount(account: FlowAccount): FlowAccount {
@@ -374,7 +419,10 @@ export class FlowStore {
 
   async getJob(id: string): Promise<FlowJob | undefined> {
     const state = await this.read();
-    return state.jobs.find(j => j.id === id);
+    const live = state.jobs.find(j => j.id === id);
+    if (live) return live;
+    // A finished job cut from flow.json: reuse of an old clip and reports still find it.
+    return (await this.readHistory()).findLast(j => j.id === id);
   }
 
   async heartbeat(bridgeId: string, credits: Array<{ id: string; credits: number }>): Promise<void> {
@@ -620,6 +668,8 @@ export class FlowStore {
 
   async usage(input: { days?: number; nowMs?: number } = {}): Promise<FlowUsageReport> {
     const state = await this.read();
+    const live = new Set(state.jobs.map(j => j.id));
+    state.jobs = [...(await this.readHistory()).filter(j => !live.has(j.id)), ...state.jobs];
     const days = Math.min(Math.max(Math.round(Number.isFinite(input.days) ? input.days! : 7), 1), 90);
     const to = flowDay(input.nowMs ?? Date.now());
     const fromMs = dayStartMs(to) - (days - 1) * DAY_MS;
