@@ -476,23 +476,34 @@ export class StoryService {
     return this.readRecord(id);
   }
 
-  /** Tenancy (additive): the user a project belongs to; undefined for a missing or still ownerless project. */
+  /**
+   * Tenancy: who owns a record. `createdBy` when set (even when that account is gone: such a project is nobody's); a project that
+   * never got an owner at all belongs to the legacy owner (the main owner: the account that owned everything before ownership was
+   * recorded — boot attribution normally fixes these, this keeps them his if it could not run). Without a legacy owner: nobody.
+   */
+  private async effectiveOwner(record: StoryRecord | undefined): Promise<string | undefined> {
+    if (!record) return undefined;
+    if (record.createdBy) return record.createdBy;
+    return (await this.deps.legacyOwnerId?.()) || undefined;
+  }
+
+  /** Tenancy (additive): the user a project belongs to; undefined for a missing project, or an ownerless one when there is no legacy owner. */
   async ownerOf(id: string): Promise<string | undefined> {
-    const record = await this.get(id).catch(() => undefined);
-    return record?.createdBy || undefined;
+    return this.effectiveOwner(await this.get(id).catch(() => undefined));
   }
 
   /** Tenancy (additive): the record when `userId` owns it; NOT_FOUND otherwise, the same error as for a project that does not exist (no oracle). */
   async assertOwner(id: string, userId: string): Promise<StoryRecord> {
     const record = await this.get(id);
-    if (!record || !userId || record.createdBy !== userId) throw new StoryError('NOT_FOUND', 'Story not found');
+    if (!record || !userId || (await this.effectiveOwner(record)) !== userId) throw new StoryError('NOT_FOUND', 'Story not found');
     return record;
   }
 
   /** Tenancy (additive): only the projects `userId` owns, newest first. */
   async listFor(userId: string): Promise<StoryRecord[]> {
     if (!userId) return [];
-    return (await this.list()).filter(r => r.createdBy === userId);
+    const legacy = (await this.deps.legacyOwnerId?.()) || undefined;
+    return (await this.list()).filter(r => (r.createdBy || legacy) === userId);
   }
 
   /** Tenancy (additive): run `fn` under this story's mutation lock (the migration writes `story.json` under it, like every other writer). */

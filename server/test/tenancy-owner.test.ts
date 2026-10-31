@@ -14,10 +14,10 @@ const board = (title: string): Storyboard => ({
   shots: [{ id: '00-a', silent: true, prompt: 'Extreme wide shot of a valley at sunrise.' }]
 });
 
-function setup() {
+function setup(legacyOwnerId?: string) {
   const dataDir = mkdtempSync(join(tmpdir(), 'nc-owner-'));
   const flow = new FlowStore(join(dataDir, 'flow'));
-  const service = new StoryService({ dataDir, flow, probe: async () => ({ durationSec: 6, hasAudio: true }), assemble: async dir => { writeFileSync(join(dir, 'final.mp4'), Buffer.alloc(8, 1)); } });
+  const service = new StoryService({ dataDir, flow, probe: async () => ({ durationSec: 6, hasAudio: true }), assemble: async dir => { writeFileSync(join(dir, 'final.mp4'), Buffer.alloc(8, 1)); }, ...(legacyOwnerId ? { legacyOwnerId: () => legacyOwnerId } : {}) });
   return { dataDir, service };
 }
 
@@ -61,5 +61,28 @@ describe('T1 StoryService owner API (additive)', () => {
     expect(await service.listFor('u_nobody')).toEqual([]);
     expect(await service.listFor('')).toEqual([]);
     expect((await service.list()).map(r => r.id).sort()).toEqual([a.id, b.id, c.id, loose.id].sort());
+  });
+});
+
+describe('T3 legacy owner: a project that never got an owner belongs to the main owner (Joseph keeps his), nobody else', () => {
+  it('ownerOf / assertOwner / listFor: an ownerless project is the legacy owner\'s only; a project whose creator account is gone is nobody\'s', async () => {
+    const { service } = setup('u_joseph');
+    const loose = await service.create(board('Lama, tanpa pemilik'));
+    const dangling = await service.create(board('Pembuatnya sudah dihapus'), { createdBy: 'u_deleted' });
+    expect(await service.ownerOf(loose.id)).toBe('u_joseph');
+    expect((await service.assertOwner(loose.id, 'u_joseph')).id).toBe(loose.id);
+    await expect(service.assertOwner(loose.id, 'u_bob')).rejects.toBeInstanceOf(StoryError);
+    expect((await service.listFor('u_joseph')).map(r => r.id)).toEqual([loose.id]);
+    expect(await service.listFor('u_bob')).toEqual([]);
+    expect(await service.ownerOf(dangling.id)).toBe('u_deleted');
+    await expect(service.assertOwner(dangling.id, 'u_joseph')).rejects.toBeInstanceOf(StoryError);
+    expect((await service.listFor('u_joseph')).map(r => r.id)).not.toContain(dangling.id);
+  });
+
+  it('without a legacy owner configured the old behaviour holds (ownerless = nobody\'s)', async () => {
+    const { service } = setup();
+    const loose = await service.create(board('Tanpa pemilik'));
+    expect(await service.ownerOf(loose.id)).toBeUndefined();
+    await expect(service.assertOwner(loose.id, 'u_joseph')).rejects.toBeInstanceOf(StoryError);
   });
 });
