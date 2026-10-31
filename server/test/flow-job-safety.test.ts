@@ -82,6 +82,19 @@ describe('S2: failJob only moves a running job', () => {
   }, 60_000);
 });
 
+describe('S2: a cancelled job stays cancelled', () => {
+  it('a worker that finishes a force-cancelled job later (OpenRouter/Axcel path) cannot bring it back as done', async () => {
+    const { store } = makeStore();
+    await store.addAccount({ label: 'A', email: 'a@x' });
+    const job = await store.createJob({ prompt: 'c', kind: 'video' });
+    await store.claimJob('br');
+    await store.cancelJob(job.id, 'u', { force: true });
+    await store.completeJob(job.id, { filePath: '/late.mp4', bytes: 9 });
+    expect(await store.getJob(job.id)).toMatchObject({ status: 'failed', cancelled: true });
+    expect((await store.getJob(job.id))?.resultPath).toBeUndefined();
+  });
+});
+
 describe('S2: cancelJob', () => {
   it('cancels a queued job into a final failure with the operator named, no attempt burnt', async () => {
     const { store } = makeStore();

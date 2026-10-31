@@ -768,6 +768,7 @@ export class FlowStore {
       const state = await this.read();
       const job = state.jobs.find(j => j.id === id);
       if (!job) return undefined;
+      if (job.cancelled) return job; // an operator stopped it: a late worker result must not bring it back
       job.status = 'done';
       delete job.error;
       job.resultPath = result.filePath;
