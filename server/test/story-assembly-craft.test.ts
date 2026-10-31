@@ -88,3 +88,48 @@ describe('E2 edit.fadeIn: assembly only', () => {
     expect(planOf(t, id).edit).toEqual({ fadeIn: 0 });
   });
 });
+
+describe('E3 edit.beatCuts: validation', () => {
+  it('is off when absent or false; { } turns it on; zoom is 1.05 to 1.3', () => {
+    for (const v of [undefined, false, {}, { zoom: 1.14 }, { zoom: 1.05 }, { zoom: 1.3 }]) expect(errors(b => { b.edit = { beatCuts: v } as Storyboard['edit']; })).toBe('');
+    for (const v of [true, 'ya', 3, null, [], [1], { zoom: 1.04 }, { zoom: 1.31 }, { zoom: 'x' }, { zoom: null }, { zoom: true }]) {
+      expect(errors(b => { b.edit = { beatCuts: v } as unknown as Storyboard['edit']; })).toMatch(/edit\.beatCuts/);
+    }
+  });
+});
+
+describe('E3 edit.beatCuts: assembly only', () => {
+  it('never touches a clip hash', () => {
+    const b = board();
+    const edited = { ...b, edit: { beatCuts: { zoom: 1.2 } } };
+    for (let i = 0; i < b.shots.length; i++) expect(hashFor(edited, edited.shots[i]!)).toBe(hashFor(b, b.shots[i]!));
+  });
+
+  it('editPrint changes when beat cuts are turned on or tuned, and false means what absent means', () => {
+    const b = board();
+    expect(editPrint({ ...b, edit: { beatCuts: {} } })).not.toBe(editPrint(b));
+    expect(editPrint({ ...b, edit: { beatCuts: { zoom: 1.2 } } })).not.toBe(editPrint({ ...b, edit: { beatCuts: {} } }));
+    expect(editPrint({ ...b, edit: { beatCuts: false } })).toBe(editPrint(b));
+    expect(editPrint({ ...b, edit: { subtitles: true, beatCuts: false } })).toBe(editPrint({ ...b, edit: { subtitles: true } }));
+  });
+
+  it('turning it on marks a finished video stale, keeps every paid clip, and reaches the plan; off leaves the plan silent', async () => {
+    const { t, id } = await assembled();
+    const before = (await t.service.get(id))!.shots.map(s => [s.id, s.status, s.jobId]);
+    const b = await t.service.readStoryboard(id);
+    b.edit = { beatCuts: { zoom: 1.2 } };
+    const after = await t.service.updateStoryboard(id, b);
+    expect(after.videoStale).toBe(true);
+    expect(after.shots.map(s => [s.id, s.status, s.jobId])).toEqual(before);
+    await t.service.assemble(id);
+    expect(planOf(t, id).edit).toEqual({ beatCuts: { zoom: 1.2 } });
+    b.edit = { beatCuts: {} };
+    await t.service.updateStoryboard(id, b);
+    await t.service.assemble(id);
+    expect(planOf(t, id).edit).toEqual({ beatCuts: {} });
+    b.edit = { beatCuts: false };
+    expect((await t.service.updateStoryboard(id, b)).videoStale).toBe(true);   // it was on a moment ago
+    await t.service.assemble(id);
+    expect(planOf(t, id).edit).toEqual({});
+  });
+});

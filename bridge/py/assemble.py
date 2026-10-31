@@ -324,6 +324,84 @@ def closing_fade(total, voice_end=None):
     return start, round(min(FADE_OUT, total + extra - start), 3), extra
 
 
+BEAT_MIN_SEG = 1.8      # a piece between two cuts is never shorter than this ...
+BEAT_MAX_SEG = 3.6      # ... and a longer one is cut again, into pieces of about BEAT_TARGET
+BEAT_TARGET = 3.0
+BEAT_EDGE = 0.5         # no cut this close to a crossfade (the crossfade length is added to it)
+BEAT_TAIL = 1.4         # a cut leaves at least this much of the clip after it
+BEAT_ZOOM = 1.14        # the punch-in: this zoom, -0.04 for the first punch of a shot and +0.04 for the next
+BEAT_ZOOM_SWING = 0.04
+BEAT_ZOOM_MIN, BEAT_ZOOM_MAX = 1.05, 1.4
+BEAT_ANCHORS = (0.38, 0.62)   # where each punch-in sits vertically (0 top .. 1 bottom): they take turns
+
+
+def _beat_words(words, tempo, window):
+    """Timed words -> [(text, start, end)] that are well formed, in order and actually spoken."""
+    out = []
+    if isinstance(words, (list, tuple)):
+        for w in words:
+            try:
+                text, a, b = str(w[0]), float(w[1]), float(w[2])
+            except (TypeError, ValueError, IndexError, KeyError):
+                continue
+            if text.strip() and 0 <= a <= b:
+                out.append((text, a, b))
+    out.sort(key=lambda w: w[1])
+    if window is not None:
+        out = [w for w in out if w[1] / tempo < window]
+    return out
+
+
+def beat_cut_times(dur, words=None, tempo=1.0, lead=DUB_LEAD, xf=0.3, window=None):
+    """Where inside a clip (seconds on the clip's own clock) the picture cuts to a punch-in and back: "potong ritme".
+
+    Cuts fall in the pause after a phrase of the dub (a comma, a full stop or a pause of KARAOKE_GAP), at least BEAT_MIN_SEG
+    apart and clear of the crossfades; a piece still longer than BEAT_MAX_SEG (and any shot without words) is cut evenly into
+    pieces of about BEAT_TARGET.  `tempo`/`lead` place the dub on the clip, `window` is what survives when the dub is cut.
+    """
+    tempo = float(tempo) if isinstance(tempo, (int, float)) and not isinstance(tempo, bool) and tempo > 0 else 1.0
+    lo, hi = xf + BEAT_EDGE, dur - xf - BEAT_EDGE
+    ws = _beat_words(words, tempo, window)
+    cuts, prev = [], 0.0
+    for w, nxt in zip(ws, ws[1:]):
+        if not (_SENTENCE_END.search(w[0]) or w[0].endswith(',') or nxt[1] - w[2] > KARAOKE_GAP):
+            continue
+        c = round(lead + (w[2] + nxt[1]) / 2 / tempo, 3)
+        if lo <= c <= hi and c - prev >= BEAT_MIN_SEG - 1e-9 and dur - c >= BEAT_TAIL:
+            cuts.append(c)
+            prev = c
+    pts, out = [0.0] + cuts + [dur], []
+    for a, b in zip(pts, pts[1:]):
+        if b - a > BEAT_MAX_SEG:
+            n = -(-round(b - a, 6) // BEAT_TARGET)
+            out += [round(a + (b - a) * k / n, 3) for k in range(1, int(n))]
+        if b < dur:
+            out.append(b)
+    return out
+
+
+def beat_zoom_of(edit):
+    """The plan's `edit.beatCuts` as the base zoom of the punch-ins, or None when beat cuts are off (absent, false, or not an object)."""
+    bc = (edit or {}).get('beatCuts')
+    if not isinstance(bc, dict):
+        return None
+    z = bc.get('zoom')
+    if isinstance(z, bool) or not isinstance(z, (int, float)) or z != z:
+        return BEAT_ZOOM
+    return min(BEAT_ZOOM_MAX - BEAT_ZOOM_SWING, max(BEAT_ZOOM_MIN, float(z)))
+
+
+def beat_windows(cuts, dur, zoom=BEAT_ZOOM):
+    """Cut times -> [(from, to, zoom, anchor)] of the punched-in pieces: every second piece, alternating zoom and anchor."""
+    pts, wins = [0.0] + list(cuts) + [dur], []
+    for k, (a, b) in enumerate(zip(pts, pts[1:])):
+        if k % 2 == 1:
+            j = len(wins)
+            z = zoom - BEAT_ZOOM_SWING if j % 2 == 0 else zoom + BEAT_ZOOM_SWING
+            wins.append((round(a, 3), round(b, 3), round(min(BEAT_ZOOM_MAX, max(BEAT_ZOOM_MIN, z)), 2), BEAT_ANCHORS[j % 2]))
+    return wins
+
+
 def filter_graph(durations, xf, transitions=None, title_input=None, total=None,
                  clip_volume=None, music_input=None, music=None, subtitles=None, fonts_dir=None, zooms=None,
                  streams='av', zoom_ys=None, dubs=None, tail_hold=0.0, voice_end=None, fade_in=None):
@@ -500,7 +578,7 @@ def main(arg):
         inputs += (['-ss', str(float(music.get('from', 0)))] if music.get('from') else []) + ['-i', music['path']]
     else:
         music = None
-    dubs, warnings, last_hold = [], [], 0.0
+    dubs, last_hold = [], 0.0
     closing = None   # (dub seconds, tempo, window) of the closing line: the closing fade waits for its last word
     karaoke = {}   # shot index -> (tempo, words, window when the dub is cut)
     for i, shot in enumerate(story['shots']):
@@ -544,6 +622,12 @@ def main(arg):
         if extra:   # the fade would otherwise have to start inside the last word: the picture waits a moment longer
             last_hold = round(last_hold + extra, 3)
             durations[-1] = round(durations[-1] + extra, 3)
+    beats, beat_zoom = None, beat_zoom_of(edit)
+    if beat_zoom is not None:
+        beats = []
+        for i, clip_dur in enumerate(clip_durs):
+            tempo, words, cut_window = karaoke.get(i, (1.0, None, None))
+            beats.append(beat_windows(beat_cut_times(clip_dur, words, tempo, DUB_LEAD, xf, cut_window), clip_dur, beat_zoom) or None)
     subs_dir, subs = None, None
     if edit.get('subtitles'):
         texts = [s.get('narration', '') or '' for s in story['shots']]
@@ -563,7 +647,7 @@ def main(arg):
                                                                 size=edit.get('subtitleSize'), y=edit.get('subtitleY')))
     total = round(sum(durations) - xf * (len(durations) - 1), 3)
     graph_args = dict(title_input=title_input, total=total, clip_volume=edit.get('clipVolume'),
-                      music_input=music_input, music=music, subtitles=subs, tail_hold=last_hold, voice_end=voice_end, fade_in=fade_in_of(edit),
+                      music_input=music_input, music=music, subtitles=subs, tail_hold=last_hold, voice_end=voice_end, fade_in=fade_in_of(edit), beats=beats,
                       fonts_dir=FONTS_DIR if edit.get('subtitleStyle') == HANDWRITTEN else None, zooms=zooms, zoom_ys=zoom_ys, dubs=dubs)
     vgraph = filter_graph(durations, xf, transitions[1:], streams='v', **graph_args)
     agraph = filter_graph(durations, xf, transitions[1:], streams='a', **graph_args)
