@@ -175,7 +175,13 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   // quota/limits.json (numbers only); admins (isAdmin) have no ElevenLabs limit, non-admins the defaults of quota/limits.ts.
   const quotaLimits = new LimitsStore(options.dataDir, id => userAuthStore.findUserById(id)?.isAdmin === true);
   await quotaLimits.init();
-  const quotaLedger = new SpendLedger(options.dataDir, { limitFor: quotaLimits.resolve });
+  // WAVE 4 (ws): every entry also carries the workspace it belongs to (membership numbers), and a workspace limit set by the
+  // platform admin is a SECOND gate next to the per-person one (ElevenLabs stays per orang).
+  const quotaLedger = new SpendLedger(options.dataDir, {
+    limitFor: quotaLimits.resolve,
+    workspaceOf: userId => workspaceStore.personalOf(userId)?.id,
+    limitForWorkspace: quotaLimits.resolveWorkspace
+  });
   const media = new MediaCache({ dataDir: options.dataDir, ffmpeg: options.media?.ffmpeg });
   const providerFetch = options.providers?.fetch ?? fetch;
   const catalog = new OpenRouterCatalog(options.dataDir, { fetch: providerFetch });
@@ -354,8 +360,15 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   await registerProviderRoutes(server, { userAuthStore, dataDir: options.dataDir, flow: flowStore, fetch: providerFetch, catalog, text: { store: textStore, model: openCodeModel } });
   // One cached disk scan for the sidebar quota; the storage janitor drops it when it has changed the volume.
   const storageMeter = new StorageMeter(options.dataDir);
-  await registerQuotaRoutes(server, { userAuthStore, dataDir: options.dataDir, flow: flowStore, balance: () => openRouterBalance(options.dataDir, { fetch: providerFetch }), storage: storageMeter, quotaLedger: { ledger: quotaLedger, limits: quotaLimits } });
-  await registerQuotaLimitRoutes(server, { userAuthStore, ledger: quotaLedger, limits: quotaLimits, audit: entry => adminAudit.append(entry) });
+  await registerQuotaRoutes(server, {
+    userAuthStore, dataDir: options.dataDir, flow: flowStore, balance: () => openRouterBalance(options.dataDir, { fetch: providerFetch }),
+    storage: storageMeter, quotaLedger: { ledger: quotaLedger, limits: quotaLimits },
+    workspace: { roleOf: (userId, workspaceId) => workspaceStore.roleOf(userId, workspaceId), ledger: quotaLedger, limits: quotaLimits }
+  });
+  await registerQuotaLimitRoutes(server, {
+    userAuthStore, ledger: quotaLedger, limits: quotaLimits, audit: entry => adminAudit.append(entry),
+    workspaceExists: workspaceId => workspaceStore.get(workspaceId) !== undefined
+  });
   const workerMs = options.providers?.workerMs ?? 5000;
   if (workerMs > 0) {
     const stopWorker = new OpenRouterWorker({ dataDir: options.dataDir, store: flowStore, fetch: providerFetch, catalog }).start(workerMs);

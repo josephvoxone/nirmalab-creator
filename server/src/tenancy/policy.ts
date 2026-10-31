@@ -175,6 +175,8 @@ export const ROUTE_POLICY: PolicyRegistry = {
   'DELETE /api/workspaces/:id/invites/:inviteId': { policy: 'PENGGUNA-BERSAMA' },
   'PATCH /api/workspaces/:id/members/:userId': { policy: 'PENGGUNA-BERSAMA' },
   'DELETE /api/workspaces/:id/members/:userId': { policy: 'PENGGUNA-BERSAMA' },
+  'GET /api/admin/workspaces/:id/limits': { policy: 'SISTEM-ADMIN' },
+  'PUT /api/admin/workspaces/:id/limits': { policy: 'SISTEM-ADMIN' },
   'GET /api/join/:token': { policy: 'PUBLIK' },
   'POST /api/join/:token': { policy: 'PUBLIK' },
 };

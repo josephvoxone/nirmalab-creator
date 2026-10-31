@@ -19,15 +19,32 @@ export type QuotaRouteOptions = {
   storage?: StorageMeter;
   /** Per-user spend and limits (the caller's own numbers go out as `mine`). */
   quotaLedger?: { ledger: SpendLedger; limits: LimitsStore };
+  /**
+   * WAVE 4 (ws): `?workspace=<id>` answers the numbers of that workspace. A member may read them (its own project numbers are
+   * already visible to it); a non-member gets the same 404 as an unknown workspace.
+   */
+  workspace?: { roleOf: (userId: string, workspaceId: string) => 'owner' | 'editor' | 'viewer' | undefined; ledger: SpendLedger; limits: LimitsStore };
 };
 
 export async function registerQuotaRoutes(server: FastifyInstance, options: QuotaRouteOptions): Promise<void> {
   const config = new OpenRouterConfigStore(options.dataDir);
   // Every member polls this route each minute: the volume is walked once per cache window, not once per call.
   const storageMeter = options.storage ?? new StorageMeter(options.dataDir);
-  server.get('/api/quota', async (request, reply) => {
+  server.get<{ Querystring: { workspace?: string } }>('/api/quota', async (request, reply) => {
     const me = sessionUser(options.userAuthStore, request);
     if (!me) return reply.code(401).send({ error: { code: 'UNAUTHENTICATED', message: 'Masuk dulu' } });
+    const wantedWorkspace = request.query?.workspace;
+    if (typeof wantedWorkspace === 'string' && wantedWorkspace) {
+      if (!options.workspace) return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Workspace tidak ditemukan' } });
+      const role = options.workspace.roleOf(me.id, wantedWorkspace);
+      if (!role) return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Workspace tidak ditemukan' } });
+      // Numbers of the workspace only: no name, no member, nothing of a project.
+      return {
+        workspace: { id: wantedWorkspace, role },
+        limits: options.workspace.limits.effectiveWorkspace(wantedWorkspace),
+        usage: await options.workspace.ledger.workspaceUsage(wantedWorkspace)
+      };
+    }
     const accounts = (await options.flow.listAccounts()).filter(a => a.enabled !== false);
     const known = accounts.filter(a => typeof a.credits === 'number');
     const capped = accounts.filter(a => typeof a.dailyCreditCap === 'number');

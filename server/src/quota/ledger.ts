@@ -12,7 +12,7 @@
 import { join } from 'node:path';
 import { readPrivateJsonFile, writePrivateJsonFile } from '../lib/private-json-file.js';
 import { QuotaError, type QuotaKind, type QuotaWindow } from './errors.js';
-import { QUOTA_KINDS, limitNumber, type LimitResolver } from './limits.js';
+import { QUOTA_KINDS, limitNumber, type Limit, type LimitResolver } from './limits.js';
 
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
@@ -27,18 +27,27 @@ const EPS = 1e-9;
 export const wita = (ms: number): string => new Date(ms + WITA).toISOString().slice(0, 10);
 const dayStart = (key: string): number => Date.parse(`${key}T00:00:00Z`) - WITA;
 
-type Entry = { key: string; userId: string; kind: QuotaKind; amount: number; state: 'reserved' | 'committed'; atMs: number; doneAtMs?: number; meta?: Record<string, unknown> };
+type Entry = { key: string; userId: string; workspaceId?: string; kind: QuotaKind; amount: number; state: 'reserved' | 'committed'; atMs: number; doneAtMs?: number; meta?: Record<string, unknown> };
 type Rollup = Record<string, Record<string, Partial<Record<QuotaKind, number>>>>; // userId -> day -> kind -> amount
 type Stored = { version: 1; entries: Entry[]; rollup: Rollup };
 
 export type Reservation = { key: string; userId: string; kind: QuotaKind; amount: number; meta?: Record<string, unknown>;
+  /** Workspace whose numbers and limits this spend belongs to (default: whatever `workspaceOf` resolves for the person). */
+  workspaceId?: string;
   /** Shared OpenRouter balance: the reservation must also fit `remaining` minus everything open or spent since `sinceMs`. */
   ceiling?: { remaining: number; sinceMs: number } };
 export type Usage = Record<QuotaKind, { day: number; d30: number; reserved: number }>;
 
 const clean = (n: number) => Math.round(n * 1e6) / 1e6;
 
-export type LedgerOptions = { limitFor: LimitResolver; now?: () => number };
+export type LedgerOptions = {
+  limitFor: LimitResolver;
+  /** The workspace a person spends in (their personal workspace, unless the caller names another). */
+  workspaceOf?: (userId: string) => string | undefined;
+  /** The limit the platform admin set for a workspace. A SECOND gate next to `limitFor`: the per-person limits keep applying. */
+  limitForWorkspace?: (workspaceId: string, kind: QuotaKind) => Limit | undefined;
+  now?: () => number;
+};
 
 export class SpendLedger {
   readonly path: string;
@@ -46,10 +55,14 @@ export class SpendLedger {
   private state: Stored | undefined;
   private readonly now: () => number;
   private readonly limitFor: LimitResolver;
+  private readonly workspaceOf: ((userId: string) => string | undefined) | undefined;
+  private readonly limitForWorkspace: ((workspaceId: string, kind: QuotaKind) => Limit | undefined) | undefined;
 
   constructor(dataDir: string, options: LedgerOptions) {
     this.path = join(dataDir, 'quota', 'ledger.json');
     this.limitFor = options.limitFor;
+    this.workspaceOf = options.workspaceOf;
+    this.limitForWorkspace = options.limitForWorkspace;
     this.now = options.now ?? Date.now;
   }
 
@@ -135,6 +148,65 @@ export class SpendLedger {
     return { day: clean(day), d30: clean(d30), reserved: clean(reserved), ...(first === undefined ? {} : { firstD30Ms: first }) };
   }
 
+  /**
+   * Spend of one WORKSPACE (entries stamped with it, plus the rollup of the people it holds). Days and windows are the same as
+   * `spent`: Asia/Makassar for "today", the last 30 x 24 h for the second window.
+   */
+  private spentWorkspace(s: Stored, workspaceId: string, kind: QuotaKind, now: number): { day: number; d30: number; reserved: number; firstD30Ms?: number } {
+    const today = wita(now);
+    const from30 = now - 30 * DAY;
+    let day = 0; let d30 = 0; let reserved = 0; let first: number | undefined;
+    const note = (ms: number) => { first = first === undefined ? ms : Math.min(first, ms); };
+    const ofWorkspace = (e: Entry) => e.workspaceId === workspaceId || (e.workspaceId === undefined && this.workspaceOf?.(e.userId) === workspaceId);
+    for (const e of s.entries) {
+      if (e.kind !== kind || !ofWorkspace(e)) continue;
+      if (e.state === 'reserved') { reserved += e.amount; continue; }
+      const at = e.doneAtMs ?? e.atMs;
+      if (wita(at) === today) day += e.amount;
+      if (at > from30) { d30 += e.amount; note(at); }
+    }
+    for (const [userId, days] of Object.entries(s.rollup)) {
+      if (this.workspaceOf?.(userId) !== workspaceId) continue;
+      for (const [d, kinds] of Object.entries(days)) {
+        const amount = kinds[kind] ?? 0;
+        if (!amount) continue;
+        if (d === today) day += amount;
+        if (dayStart(d) + DAY > from30) { d30 += amount; note(dayStart(d)); }
+      }
+    }
+    return { day: clean(day), d30: clean(d30), reserved: clean(reserved), ...(first === undefined ? {} : { firstD30Ms: first }) };
+  }
+
+  /** The workspace gate: same windows, its own numbers, a `QuotaError` marked `scope: 'workspace'`. */
+  private checkWorkspace(s: Stored, batch: Reservation[], now: number): void {
+    if (!this.limitForWorkspace) return;
+    const groups = new Map<string, Reservation[]>();
+    for (const r of batch) {
+      const workspaceId = r.workspaceId ?? this.workspaceOf?.(r.userId);
+      if (!workspaceId) continue;
+      groups.set(workspaceId, [...(groups.get(workspaceId) ?? []), r]);
+    }
+    for (const items of groups.values()) {
+      const workspaceId = items[0]!.workspaceId ?? this.workspaceOf?.(items[0]!.userId);
+      if (!workspaceId) continue;
+      const kind = items[0]!.kind;
+      const amount = clean(items.reduce((n, r) => n + r.amount, 0));
+      if (amount <= 0) continue;
+      const limit = this.limitForWorkspace(workspaceId, kind);
+      const used = this.spentWorkspace(s, workspaceId, kind, now);
+      const perRender = limitNumber(limit, 'perRender');
+      if (perRender !== undefined && amount > perRender + EPS) throw new QuotaError({ kind, window: 'render', limit: perRender, used: 0, amount, scope: 'workspace' });
+      const perDay = limitNumber(limit, 'perDay');
+      if (perDay !== undefined && used.day + used.reserved + amount > perDay + EPS) {
+        throw new QuotaError({ kind, window: 'day', limit: perDay, used: clean(used.day + used.reserved), amount, resetAtMs: dayStart(wita(now)) + DAY, scope: 'workspace' });
+      }
+      const per30d = limitNumber(limit, 'per30d');
+      if (per30d !== undefined && used.d30 + used.reserved + amount > per30d + EPS) {
+        throw new QuotaError({ kind, window: 'd30', limit: per30d, used: clean(used.d30 + used.reserved), amount, resetAtMs: (used.firstD30Ms ?? now) + 30 * DAY, scope: 'workspace' });
+      }
+    }
+  }
+
   private check(s: Stored, batch: Reservation[], now: number): void {
     const groups = new Map<string, Reservation[]>();
     for (const r of batch) { const k = `${r.userId}\u0000${r.kind}`; groups.set(k, [...(groups.get(k) ?? []), r]); }
@@ -155,6 +227,7 @@ export class SpendLedger {
         throw new QuotaError({ kind, window: 'd30', limit: per30d, used: clean(used.d30 + used.reserved), amount, resetAtMs: (used.firstD30Ms ?? now) + 30 * DAY });
       }
     }
+    this.checkWorkspace(s, batch, now);
     for (const r of batch) {
       if (!r.ceiling || r.amount <= 0) continue;
       let used = 0;
@@ -185,10 +258,15 @@ export class SpendLedger {
     for (const r of batch) if (!r.userId || !Number.isFinite(r.amount) || r.amount < 0) throw new Error('Reservasi kuota tidak valid');
     await this.run(s => {
       const now = this.now();
-      const fresh = batch.filter(r => !s.entries.some(e => e.key === r.key && e.state === 'reserved'));
+      const fresh = batch
+        .filter(r => !s.entries.some(e => e.key === r.key && e.state === 'reserved'))
+        .map(r => {
+          const workspaceId = r.workspaceId ?? this.workspaceOf?.(r.userId);
+          return workspaceId ? { ...r, workspaceId } : r;
+        });
       if (!fresh.length) return;
       this.check(s, fresh, now);
-      for (const r of fresh) s.entries.push({ key: r.key, userId: r.userId, kind: r.kind, amount: clean(r.amount), state: 'reserved', atMs: now, ...(r.meta ? { meta: r.meta } : {}) });
+      for (const r of fresh) s.entries.push({ key: r.key, userId: r.userId, ...(r.workspaceId ? { workspaceId: r.workspaceId } : {}), kind: r.kind, amount: clean(r.amount), state: 'reserved', atMs: now, ...(r.meta ? { meta: r.meta } : {}) });
     });
   }
 
@@ -207,7 +285,8 @@ export class SpendLedger {
         return;
       }
       if (fallback && typeof actual === 'number' && Number.isFinite(actual) && actual > 0) {
-        s.entries.push({ key, userId: fallback.userId, kind: fallback.kind, amount: clean(actual), state: 'committed', atMs: now, doneAtMs: now, ...(fallback.meta ? { meta: fallback.meta } : {}) });
+        const workspaceId = this.workspaceOf?.(fallback.userId);
+        s.entries.push({ key, userId: fallback.userId, ...(workspaceId ? { workspaceId } : {}), kind: fallback.kind, amount: clean(actual), state: 'committed', atMs: now, doneAtMs: now, ...(fallback.meta ? { meta: fallback.meta } : {}) });
       }
     });
   }
@@ -222,7 +301,8 @@ export class SpendLedger {
     if (!(r.amount > 0)) return;
     await this.run(s => {
       const now = this.now();
-      s.entries.push({ key: r.key, userId: r.userId, kind: r.kind, amount: clean(r.amount), state: 'committed', atMs: now, doneAtMs: now, ...(r.meta ? { meta: r.meta } : {}) });
+      const workspaceId = r.workspaceId ?? this.workspaceOf?.(r.userId);
+      s.entries.push({ key: r.key, userId: r.userId, ...(workspaceId ? { workspaceId } : {}), kind: r.kind, amount: clean(r.amount), state: 'committed', atMs: now, doneAtMs: now, ...(r.meta ? { meta: r.meta } : {}) });
     });
   }
 
@@ -230,6 +310,15 @@ export class SpendLedger {
     return this.run(s => {
       const out = {} as Usage;
       for (const kind of QUOTA_KINDS) { const u = this.spent(s, userId, kind, now); out[kind] = { day: u.day, d30: u.d30, reserved: u.reserved }; }
+      return out;
+    }, { write: false });
+  }
+
+  /** The numbers of one workspace (its entries + the rollup of its people), same shape as `usage`. */
+  async workspaceUsage(workspaceId: string, now = this.now()): Promise<Usage> {
+    return this.run(s => {
+      const out = {} as Usage;
+      for (const kind of QUOTA_KINDS) { const u = this.spentWorkspace(s, workspaceId, kind, now); out[kind] = { day: u.day, d30: u.d30, reserved: u.reserved }; }
       return out;
     }, { write: false });
   }

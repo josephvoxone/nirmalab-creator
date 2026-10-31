@@ -25,9 +25,16 @@ export function dateWita(ms: number): string {
   return `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
 }
 
-export type QuotaDetail = { kind: QuotaKind; window: QuotaWindow; limit: number; used: number; amount: number; resetAtMs?: number };
+export type QuotaDetail = { kind: QuotaKind; window: QuotaWindow; limit: number; used: number; amount: number; resetAtMs?: number;
+  /** `workspace`: the workspace's own limit stopped it (the person's own limit is a separate, second gate). */
+  scope?: 'person' | 'workspace' };
 
 export function quotaMessage(d: QuotaDetail): string {
+  const text = quotaMessageBase(d);
+  return d.scope === 'workspace' ? `Batas workspace: ${text.charAt(0).toLowerCase()}${text.slice(1)}` : text;
+}
+
+function quotaMessageBase(d: QuotaDetail): string {
   const back = d.resetAtMs ? ` Slot pertama kembali sekitar ${dateWita(d.resetAtMs)}.` : '';
   switch (d.kind) {
     case 'elevenChars':
@@ -56,6 +63,7 @@ export class QuotaError extends Error {
   readonly used: number;
   readonly amount: number;
   readonly resetAtMs: number | undefined;
+  readonly scope: 'person' | 'workspace';
 
   constructor(detail: QuotaDetail) {
     super(quotaMessage(detail));
@@ -66,6 +74,7 @@ export class QuotaError extends Error {
     this.used = detail.used;
     this.amount = detail.amount;
     this.resetAtMs = detail.resetAtMs;
+    this.scope = detail.scope ?? 'person';
   }
 
   /** Body of the 429 answer. */

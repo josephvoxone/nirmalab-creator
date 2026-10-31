@@ -59,7 +59,7 @@ describe('T0 route policy registry', () => {
       if (entry.policy === 'PENGGUNA-PEMILIK') expect(entry.resource, key).toBeDefined();
     }
     const count = (p: Policy) => Object.values(ROUTE_POLICY).filter(e => e.policy === p).length;
-    expect([count('PUBLIK'), count('PENGGUNA-PEMILIK'), count('PENGGUNA-BERSAMA'), count('SISTEM-ADMIN'), count('BRIDGE-TOKEN'), count('MCP-TOKEN')]).toEqual([14, 63, 12, 52, 5, 1]);   // wave 4 (ws): +2 PUBLIK (/api/join GET+POST), +2 PENGGUNA-PEMILIK (list/create), +6 PENGGUNA-BERSAMA (detail, delete, invite create/revoke, member role/remove)   // 36 + 5 wave-2 quota/key-activation + 2 T4 admin job routes + 9 T8 admin-console routes (all SISTEM-ADMIN, metadata/numbers only)
+    expect([count('PUBLIK'), count('PENGGUNA-PEMILIK'), count('PENGGUNA-BERSAMA'), count('SISTEM-ADMIN'), count('BRIDGE-TOKEN'), count('MCP-TOKEN')]).toEqual([14, 63, 12, 54, 5, 1]);   // wave 4 (ws): +2 PUBLIK (/api/join GET+POST), +2 PENGGUNA-PEMILIK (list/create), +6 PENGGUNA-BERSAMA (detail, delete, invite create/revoke, member role/remove)   // 36 + 5 wave-2 quota/key-activation + 2 T4 admin job routes + 9 T8 admin-console routes (all SISTEM-ADMIN, metadata/numbers only)
   });
 
   it('fail-closed: a route nobody registered a policy for stops the server from booting', async () => {

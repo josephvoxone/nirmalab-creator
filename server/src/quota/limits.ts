@@ -52,11 +52,12 @@ export function limitNumber(limit: Limit | undefined, field: keyof Limit): numbe
   return typeof n === 'number' && Number.isFinite(n) ? n : undefined;
 }
 
-type Stored = { version?: 1; users?: Record<string, UserLimits> };
+type Stored = { version?: 1; users?: Record<string, UserLimits>; workspaces?: Record<string, UserLimits> };
 
 export class LimitsStore {
   readonly path: string;
   private cache: Record<string, UserLimits> | undefined;
+  private workspaceCache: Record<string, UserLimits> | undefined;
   private queue: Promise<unknown> = Promise.resolve();
 
   /** `isAdmin`: who counts as an admin right now (the auth store), consulted on every resolution. */
@@ -67,13 +68,18 @@ export class LimitsStore {
   private async load(): Promise<Record<string, UserLimits>> {
     if (this.cache) return this.cache;
     let users: Record<string, UserLimits> = {};
+    let workspaces: Record<string, UserLimits> = {};
     try {
       const raw = (await readPrivateJsonFile(this.path)) as Stored | undefined;
       if (raw?.users && typeof raw.users === 'object') {
         for (const [id, limits] of Object.entries(raw.users)) { try { users[id] = parseUserLimits(limits); } catch { /* a damaged entry falls back to the default */ } }
       }
-    } catch { users = {}; }
+      if (raw?.workspaces && typeof raw.workspaces === 'object') {
+        for (const [id, limits] of Object.entries(raw.workspaces)) { try { workspaces[id] = parseUserLimits(limits); } catch { /* a damaged entry means no workspace limit */ } }
+      }
+    } catch { users = {}; workspaces = {}; }
     this.cache = users;
+    this.workspaceCache = workspaces;
     return users;
   }
 
@@ -88,11 +94,37 @@ export class LimitsStore {
     const run = this.queue.then(async () => {
       const users = await this.load();
       if (Object.keys(limits).length) users[userId] = limits; else delete users[userId];
-      await writePrivateJsonFile(this.path, { version: 1, users } satisfies Stored);
+      await writePrivateJsonFile(this.path, { version: 1, users, ...(this.workspaceCache && Object.keys(this.workspaceCache).length ? { workspaces: this.workspaceCache } : {}) } satisfies Stored);
       return limits;
     });
     this.queue = run.catch(() => undefined);
     return run;
+  }
+
+  /** The workspace's own overrides (not the per-person ones). */
+  async overridesWorkspace(workspaceId: string): Promise<UserLimits> { await this.load(); return { ...((this.workspaceCache ?? {})[workspaceId] ?? {}) }; }
+
+  /** Replaces the limits the platform admin set for a workspace; `{}` = no workspace limit (the per-person limits stay). */
+  async setWorkspace(workspaceId: string, limits: UserLimits): Promise<UserLimits> {
+    const run = this.queue.then(async () => {
+      await this.load();
+      const workspaces = (this.workspaceCache ??= {});
+      if (Object.keys(limits).length) workspaces[workspaceId] = limits; else delete workspaces[workspaceId];
+      this.workspaceCache = workspaces;
+      await writePrivateJsonFile(this.path, { version: 1, users: this.cache ?? {}, ...(Object.keys(workspaces).length ? { workspaces } : {}) } satisfies Stored);
+      return limits;
+    });
+    this.queue = run.catch(() => undefined);
+    return run;
+  }
+
+  /** The workspace's limit for `kind`; undefined = no workspace limit (the per-person limit is a separate gate and stays). */
+  resolveWorkspace = (workspaceId: string, kind: QuotaKind): Limit | undefined => (this.workspaceCache ?? {})[workspaceId]?.[kind];
+
+  effectiveWorkspace(workspaceId: string): UserLimits {
+    const out: UserLimits = {};
+    for (const kind of QUOTA_KINDS) { const l = this.resolveWorkspace(workspaceId, kind); if (l) out[kind] = l; }
+    return out;
   }
 
   defaultsFor(userId: string): UserLimits { return this.isAdmin(userId) ? DEFAULT_LIMITS.admin : DEFAULT_LIMITS.member; }
