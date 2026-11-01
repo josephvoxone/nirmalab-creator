@@ -13,6 +13,29 @@ Self-hosted, one container, your own keys and data directory.
 > redirect URIs, so they stay. The public name, the health response, the MCP resource scheme and
 > the client snippets are `shotweave`.
 
+## What it looks like
+
+These are screenshots of a working deployment, not mockups.
+
+**Template gallery.** 33 recipes: visual style, camera, palette and tempo are already set, and a
+template opens a prefilled project.
+
+![Template gallery](docs/screenshots/01-templates.png)
+
+**Projects.** Every film with its pipeline state, shot count and last activity.
+
+![Projects](docs/screenshots/02-projects.png)
+
+**A project.** Scene list, shot strip with the clip status, the pipeline from script to assembled
+film, and the project assistant on the right.
+
+![Project page](docs/screenshots/03-project.png)
+
+**Studio.** One clip or one still, outside any project, with the Flow credit cost shown before you
+spend it.
+
+![Studio](docs/screenshots/04-studio.png)
+
 ## What is in it
 
 - **Story to shots.** A production model of project, scene and shot, with a real editor: cut,
@@ -41,6 +64,10 @@ python3 bridge/py/demo/make_demo.py     # writes bridge/py/demo/out/demo.mp4
 The demo paints three scenes with Pillow (gradient sky, layered ridges, a low sun, warm windows
 switching on), writes a music bed and a word-timed dub, and runs the same assembler the app uses
 for a real film. No account, no key, no footage.
+
+![The demo render](docs/demo/shotweave-demo.gif)
+
+The same cut as a file: [docs/demo/shotweave-demo.mp4](docs/demo/shotweave-demo.mp4).
 
 ## Requirements
 

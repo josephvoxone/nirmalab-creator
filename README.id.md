@@ -13,6 +13,29 @@ Self-hosted, satu container, key dan folder data milikmu sendiri.
 > deployment yang sedang jalan dan redirect URI yang sudah terdaftar, jadi dibiarkan. Nama
 > publik, respons health, skema resource MCP, dan snippet client memakai `shotweave`.
 
+## Tampilannya
+
+Ini tangkapan layar dari deployment yang benar-benar jalan, bukan mockup.
+
+**Galeri template.** 33 resep: gaya visual, kamera, palet dan tempo sudah diatur, dan template
+langsung membuka proyek yang sudah terisi.
+
+![Galeri template](docs/screenshots/01-templates.png)
+
+**Proyek.** Semua film beserta status pipeline, jumlah shot dan aktivitas terakhir.
+
+![Proyek](docs/screenshots/02-projects.png)
+
+**Halaman proyek.** Daftar scene, strip shot dengan status klip, pipeline dari naskah sampai video
+jadi, dan asisten proyek di kanan.
+
+![Halaman proyek](docs/screenshots/03-project.png)
+
+**Studio.** Satu klip atau satu gambar lepas, di luar proyek, dengan biaya kredit Flow terlihat
+sebelum dipakai.
+
+![Studio](docs/screenshots/04-studio.png)
+
 ## Isinya
 
 - **Cerita jadi shot.** Model produksi proyek, scene, dan shot, dengan editor sungguhan: potong,
@@ -41,6 +64,10 @@ python3 bridge/py/demo/make_demo.py     # menulis bridge/py/demo/out/demo.mp4
 Demo ini melukis tiga scene dengan Pillow (gradien langit, ridge berlapis, matahari rendah,
 jendela hangat yang menyala), membuat musik latar dan dub bertiming kata, lalu menjalankan
 assembler yang sama dengan yang dipakai aplikasi. Tanpa akun, tanpa key, tanpa footage.
+
+![Hasil render demo](docs/demo/shotweave-demo.gif)
+
+File yang sama: [docs/demo/shotweave-demo.mp4](docs/demo/shotweave-demo.mp4).
 
 ## Kebutuhan
 
